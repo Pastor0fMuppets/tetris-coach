@@ -39,6 +39,9 @@ class CoachConfig:
     hint_color: str = "#00e5ff"
     min_confidence: float = 0.15
     debug: bool = False
+    # Directory to save the first captured frames into as PNGs (debugging
+    # aid for region/scaling problems); None disables dumping.
+    dump_dir: str | None = None
 
 
 # The overlay loop exits after this many CONSECUTIVE failed ticks (~3 s at
@@ -95,6 +98,10 @@ class CoachEngine:
         # only runs when the pixels actually change.
         self._last_next_image: np.ndarray | None = None
         self._last_next_piece: str | None = None
+        # Debug status-line throttling: (confidence, occupied, gate) of the
+        # last line printed, plus a frame counter for the periodic reprint.
+        self._debug_last_status: tuple[float, int, str] | None = None
+        self._debug_frames = 0
 
     def process_frame(
         self,
@@ -103,7 +110,26 @@ class CoachEngine:
     ) -> Move | None:
         """Digest one captured frame pair; return the hint to display."""
         occupancy, confidence = classify_grid(board_image)
-        if confidence < self.config.min_confidence:
+        rejected = confidence < self.config.min_confidence
+        if self.config.debug:
+            # Always-on compact status so a silently rejected or
+            # never-committing stream is still diagnosable: print on any
+            # change, and at least every 30 frames (~2 s).
+            self._debug_frames += 1
+            occupied = int(occupancy.sum())
+            gate = "REJECTED" if rejected else "ok"
+            status = (round(confidence, 2), occupied, gate)
+            if status != self._debug_last_status or self._debug_frames % 30 == 0:
+                self._debug_last_status = status
+                kind = self.tracker.last_kind
+                print(
+                    f"[vision] frame {self._debug_frames}: confidence {confidence:.2f} "
+                    f"(gate {gate} at {self.config.min_confidence}), "
+                    f"occupied {occupied}/200, last frame kind "
+                    f"{kind.name if kind is not None else '-'}",
+                    flush=True,
+                )
+        if rejected:
             return self.current_hint  # keep showing the last good hint
         next_piece = self._identify_next_cached(next_image)
 
@@ -221,6 +247,27 @@ class FrameWorker:
         self.board_rect = board_rect
         self.next_rect = next_rect
         self.consecutive_failures = 0
+        self._dumped = 0
+
+    def _dump_frames(self, board_image: np.ndarray, next_image: np.ndarray | None) -> None:
+        """Save captured frames as PNGs for offline inspection (debug aid)."""
+        dump_dir = self.engine.config.dump_dir
+        if dump_dir is None or self._dumped >= 12:
+            return
+        try:  # pragma: no cover - debug-only, Pillow is a dev dependency
+            from pathlib import Path
+
+            from PIL import Image
+
+            out = Path(dump_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            n = self._dumped
+            Image.fromarray(board_image[:, :, ::-1]).save(out / f"board_{n:03d}.png")
+            if next_image is not None:
+                Image.fromarray(next_image[:, :, ::-1]).save(out / f"next_{n:03d}.png")
+            self._dumped += 1
+        except Exception:  # noqa: BLE001 - dumping must never break the loop
+            self._dumped = 12  # give up quietly
 
     def run_tick(self) -> TickResult:
         """Run one blocking capture->vision->solve pass."""
@@ -229,6 +276,7 @@ class FrameWorker:
             next_image = (
                 self.frame_source.grab(self.next_rect) if self.next_rect is not None else None
             )
+            self._dump_frames(board_image, next_image)
             hint = self.engine.process_frame(board_image, next_image)
         except Exception:  # noqa: BLE001 - one bad frame must not kill the loop
             self.consecutive_failures += 1

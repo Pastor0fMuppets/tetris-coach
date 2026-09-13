@@ -88,6 +88,9 @@ class GameStateTracker:
         self._pending_kind: FrameKind | None = None
         self._pending_count = 0
         self._last_falling: FallingPiece | None = None
+        # How explain_grid classified the most recent update() frame; for
+        # debug/status display only, never for control flow.
+        self.last_kind: FrameKind | None = None
         self._unexplained_rows: tuple[int, ...] | None = None
         self._unexplained_count = 0
 
@@ -113,6 +116,7 @@ class GameStateTracker:
             self._last_falling,
             max_missing_cells=self._max_missing_cells,
         )
+        self.last_kind = explanation.kind
 
         if explanation.kind is FrameKind.UNEXPLAINED:
             if rows == self._unexplained_rows:

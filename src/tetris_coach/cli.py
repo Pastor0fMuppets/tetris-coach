@@ -127,10 +127,13 @@ def _run_overlay(args: argparse.Namespace) -> int:  # pragma: no cover - macOS o
         print(str(exc), file=sys.stderr)
         print("On non-macOS hosts, try: python -m tetris_coach.cli --demo", file=sys.stderr)
         return 1
+    print(f"Board region: {board_rect}", flush=True)
+    print(f"Next-piece region: {next_rect}", flush=True)
     config = CoachConfig(
         poll_rate=args.poll_rate,
         hint_color=args.hint_color,
         debug=args.debug,
+        dump_dir=args.dump_frames,
     )
     run(board_rect, next_rect, config=config)
     return 0
@@ -165,6 +168,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="overlay: print a terminal debug view of what vision sees "
         "(grid, falling/next piece, confidence, events) per committed frame",
+    )
+    parser.add_argument(
+        "--dump-frames",
+        metavar="DIR",
+        default=None,
+        help="overlay: save the first captured board/next frames as PNGs "
+        "into DIR (debugging aid for region/scaling problems)",
     )
     args = parser.parse_args(argv)
 
