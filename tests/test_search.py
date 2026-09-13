@@ -135,5 +135,6 @@ class TestBenchmark:
         # T x T is the largest search space (34 x 34 placements).
         result = benchmark(best_move, board, "T", "T")
         assert isinstance(result, Move)
-        assert benchmark.stats.stats.mean < 0.050
-        assert benchmark.stats.stats.max < 0.100
+        if benchmark.stats is not None:  # absent under --benchmark-disable
+            assert benchmark.stats.stats.mean < 0.050
+            assert benchmark.stats.stats.max < 0.100
