@@ -310,6 +310,41 @@ def garbage_grid(well: int = 6) -> np.ndarray:
     return grid
 
 
+def near_top_out_with_air_grid() -> np.ndarray:
+    """Six columns grounded at row 0 over a covered well: legal, and the
+    case where an inverted reading's own columns DO run out into air.
+
+    Cols 0-5 reach row 0; cols 6-9 start at row 3; col 5 is a well covered
+    from row 3 down, which is what keeps rows 3-19 from being complete
+    lines (a complete line clears, so no board can show one). Inverted,
+    this reads as cols 6-9 occupied for three rows with empty board
+    underneath — airborne columns, twelve cells: three tetrominoes' worth
+    of "falling piece", which is what the cell budget refuses.
+    """
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[:, 0:6] = True
+    grid[3:, 6:10] = True
+    grid[3:, 5] = False
+    assert not grid.all(axis=1).any(), "a complete row would have cleared"
+    return grid
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_airborne_inversion_is_refused_by_the_cell_budget(style) -> None:  # type: ignore[no-untyped-def]
+    # The half of the inversion family the airborne test alone lets past:
+    # here the inverted reading's contaminated columns really do run out
+    # into air, so only the size of what hangs there gives it away. Left
+    # unbudgeted this was measured wrong above the gate at 0.95 on the
+    # monochrome styles (and twice in a 1500-board seeded sweep of legal
+    # near-top-out boards).
+    grid = near_top_out_with_air_grid()
+    image = render_board(grid, style, cell_size=20)
+    occupancy, confidence = classify_grid(image)
+    assert bool(np.array_equal(occupancy, grid)) or confidence < CoachConfig().min_confidence, (
+        f"wrong reading above the gate: {style.name} conf={confidence:.3f}"
+    )
+
+
 @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
 def test_top_row_stack_never_wrong_above_gate(style) -> None:  # type: ignore[no-untyped-def]
     # A stack legally reaching visible row 0 leaves the top row majority

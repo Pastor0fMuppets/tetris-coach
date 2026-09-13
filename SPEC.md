@@ -48,19 +48,23 @@ vision/
                   # locks onto piece colors and the whole board inverts, so a
                   # self-estimated reading is vouched for only when its own
                   # top row is consistent with the premise: a strict majority
-                  # of the OBSERVABLE top-row cells read empty, and every
-                  # occupied one is AIRBORNE — its column's occupied run ends
-                  # within a tetromino's reach. A piece spawning or falling
-                  # through row 0 is airborne and keeps full confidence; a
-                  # stack grounded at row 0 (legal: side columns stacked to
-                  # the top, versus garbage pushed up) does not and is capped
-                  # to 0.0, because an inverted reading is always of that
-                  # second kind — the cells it calls occupied are the true
-                  # background, which runs from row 0 down to the stack. A
-                  # count alone cannot separate the two: both benign and
-                  # inverted readings show a minority occupied, which is why
-                  # the earlier "any occupied top-row cell caps" rule was
-                  # total, and why a plain majority rule is no rule at all.
+                  # of the OBSERVABLE top-row cells read empty, and what
+                  # hangs off row 0 is ONE TETROMINO AT MOST — every occupied
+                  # top-row cell's column runs out into air, and the runs
+                  # together hold at most 4 cells. A piece spawning or
+                  # falling through row 0 fits that and keeps full
+                  # confidence; a stack grounded at row 0 (legal: side
+                  # columns stacked to the top, versus garbage pushed up)
+                  # does not and is capped to 0.0, because an inverted
+                  # reading's occupied cells are the true background, which
+                  # runs from row 0 down to the stack — grounded, or (when
+                  # the stack has settled a few rows down) a block of empty
+                  # space far bigger than any one piece. A count alone
+                  # separates nothing here: benign and inverted readings BOTH
+                  # show a minority occupied, which is why the earlier "any
+                  # occupied top-row cell caps" rule was total, and why a
+                  # plain majority rule is no rule at all (measured: it lets
+                  # monochrome-theme inversions through at 0.95).
                   # The classifier stays pure of layout, but not of what the
                   # capture cannot see: it takes the same unobservable-cell
                   # set the engine does. When a game floats its NEXT preview

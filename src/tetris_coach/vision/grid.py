@@ -71,10 +71,10 @@ MIN_SPREAD = 0.35
 # empty board is.
 _UNIFORM_EMPTY_CONFIDENCE = 0.5
 
-# Rows a tetromino can span: the vertical reach of the ONLY thing that may
-# legitimately contaminate the top row without breaking the background
-# estimate — a piece in flight. Used by :func:`_top_row_vouchable`.
-_MAX_PIECE_ROWS = 4
+# Cells in a tetromino — also the most rows one can span. The size of the
+# ONLY thing that may legitimately contaminate the top row without breaking
+# the background estimate: a piece in flight. See :func:`_top_row_vouchable`.
+_PIECE_CELLS = 4
 
 
 def _cell_colors(
@@ -156,31 +156,46 @@ def _top_row_background(
     return np.asarray(np.median(top, axis=0), dtype=np.float64)
 
 
-def _airborne(
+def _hangs_one_piece_at_most(
     occupancy: NDArray[np.bool_],
-    col: int,
+    columns: list[int],
     unobservable: frozenset[tuple[int, int]],
 ) -> bool:
-    """Does the occupied run that starts at ``occupancy[0, col]`` have air
-    under it within a tetromino's reach?
+    """Is everything hanging off the top row one tetromino at most?
 
-    True for a piece in flight (at most :data:`_MAX_PIECE_ROWS` rows, with
-    empty board below it), False for a column whose stack is GROUNDED at
-    row 0 — the configuration that inverts the top-row median. Cells the
-    capture cannot read are evidence for neither: they are skipped, so
-    they neither end the run nor extend it.
+    Walks down from ``occupancy[0, col]`` for each of ``columns`` (the
+    top-row cells that read occupied) and asks two things of what it
+    finds:
+
+    - Each run must END in air. A column occupied from row 0 to the floor
+      is a stack GROUNDED at the top, not a piece in flight.
+    - The runs together must hold no more cells than a tetromino has. One
+      piece is the whole budget: nothing else can legitimately hang off
+      row 0 with air under it.
+
+    Cells the capture cannot read are evidence for neither: they are
+    skipped, so they neither end a run nor spend the budget.
     """
     rows = int(occupancy.shape[0])
-    run = 1  # row 0 itself
-    for r in range(1, rows):
-        if (r, col) in unobservable:
-            continue
-        if not bool(occupancy[r, col]):
-            return True
-        run += 1
-        if run > _MAX_PIECE_ROWS:
+    cells = 0
+    for col in columns:
+        run = 1  # row 0 itself
+        airborne = False
+        for r in range(1, rows):
+            if (r, col) in unobservable:
+                continue
+            if not bool(occupancy[r, col]):
+                airborne = True
+                break
+            run += 1
+            if run > _PIECE_CELLS:
+                break
+        if not airborne:
             return False
-    return False  # occupied all the way to the floor
+        cells += run
+        if cells > _PIECE_CELLS:
+            return False
+    return True
 
 
 def _top_row_vouchable(
@@ -199,23 +214,32 @@ def _top_row_vouchable(
     1. A strict majority of them must read empty. More cells occupied than
        not contradicts the estimator's own premise outright — and no
        single falling piece can put that many cells in one row.
-    2. Every occupied one must be AIRBORNE (:func:`_airborne`). This is
-       what separates the two states that a count alone cannot: a piece
-       spawning or falling through row 0 leaves board under it, while a
-       stack reaching row 0 continues down — and an INVERTED reading is
-       always of the second kind, because the cells it calls occupied are
-       the true board background, which runs from row 0 down to the top of
-       the stack. (A count cannot separate them at all: with m of N
-       top-row cells truly non-background, a benign reading shows m
-       occupied and an inverted one shows N - m, and inversion needs
-       m > N/2, so both land under N/2. Measured: a plain majority rule
-       lets six monochrome-theme inversions through at confidence 0.95.)
+    2. What hangs off the top row must be ONE PIECE AT MOST
+       (:func:`_hangs_one_piece_at_most`): every occupied top-row cell's
+       column must run out into air, and the runs together must hold no
+       more cells than a tetromino has.
 
-    The residual: a near-top-out board with six-plus columns grounded at
-    row 0 AND a background column whose stack top is within four rows of
-    it reads inverted and vouchable. It takes a board that is already
-    one piece from a game over, and only on the bootstrap path —
-    :class:`GridClassifier`'s memory, once anchored, never consults this.
+    Rule 2 is what separates the two states a count alone cannot. A piece
+    spawning or falling through row 0 leaves board under it; a stack
+    reaching row 0 continues down — and an INVERTED reading is always of
+    the second kind, because the cells it calls occupied are the true
+    board background, which runs from row 0 down to the top of the stack.
+    (A count cannot separate them at all: with m of N top-row cells truly
+    non-background, a benign reading shows m occupied and an inverted one
+    shows N - m, and inversion needs m > N/2, so both land under N/2.
+    Measured: a plain majority rule lets six monochrome-theme inversions
+    through at confidence 0.95.) The cell budget is the half that catches
+    the inversions whose columns DO run out into air: the true empty
+    region above a near-topped-out stack is many cells deep across several
+    columns, which is nothing a single tetromino can be. Measured over
+    1500 seeded legal near-top-out boards: two inversions above the gate
+    without the budget (hanging 8 and 9 cells), none with it.
+
+    What is left is only what a legal board can no longer be: a frame
+    whose true empty space above the stack is itself tetromino-sized and
+    tetromino-shaped while six-plus columns are grounded at row 0. And it
+    is confined to the bootstrap path — :class:`GridClassifier`'s memory,
+    once anchored, never consults this.
     """
     cols = int(occupancy.shape[1])
     observable = [c for c in range(cols) if (0, c) not in unobservable]
@@ -224,7 +248,7 @@ def _top_row_vouchable(
         return True
     if len(occupied) * 2 > len(observable):
         return False
-    return all(_airborne(occupancy, c, unobservable) for c in occupied)
+    return _hangs_one_piece_at_most(occupancy, occupied, unobservable)
 
 
 def cell_scores(
