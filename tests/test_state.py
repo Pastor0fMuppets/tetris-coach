@@ -155,8 +155,12 @@ class TestClearLocks:
         run(merge(stack, resting), "S")
         committed = tracker.committed
         # Two morphing fade frames: no commit, committed untouched.
-        fade1 = tuple(row & ~0b0000111100 if r == 19 else row for r, row in enumerate(merge(stack, resting)))
-        fade2 = tuple(row & ~0b0111111110 if r == 19 else row for r, row in enumerate(merge(stack, resting)))
+        fade1 = tuple(
+            row & ~0b0000111100 if r == 19 else row for r, row in enumerate(merge(stack, resting))
+        )
+        fade2 = tuple(
+            row & ~0b0111111110 if r == 19 else row for r, row in enumerate(merge(stack, resting))
+        )
         assert run(fade1, "S") == []
         assert run(fade2, "S") == []
         assert tracker.committed == committed

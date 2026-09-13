@@ -40,9 +40,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
             self._board_rect = board_rect
             self._style = style or HintStyle()
             self._move: Move | None = None
-            self.setGeometry(
-                board_rect.left, board_rect.top, board_rect.width, board_rect.height
-            )
+            self.setGeometry(board_rect.left, board_rect.top, board_rect.width, board_rect.height)
 
         def set_hint(self, move: Move | None) -> None:
             """Update the displayed placement (None hides the hint)."""

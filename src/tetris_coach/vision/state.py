@@ -61,9 +61,7 @@ class Snapshot:
 
 def _rows_from_grid(grid: NDArray[np.bool_]) -> tuple[int, ...]:
     rows, cols = grid.shape
-    return tuple(
-        int(sum(1 << c for c in range(cols) if grid[r, c])) for r in range(rows)
-    )
+    return tuple(int(sum(1 << c for c in range(cols) if grid[r, c])) for r in range(rows))
 
 
 class GameStateTracker:
@@ -106,9 +104,7 @@ class GameStateTracker:
         """
         return self._last_falling
 
-    def update(
-        self, occupancy: NDArray[np.bool_], next_piece: str | None
-    ) -> list[GameEvent]:
+    def update(self, occupancy: NDArray[np.bool_], next_piece: str | None) -> list[GameEvent]:
         """Feed one frame's full occupancy grid; returns committed events."""
         rows = _rows_from_grid(occupancy)
         explanation = explain_grid(
@@ -147,9 +143,7 @@ class GameStateTracker:
 
         candidate = Snapshot(
             stack_rows=explanation.stack_rows,
-            falling_piece=(
-                explanation.falling.piece if explanation.falling is not None else None
-            ),
+            falling_piece=(explanation.falling.piece if explanation.falling is not None else None),
             next_piece=next_piece,
         )
 
@@ -183,9 +177,7 @@ class GameStateTracker:
         return self._events(previous, candidate, kind)
 
     @staticmethod
-    def _events(
-        old: Snapshot, new: Snapshot, kind: FrameKind | None
-    ) -> list[GameEvent]:
+    def _events(old: Snapshot, new: Snapshot, kind: FrameKind | None) -> list[GameEvent]:
         events: list[GameEvent] = []
         if kind is FrameKind.LOCKED:
             events.append(GameEvent.PIECE_LOCKED)

@@ -67,9 +67,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
                 selection = QRect(self._origin, self._current).normalized()
                 painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
                 painter.fillRect(selection, QColor(0, 0, 0, 0))
-                painter.setCompositionMode(
-                    QPainter.CompositionMode.CompositionMode_SourceOver
-                )
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
                 painter.setPen(QColor(0, 229, 255))
                 painter.drawRect(selection)
             painter.end()

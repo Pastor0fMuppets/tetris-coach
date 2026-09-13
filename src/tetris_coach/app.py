@@ -64,8 +64,7 @@ def render_debug_frame(
     falling_txt = "-"
     if falling is not None:
         falling_txt = (
-            f"{falling.piece} rot{falling.rotation_index} "
-            f"@ (row {falling.row}, col {falling.col})"
+            f"{falling.piece} rot{falling.rotation_index} @ (row {falling.row}, col {falling.col})"
         )
     events_txt = ", ".join(event.name for event in events) or "-"
     return (
@@ -113,9 +112,7 @@ class CoachEngine:
         committed = self.tracker.committed
         if self.config.debug and (events or committed != previous):
             print(
-                render_debug_frame(
-                    occupancy, confidence, committed, self.tracker.falling, events
-                )
+                render_debug_frame(occupancy, confidence, committed, self.tracker.falling, events)
             )
 
         if GameEvent.BOARD_RESET in events:
@@ -173,9 +170,7 @@ class CoachEngine:
         """identify_next, skipped when the preview pixels did not change."""
         if next_image is None:
             return None
-        if self._last_next_image is not None and np.array_equal(
-            next_image, self._last_next_image
-        ):
+        if self._last_next_image is not None and np.array_equal(next_image, self._last_next_image):
             return self._last_next_piece
         piece = identify_next(next_image)
         # Copy: capture sources may reuse the frame buffer between grabs.

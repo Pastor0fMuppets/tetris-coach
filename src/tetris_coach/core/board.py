@@ -224,12 +224,7 @@ class Board:
         wells = 0
         for r in range(HEIGHT):
             row = rows[r]
-            well_mask = (
-                ~row
-                & ((row << 1) | 1)
-                & ((row >> 1) | _RIGHT_WALL)
-                & FULL_ROW
-            )
+            well_mask = ~row & ((row << 1) | 1) & ((row >> 1) | _RIGHT_WALL) & FULL_ROW
             while well_mask:
                 bit = well_mask & -well_mask
                 well_mask ^= bit

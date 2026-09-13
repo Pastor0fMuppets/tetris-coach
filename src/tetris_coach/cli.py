@@ -75,8 +75,7 @@ def run_demo(pieces: int, seed: int, delay: float) -> int:
             sys.stdout.write("\x1b[2J\x1b[H")
             print(_render_demo_board(board, move))
             print(
-                f"piece {placed + 1}/{pieces}: {current} "
-                f"(next {upcoming})  lines: {lines_cleared}"
+                f"piece {placed + 1}/{pieces}: {current} (next {upcoming})  lines: {lines_cleared}"
             )
             time.sleep(delay)
         board = move.board
@@ -87,10 +86,7 @@ def run_demo(pieces: int, seed: int, delay: float) -> int:
 
     elapsed = time.perf_counter() - started
     print(_render_demo_board(board, None))
-    print(
-        f"Placed {placed} pieces, cleared {lines_cleared} lines "
-        f"in {elapsed:.1f}s (seed {seed})."
-    )
+    print(f"Placed {placed} pieces, cleared {lines_cleared} lines in {elapsed:.1f}s (seed {seed}).")
     if search_times:
         search_times.sort()
         p50 = search_times[len(search_times) // 2]
@@ -150,9 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="run a terminal self-play demo (no GUI required)",
     )
-    parser.add_argument(
-        "--pieces", type=int, default=200, help="demo: number of pieces to play"
-    )
+    parser.add_argument("--pieces", type=int, default=200, help="demo: number of pieces to play")
     parser.add_argument("--seed", type=int, default=0, help="demo: RNG seed")
     parser.add_argument(
         "--delay",

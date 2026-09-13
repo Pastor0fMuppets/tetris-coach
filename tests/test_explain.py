@@ -255,9 +255,7 @@ class TestClearTierC3Unobserved:
         assert exp.falling is None
 
     def test_quad_clear_to_empty_board(self) -> None:
-        stack = rows_of(
-            bottom_lines("#########.", "#########.", "#########.", "#########.")
-        )
+        stack = rows_of(bottom_lines("#########.", "#########.", "#########.", "#########."))
         exp = explain_grid(EMPTY, stack, None)
         assert exp.kind is FrameKind.LOCKED
         assert exp.stack_rows == EMPTY
@@ -299,16 +297,13 @@ class TestUnexplained:
 
     def test_eight_cells_failing_l1_and_l2(self) -> None:
         # Two mid-air tetrominoes: neither supported, neither in the zone.
-        observed = merge(
-            self.STACK, piece_cells("I", 0, 10, 2), piece_cells("I", 0, 12, 5)
-        )
+        observed = merge(self.STACK, piece_cells("I", 0, 10, 2), piece_cells("I", 0, 12, 5))
         assert explain_grid(observed, self.STACK, None).kind is FrameKind.UNEXPLAINED
 
     def test_missing_cells_without_clear_explanation(self) -> None:
         stack = rows_of(bottom_lines("#########."))
         observed = tuple(
-            row & ~sum(1 << c for c in (2, 3, 4)) if r == 19 else row
-            for r, row in enumerate(stack)
+            row & ~sum(1 << c for c in (2, 3, 4)) if r == 19 else row for r, row in enumerate(stack)
         )
         assert explain_grid(observed, stack, None).kind is FrameKind.UNEXPLAINED
 
@@ -333,9 +328,7 @@ class TestOcclusionTolerance:
         return tuple(out)
 
     def test_falling_with_two_missing_keeps_stack_memory(self) -> None:
-        observed = self._occlude(
-            merge(self.STACK, piece_cells("T", 0, 5, 3)), [(19, 0), (19, 1)]
-        )
+        observed = self._occlude(merge(self.STACK, piece_cells("T", 0, 5, 3)), [(19, 0), (19, 1)])
         exp = explain_grid(observed, self.STACK, None)
         assert exp.kind is FrameKind.FALLING
         assert exp.stack_rows == self.STACK  # memory wins over vision
@@ -378,9 +371,6 @@ class TestClearFullRowsMatchesCore:
                         continue
                     merged = merge(
                         stack,
-                        [
-                            (dropped.landing_row + r, col + c)
-                            for r, c in rotation.cells
-                        ],
+                        [(dropped.landing_row + r, col + c) for r, c in rotation.cells],
                     )
                     assert clear_full_rows(merged) == dropped.board.rows

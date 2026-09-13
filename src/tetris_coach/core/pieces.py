@@ -61,9 +61,7 @@ def _rotate_cw(cells: tuple[Cell, ...]) -> tuple[Cell, ...]:
 def _make_rotation(piece: str, index: int, cells: tuple[Cell, ...]) -> Rotation:
     width = max(c for _, c in cells) + 1
     height = max(r for r, _ in cells) + 1
-    row_masks = tuple(
-        sum(1 << c for r, c in cells if r == row) for row in range(height)
-    )
+    row_masks = tuple(sum(1 << c for r, c in cells if r == row) for row in range(height))
     bottom = tuple(max(r for r, c in cells if c == col) for col in range(width))
     top = tuple(min(r for r, c in cells if c == col) for col in range(width))
     return Rotation(
@@ -87,9 +85,7 @@ def _build() -> dict[str, tuple[Rotation, ...]]:
             if cells not in seen:
                 seen.append(cells)
             cells = _rotate_cw(cells)
-        table[piece] = tuple(
-            _make_rotation(piece, i, c) for i, c in enumerate(seen)
-        )
+        table[piece] = tuple(_make_rotation(piece, i, c) for i, c in enumerate(seen))
     return table
 
 

@@ -480,9 +480,7 @@ class TestCoachEngineScenarios:
         assert predicted is not None
         # The T locks at the predicted target and the I spawns, but the
         # preview blanks during the piece-shift animation.
-        locked = merge(
-            tuple(predicted.rows), piece_cells("I", 0, 1, 3)
-        )
+        locked = merge(tuple(predicted.rows), piece_cells("I", 0, 1, 3))
         hint2 = self._process(engine, locked, None, times=2)
         assert hint2 is not None
         assert hint2.piece == "I"
@@ -555,9 +553,7 @@ class TestCoachEngineScenarios:
         assert hint is not None
         committed = engine.tracker.committed
         # A washed-out frame (smooth gradient: classes barely separate).
-        gradient = np.tile(
-            np.linspace(0, 255, 10 * self.CELL, dtype=np.uint8), (20 * self.CELL, 1)
-        )
+        gradient = np.tile(np.linspace(0, 255, 10 * self.CELL, dtype=np.uint8), (20 * self.CELL, 1))
         washed = np.stack([gradient] * 3, axis=2)
         assert engine.process_frame(washed, self._preview("I")) is hint
         assert engine.tracker.committed == committed

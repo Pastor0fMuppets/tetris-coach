@@ -35,9 +35,7 @@ SPAWN_ROWS = 4
 
 # Normalized cell set -> (piece, rotation index), for O(1) shape matching.
 _SHAPE_LOOKUP: dict[tuple[Cell, ...], tuple[str, int]] = {
-    rot.cells: (rot.piece, rot.index)
-    for rots in ROTATIONS.values()
-    for rot in rots
+    rot.cells: (rot.piece, rot.index) for rots in ROTATIONS.values() for rot in rots
 }
 
 
@@ -176,9 +174,7 @@ def _explains(
     """
     if any(s & ~o for o, s in zip(observed_rows, s2_rows, strict=True)):
         return False, None
-    residual = _cells_from_rows(
-        o & ~s for o, s in zip(observed_rows, s2_rows, strict=True)
-    )
+    residual = _cells_from_rows(o & ~s for o, s in zip(observed_rows, s2_rows, strict=True))
     if not residual:
         return True, None
     piece = _piece_at(residual)
@@ -200,9 +196,7 @@ def _lock_reveal(
         if last_cells <= added:
             spawn = _piece_at(added - last_cells)
             if spawn is not None and spawn.row < SPAWN_ROWS:
-                return Explanation(
-                    FrameKind.LOCKED, _rows_with(stack_rows, last_cells), spawn
-                )
+                return Explanation(FrameKind.LOCKED, _rows_with(stack_rows, last_cells), spawn)
     # L2 (structural): the hard-drop / zero-ARE case — the locked cells are
     # not the last observed cells, so split the diff into two tetrominoes.
     components = _connected_components(added)
@@ -297,12 +291,8 @@ def explain_grid(
     The falling piece is *derived* as ``observed & ~stack``; a frame no rule
     explains returns :attr:`FrameKind.UNEXPLAINED` and proposes nothing.
     """
-    added_rows = tuple(
-        o & ~s for o, s in zip(observed_rows, stack_rows, strict=True)
-    )
-    n_miss = sum(
-        (s & ~o).bit_count() for o, s in zip(observed_rows, stack_rows, strict=True)
-    )
+    added_rows = tuple(o & ~s for o, s in zip(observed_rows, stack_rows, strict=True))
+    n_miss = sum((s & ~o).bit_count() for o, s in zip(observed_rows, stack_rows, strict=True))
     added = _cells_from_rows(added_rows)
 
     # Step 1 — stack intact, or a small occlusion tolerated (trust memory

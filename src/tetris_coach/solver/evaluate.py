@@ -39,9 +39,7 @@ def landing_height(result: DropResult, rotation: Rotation) -> float:
     return HEIGHT - 1 - result.landing_row - (rotation.height - 1) / 2.0
 
 
-def evaluate_drop(
-    result: DropResult, rotation: Rotation, weights: Weights = DELLACHERIE
-) -> float:
+def evaluate_drop(result: DropResult, rotation: Rotation, weights: Weights = DELLACHERIE) -> float:
     """Score a single placement (drop already applied)."""
     board = result.board
     return (
