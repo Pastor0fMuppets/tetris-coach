@@ -175,6 +175,39 @@ class TestLockRevealL2:
         assert exp.kind is FrameKind.UNEXPLAINED
 
 
+class TestLockRevealRejectsFullRows:
+    """A zero-ARE clear-flash frame — the completed row still fully lit
+    while the next piece is already visible — must stay UNEXPLAINED:
+    committing it would anchor the tracker on a stack containing a row
+    that is about to vanish."""
+
+    STACK = rows_of(bottom_lines("#########."))
+    SPAWN = piece_cells("J", 0, 0, 4)
+
+    def test_l1_flash_frame_with_spawn_unexplained(self) -> None:
+        last = fp("I", 1, 16, 9)  # observed at rest, completing row 19
+        observed = merge(self.STACK, last.cells, self.SPAWN)
+        assert explain_grid(observed, self.STACK, last).kind is FrameKind.UNEXPLAINED
+
+    def test_l2_flash_frame_with_spawn_unexplained(self) -> None:
+        last = fp("I", 1, 4, 9)  # hard drop: last observed mid-air
+        lock = piece_cells("I", 1, 16, 9)
+        observed = merge(self.STACK, lock, self.SPAWN)
+        assert explain_grid(observed, self.STACK, last).kind is FrameKind.UNEXPLAINED
+
+    def test_settled_post_clear_frame_still_locks(self) -> None:
+        # Once the animation settles, the collapsed board plus the
+        # (descended) spawn is explained by the clear tiers as usual.
+        last = fp("I", 1, 16, 9)
+        s2 = rows_of([(17, 9), (18, 9), (19, 9)])
+        observed = merge(s2, piece_cells("J", 0, 1, 4))
+        exp = explain_grid(observed, self.STACK, last)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == s2
+        assert exp.falling is not None
+        assert exp.falling.piece == "J"
+
+
 class TestClearTierC1:
     def test_last_position_completes_row(self) -> None:
         stack = rows_of(bottom_lines("#########."))

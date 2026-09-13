@@ -107,6 +107,16 @@ def test_tracker_soak_self_play() -> None:
                 feed(pre, nxt)  # flash frame: cleared rows still lit
                 for fade in _fade_frames(pre)[: rng.randint(1, 2)]:
                     feed(fade, nxt)
+        elif move.lines_cleared:
+            # Zero-ARE clear flash: the completed rows are still fully lit
+            # while the next piece is already visible. Committing such a
+            # frame would anchor the tracker on a stack with a full row.
+            flash = merge(board.rows, final_cells)
+            if _disjoint(flash, next_spawn):
+                before = tracker.committed
+                for _ in range(2):
+                    assert feed(merge(flash, next_spawn), nxt) == []
+                assert tracker.committed == before
 
         board = move.board
         current, upcoming = upcoming, rng.choice(PIECES)

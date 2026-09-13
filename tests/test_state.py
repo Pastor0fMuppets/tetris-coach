@@ -183,6 +183,25 @@ class TestClearLocks:
         assert tracker.committed.stack_rows == s2
         assert tracker.committed.falling_piece is None
 
+    def test_zero_are_clear_flash_with_spawn_never_commits_full_row(self) -> None:
+        # Zero-ARE game with a flash animation: the completed row is still
+        # fully lit while the next piece is already visible. Those frames
+        # must not commit (the stack would contain a full row about to
+        # vanish); the settled frame then commits the lock exactly once.
+        tracker = GameStateTracker(confirm_frames=2)
+        stack = rows_of(bottom_lines("#########."))
+        attach(tracker, stack, "I")
+        feed(tracker, merge(stack, piece_cells("I", 1, 4, 9)), "J", times=2)
+        flash = merge(stack, piece_cells("I", 1, 16, 9), piece_cells("J", 0, 0, 4))
+        assert feed(tracker, flash, "L", times=2) == []
+        assert tracker.committed.stack_rows == stack  # untouched mid-animation
+        s2 = rows_of([(17, 9), (18, 9), (19, 9)])
+        settled = merge(s2, piece_cells("J", 0, 1, 4))
+        events = feed(tracker, settled, "L", times=2)
+        assert events == [GameEvent.PIECE_LOCKED, GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.stack_rows == s2
+        assert tracker.committed.falling_piece == "J"
+
     def test_full_clear_to_empty_board(self) -> None:
         # Port of the old lock-with-line-clear test: stack 6 + 4 - 10 = 0.
         tracker = GameStateTracker(confirm_frames=2)

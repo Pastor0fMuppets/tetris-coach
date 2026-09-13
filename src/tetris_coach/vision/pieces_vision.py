@@ -188,7 +188,14 @@ def _lock_reveal(
     stack_rows: tuple[int, ...],
     last_falling: FallingPiece | None,
 ) -> Explanation | None:
-    """A lock revealed by the next spawn, no clears (8 added cells)."""
+    """A lock revealed by the next spawn, no clears (8 added cells).
+
+    A candidate whose merged stack contains a full row is rejected: the
+    game is mid clear animation (a zero-ARE flash frame still lights the
+    completed row while the next piece is already visible), and that row
+    is about to vanish. The frame stays UNEXPLAINED; the settled
+    post-clear frame is explained by :func:`_lock_with_clears` instead.
+    """
     # L1 (position-anchored): the piece locked exactly where it was last
     # observed and the spawn appeared — even 4-adjacent to it (one blob).
     if last_falling is not None:
@@ -196,7 +203,10 @@ def _lock_reveal(
         if last_cells <= added:
             spawn = _piece_at(added - last_cells)
             if spawn is not None and spawn.row < SPAWN_ROWS:
-                return Explanation(FrameKind.LOCKED, _rows_with(stack_rows, last_cells), spawn)
+                merged = _rows_with(stack_rows, last_cells)
+                if any(row == FULL_ROW for row in merged):
+                    return None  # clear-flash frame: the full row will vanish
+                return Explanation(FrameKind.LOCKED, merged, spawn)
     # L2 (structural): the hard-drop / zero-ARE case — the locked cells are
     # not the last observed cells, so split the diff into two tetrominoes.
     components = _connected_components(added)
@@ -225,7 +235,10 @@ def _lock_reveal(
     if len(valid) != 1:
         return None  # ambiguous: hold; the spawn descends and disambiguates
     lock_cells, spawn_piece = valid[0]
-    return Explanation(FrameKind.LOCKED, _rows_with(stack_rows, lock_cells), spawn_piece)
+    merged = _rows_with(stack_rows, lock_cells)
+    if any(row == FULL_ROW for row in merged):
+        return None  # clear-flash frame: the full row will vanish
+    return Explanation(FrameKind.LOCKED, merged, spawn_piece)
 
 
 def _lock_with_clears(
