@@ -23,7 +23,7 @@ from enum import Enum, auto
 import numpy as np
 from numpy.typing import NDArray
 
-from ..core.board import FULL_ROW, HEIGHT, WIDTH, Board
+from ..core.board import FULL_ROW, WIDTH, Board
 from ..core.pieces import PIECES, ROTATIONS
 from .grid import MIN_SPREAD, _distance_scores, otsu_threshold_hist
 
@@ -160,7 +160,7 @@ def _supported(cells: Iterable[Cell], stack_rows: tuple[int, ...]) -> bool:
     (Component cells are disjoint from the stack by construction, so a
     same-component cell below never counts as support.)
     """
-    return any(r + 1 >= HEIGHT or bool(stack_rows[r + 1] >> c & 1) for r, c in cells)
+    return any(r + 1 >= len(stack_rows) or bool(stack_rows[r + 1] >> c & 1) for r, c in cells)
 
 
 def _explains(

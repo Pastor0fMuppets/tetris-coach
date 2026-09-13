@@ -15,9 +15,9 @@ Cell = tuple[int, int]
 EMPTY: tuple[int, ...] = (0,) * HEIGHT
 
 
-def rows_of(*cell_groups: Iterable[Cell]) -> tuple[int, ...]:
+def rows_of(*cell_groups: Iterable[Cell], height: int = HEIGHT) -> tuple[int, ...]:
     """Row bitmasks with every cell of every group set."""
-    rows = [0] * HEIGHT
+    rows = [0] * height
     for cells in cell_groups:
         for r, c in cells:
             rows[r] |= 1 << c
@@ -33,11 +33,11 @@ def merge(rows: tuple[int, ...], *cell_groups: Iterable[Cell]) -> tuple[int, ...
     return tuple(out)
 
 
-def bottom_lines(*lines: str) -> list[Cell]:
+def bottom_lines(*lines: str, height: int = HEIGHT) -> list[Cell]:
     """Cells of an ASCII stack anchored to the bottom of the board."""
     cells: list[Cell] = []
     for i, line in enumerate(lines):
-        r = HEIGHT - len(lines) + i
+        r = height - len(lines) + i
         for c, ch in enumerate(line):
             if ch == "#":
                 cells.append((r, c))
@@ -54,8 +54,8 @@ def fp(piece: str, rotation_index: int, row: int, col: int) -> FallingPiece:
 
 
 def grid_of(rows: tuple[int, ...]) -> np.ndarray:
-    """Row bitmasks -> (HEIGHT, WIDTH) bool occupancy grid."""
-    grid = np.zeros((HEIGHT, WIDTH), dtype=bool)
+    """Row bitmasks -> (len(rows), WIDTH) bool occupancy grid."""
+    grid = np.zeros((len(rows), WIDTH), dtype=bool)
     for r, row in enumerate(rows):
         for c in range(WIDTH):
             if row >> c & 1:

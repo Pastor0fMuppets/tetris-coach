@@ -387,6 +387,67 @@ class TestOcclusionTolerance:
         assert exp.kind is FrameKind.UNEXPLAINED
 
 
+class TestTwelveRowBoards:
+    """explain_grid on a 12-row board: every bound comes from len(rows)."""
+
+    ROWS = 12
+    EMPTY12: tuple[int, ...] = (0,) * 12
+
+    def test_quiet_and_falling(self) -> None:
+        stack = rows_of(bottom_lines("####..####", height=self.ROWS), height=self.ROWS)
+        assert explain_grid(stack, stack, None).kind is FrameKind.QUIET
+        t = piece_cells("T", 0, 5, 3)
+        exp = explain_grid(merge(stack, t), stack, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert exp.falling.piece == "T"
+
+    def test_lock_reveal_of_piece_on_12_row_floor(self) -> None:
+        # Hard drop to the FLOOR of the 12-row board plus a fresh spawn:
+        # the L2 support test must use the board's own bottom row, not the
+        # 20-row constant (which would reject or crash on every floor lock).
+        last = fp("T", 0, 1, 3)  # last observed mid-air near the top
+        lock = piece_cells("T", 0, self.ROWS - 2, 3)  # rests on row 11
+        spawn = piece_cells("J", 0, 0, 5)
+        observed = merge(self.EMPTY12, lock, spawn)
+        exp = explain_grid(observed, self.EMPTY12, last)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == merge(self.EMPTY12, lock)
+        assert exp.falling is not None
+        assert exp.falling.piece == "J"
+
+    def test_lock_with_clear_from_last_position(self) -> None:
+        # C1: vertical I resting in column 9, completing the bottom row.
+        stack = rows_of(bottom_lines("#########.", height=self.ROWS), height=self.ROWS)
+        last = fp("I", 1, self.ROWS - 4, 9)
+        s2 = rows_of([(self.ROWS - 3, 9), (self.ROWS - 2, 9), (self.ROWS - 1, 9)], height=self.ROWS)
+        exp = explain_grid(s2, stack, last)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == s2
+        assert exp.falling is None
+
+    def test_lock_with_clear_unobserved_piece(self) -> None:
+        # C3: a clearing lock by a never-observed piece on 12 rows.
+        stack = rows_of(bottom_lines("#########.", height=self.ROWS), height=self.ROWS)
+        s2 = rows_of([(self.ROWS - 3, 9), (self.ROWS - 2, 9), (self.ROWS - 1, 9)], height=self.ROWS)
+        spawn = piece_cells("S", 0, 1, 4)
+        exp = explain_grid(merge(s2, spawn), stack, None)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == s2
+        assert exp.falling is not None
+        assert exp.falling.piece == "S"
+
+    def test_quad_clear_to_empty_12_row_board(self) -> None:
+        stack = rows_of(
+            bottom_lines("#########.", "#########.", "#########.", "#########.", height=self.ROWS),
+            height=self.ROWS,
+        )
+        exp = explain_grid(self.EMPTY12, stack, None)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == self.EMPTY12
+        assert exp.falling is None
+
+
 class TestClearFullRowsMatchesCore:
     @pytest.mark.parametrize("piece", PIECES)
     def test_parity_with_board_drop(self, piece: str) -> None:
