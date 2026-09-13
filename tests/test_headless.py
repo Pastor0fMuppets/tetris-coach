@@ -123,6 +123,45 @@ class TestCoachEngine:
         assert engine._precomputed is not None
         assert engine._precomputed.piece == "I"
 
+    def test_preview_vision_skipped_on_identical_frames(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        # F9: the preview image is byte-identical on most frames; the full
+        # identify_next pass must run only when the pixels change.
+        import tetris_coach.app as app_module
+        from tetris_coach.app import CoachEngine
+        from tetris_coach.core.pieces import ROTATIONS
+
+        calls = 0
+        real = app_module.identify_next
+
+        def counting(image):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return real(image)
+
+        monkeypatch.setattr(app_module, "identify_next", counting)
+        engine = CoachEngine()
+        grid = np.zeros((20, 10), dtype=bool)
+        for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):
+            grid[r, c] = True
+        style = STYLES[0]
+        board_image = render_board(grid, style, cell_size=16)
+        next_image = render_next_preview(ROTATIONS["I"][0].cells, style, cell_size=16)
+
+        for _ in range(4):
+            # Fresh copies: the cache must compare content, not identity.
+            hint = engine.process_frame(board_image, next_image.copy())
+        assert calls == 1
+        assert hint is not None and hint.piece == "T"
+        assert engine._precomputed is not None and engine._precomputed.piece == "I"
+
+        # The preview changes: one more real pass.
+        other = render_next_preview(ROTATIONS["O"][0].cells, style, cell_size=16)
+        engine.process_frame(board_image, other)
+        assert calls == 2
+        # No preview region at all: no pass, and no stale cached answer.
+        engine.process_frame(board_image, None)
+        assert calls == 2
+
     def test_engine_flips_to_precomputed_hint_on_lock(self) -> None:
         from tetris_coach.app import CoachEngine
         from tetris_coach.core.pieces import ROTATIONS

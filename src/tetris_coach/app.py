@@ -47,6 +47,11 @@ class CoachEngine:
         # True while current_hint came from the 1-ply precompute and should
         # be refined to 2-ply once the upcoming piece is known.
         self._hint_is_provisional = False
+        # Preview-vision cache: the preview image is byte-identical on most
+        # frames (a piece stays in the box ~15 frames), so identify_next
+        # only runs when the pixels actually change.
+        self._last_next_image: np.ndarray | None = None
+        self._last_next_piece: str | None = None
 
     def process_frame(
         self,
@@ -57,7 +62,7 @@ class CoachEngine:
         occupancy, confidence = classify_grid(board_image)
         if confidence < self.config.min_confidence:
             return self.current_hint  # keep showing the last good hint
-        next_piece = identify_next(next_image) if next_image is not None else None
+        next_piece = self._identify_next_cached(next_image)
 
         events = self.tracker.update(occupancy, next_piece)
         committed = self.tracker.committed
@@ -112,6 +117,20 @@ class CoachEngine:
             self._hint_is_provisional = False
             self._precompute_next(committed.next_piece)
         return self.current_hint
+
+    def _identify_next_cached(self, next_image: np.ndarray | None) -> str | None:
+        """identify_next, skipped when the preview pixels did not change."""
+        if next_image is None:
+            return None
+        if self._last_next_image is not None and np.array_equal(
+            next_image, self._last_next_image
+        ):
+            return self._last_next_piece
+        piece = identify_next(next_image)
+        # Copy: capture sources may reuse the frame buffer between grabs.
+        self._last_next_image = np.array(next_image, copy=True)
+        self._last_next_piece = piece
+        return piece
 
     def _precompute_next(self, next_piece: str | None) -> None:
         """Assume the current hint is followed; pre-solve the next piece."""
