@@ -51,18 +51,28 @@ vision/
                   # selected board region — ROAS Stacker does this at cols 8-9,
                   # rows 0-1), those cells show the NEXT piece, not the board;
                   # app.compute_overlap_mask names them from the two rects and
-                  # the engine forces them empty before the tracker sees them
-                  # (see app.py). Left unmasked they added a second tetromino
-                  # of cells every frame -> UNEXPLAINED -> spurious BOARD_RESET.
+                  # the engine discards their reading (see app.py). Read as
+                  # board content they added a second tetromino of cells every
+                  # frame -> UNEXPLAINED -> spurious BOARD_RESET.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
-                  # LOCKED, UNEXPLAINED). The falling piece is the added-cell diff
-                  # matched against tetromino shapes — never guessed from a single
-                  # frame — so lock delay, floor contact, and post-clear debris
-                  # cannot confuse it. Locks are verified structurally: revealed by
-                  # the next spawn, or a line-clear placement (tiered: last observed
-                  # position, gravity drop from it, any clearing gravity drop)
-                  # reproducing the observation exactly.
+                  # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the
+                  # added-cell diff matched against tetromino shapes — never
+                  # guessed from a single frame — so lock delay, floor contact,
+                  # and post-clear debris cannot confuse it. Locks are verified
+                  # structurally: revealed by the next spawn, or a line-clear
+                  # placement (tiered: last observed position, gravity drop from
+                  # it, any clearing gravity drop) reproducing the observation
+                  # exactly.
+                  # unknown_rows marks cells the capture cannot observe (a game
+                  # panel over the playfield). They are evidence for NOTHING —
+                  # never an added cell, never a missing one — and free to stand
+                  # in for a hypothesis' hidden cells: 1-3 added cells that are
+                  # the visible part of a tetromino are a partly hidden piece,
+                  # named when exactly one placement completes them and OCCLUDED
+                  # (coherent, no candidate) when several do; a lock reveal
+                  # matches on the locked piece's visible cells. Without
+                  # unknown_rows every rule is the fully-observed one.
                   # Next-piece region: threshold, crop to bounding box, normalize to
                   # cell grid, match shape signature. Color is a hint, not required.
   state.py        # GameState tracker: keeps the committed stack as the one
@@ -72,6 +82,12 @@ vision/
                   # PIECE_LOCKED fires when a lock is structurally verified, not at
                   # touchdown; BOARD_RESET only after several consecutive identical
                   # unexplainable frames (new game, garbage, mid-game attach).
+                  # unobservable_cells: the tracker discards the capture's
+                  # reading there and carries a BELIEF for those cells instead —
+                  # seeded empty at bootstrap/resync, moved only by an explained
+                  # transition (a lock merges in what it can see). An OCCLUDED
+                  # frame holds state and never counts toward a reset, so a piece
+                  # resting under the panel cannot wipe the board.
 capture/
   screen.py       # mss-based capture of a screen rect at native (Retina) scale;
                   # handles logical-vs-pixel coordinate scaling. Protocol/interface
@@ -92,14 +108,27 @@ app.py            # Main loop wiring: capture -> vision -> state -> solve -> ove
                   # compute_overlap_mask: when the next-piece region overlaps
                   # the board region (a preview floated over the top corner),
                   # project next_rect into the board's unit square (board-
-                  # relative fractions, so Retina-agnostic) and mask the cells
-                  # whose center falls inside; the engine forces those empty in
-                  # the occupancy after confidence is judged on the full grid
-                  # and before the tracker (and debug view) see it. Computed
-                  # once from the fixed session rects; empty (a no-op) when the
-                  # next box is drawn outside the board. Tradeoff: a real piece
-                  # crossing the masked corner is invisible there and re-tracked
-                  # as it moves out — only the tiny overlap corner is affected.
+                  # relative fractions, so Retina-agnostic) and name the cells
+                  # whose center falls inside. Those cells are UNOBSERVABLE,
+                  # not empty: the engine drops their reading (after confidence
+                  # is judged on the full grid, before the tracker and debug
+                  # view) and declares them to the tracker, which treats them
+                  # as unknown. Computed once from the fixed session rects;
+                  # empty (a no-op) when the next box is drawn outside the
+                  # board.
+                  # _solver_board: what the solver is handed for those cells. A
+                  # covered cell resting directly on the stack (or the floor) is
+                  # where the stack plausibly continues up out of sight, so it
+                  # goes across FILLED and the hint stays out of space the coach
+                  # cannot see; covered cells with air under them go across as
+                  # believed. Filling them all unconditionally is wrong: a
+                  # column whose top row is filled is one Board.drop rejects, so
+                  # it would cost the columns under the panel in every board
+                  # state to guard a case that only arises near top-out.
+                  # Tradeoff: a real piece crossing the covered corner cannot be
+                  # named while several tetrominoes fit its visible part (the
+                  # frame is OCCLUDED: hint held, nothing committed, no reset),
+                  # and a lock there commits only the cells actually seen.
 cli.py            # `tetris-coach` entry point: select regions, start loop; flags
                   # for poll rate, colors, and a terminal debug view (per
                   # committed frame: observed grid, falling piece, next piece,
