@@ -452,6 +452,35 @@ class TestUnobservableCells:
         assert told.confirmed
         np.testing.assert_allclose(told.background, self.STYLE.background, atol=2.0)
 
+    def test_declaring_cells_does_not_reopen_the_bright_overlay_hole(self) -> None:
+        # Declaring covered cells must not cost the dark-theme protection:
+        # once the memory is confirmed on a dark board, a solid bright
+        # frame is still uniform-far (all-occupied @0.0), never the
+        # empty-board @0.5 that would fake a board wipe.
+        mask = self._mask(range(2), range(8, 10))
+        dark = render_board(twelve_row_grid(), STYLES[0], cell_size=self.CELL)
+        classifier = GridClassifier(rows=self.ROWS, unobservable_cells=mask)
+        assert classifier.classify(dark)[1] >= CoachConfig().min_confidence
+        assert classifier.confirmed
+        anchored = classifier.background
+        flash = np.full(dark.shape, 245, dtype=np.uint8)
+        for _ in range(5):
+            occupancy, confidence = classifier.classify(flash)
+            assert occupancy.all()
+            assert confidence == 0.0
+        np.testing.assert_array_equal(classifier.background, anchored)
+
+    def test_a_grounded_column_still_caps_with_cells_declared(self) -> None:
+        # And the top-row cap keeps its teeth on the observable cells: a
+        # column stacked from row 0 to the floor is grounded whether or
+        # not a panel covers the corner beside it.
+        mask = self._mask(range(2), range(8, 10))
+        grid = np.zeros((self.ROWS, 10), dtype=bool)
+        grid[:, 2] = True
+        painted = self._paint(self._board(grid), mask)
+        _occupancy, confidence = classify_grid(painted, rows=self.ROWS, unobservable_cells=mask)
+        assert confidence == 0.0
+
 
 @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
 def test_background_hint_reads_top_row_stacks_exactly(style) -> None:  # type: ignore[no-untyped-def]
