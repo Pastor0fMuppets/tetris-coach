@@ -16,10 +16,11 @@ import sys
 import time
 
 from .capture.screen import Rect
-from .core.board import WIDTH, Board
+from .core.board import DEFAULT_HEIGHT, WIDTH, Board
 from .core.pieces import PIECES
 from .region_select import MIN_BOARD_SIZE, MIN_PREVIEW_SIZE
 from .solver.search import Move, best_move
+from .vision.pieces_vision import SPAWN_ROWS
 
 
 def _rect_error(rect: Rect, min_size: tuple[int, int], what: str) -> str | None:
@@ -50,10 +51,10 @@ def _render_demo_board(board: Board, move: Move | None) -> str:
     return "\n".join(lines)
 
 
-def run_demo(pieces: int, seed: int, delay: float) -> int:
+def run_demo(pieces: int, seed: int, delay: float, rows: int = DEFAULT_HEIGHT) -> int:
     """Solver self-play in the terminal; returns a process exit code."""
     rng = random.Random(seed)
-    board = Board()
+    board = Board([0] * rows)
     current = rng.choice(PIECES)
     upcoming = rng.choice(PIECES)
     placed = 0
@@ -132,6 +133,7 @@ def _run_overlay(args: argparse.Namespace) -> int:  # pragma: no cover - macOS o
     config = CoachConfig(
         poll_rate=args.poll_rate,
         hint_color=args.hint_color,
+        rows=args.rows,
         debug=args.debug,
         dump_dir=args.dump_frames,
     )
@@ -148,6 +150,13 @@ def main(argv: list[str] | None = None) -> int:
         "--demo",
         action="store_true",
         help="run a terminal self-play demo (no GUI required)",
+    )
+    parser.add_argument(
+        "--rows",
+        type=int,
+        default=DEFAULT_HEIGHT,
+        help="board height in rows for the demo and the overlay "
+        f"(width is always {WIDTH}; default {DEFAULT_HEIGHT})",
     )
     parser.add_argument("--pieces", type=int, default=200, help="demo: number of pieces to play")
     parser.add_argument("--seed", type=int, default=0, help="demo: RNG seed")
@@ -178,8 +187,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.rows < SPAWN_ROWS + 1:
+        print(
+            f"--rows must be at least {SPAWN_ROWS + 1} (got {args.rows}): "
+            f"pieces spawn within the top {SPAWN_ROWS} rows, so a shorter "
+            "board has no room to play.",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.demo:
-        return run_demo(pieces=args.pieces, seed=args.seed, delay=args.delay)
+        return run_demo(pieces=args.pieces, seed=args.seed, delay=args.delay, rows=args.rows)
     return _run_overlay(args)
 
 

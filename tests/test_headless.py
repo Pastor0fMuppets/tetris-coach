@@ -51,6 +51,22 @@ def test_run_demo_reports_top_out(capsys: pytest.CaptureFixture[str]) -> None:
     assert run_demo(pieces=0, seed=1, delay=0.0) == 0
 
 
+def test_cli_demo_runs_on_12_rows(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["--demo", "--rows", "12", "--pieces", "30", "--seed", "3"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Placed 30 pieces" in out
+    # The rendered final board is 12 rows tall (plus the floor line).
+    board_lines = [line for line in out.splitlines() if line.startswith("|")]
+    assert len(board_lines) == 12
+
+
+def test_cli_rejects_too_few_rows(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--demo", "--rows", "4"]) == 2
+    assert "--rows must be at least 5" in capsys.readouterr().err
+    assert main(["--demo", "--rows", "0"]) == 2
+
+
 def test_region_size_validation_messages() -> None:
     # F6: a click-without-drag (or any too-small selection) must be
     # rejected with an explanation, not fed to the capture loop.
