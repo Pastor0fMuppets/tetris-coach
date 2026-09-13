@@ -13,6 +13,8 @@ before the state tracker sees them.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from tetris_coach.app import CoachConfig, CoachEngine, compute_overlap_mask
@@ -169,3 +171,41 @@ class TestEngineMasksNextOverlay:
         assert GameEvent.PIECE_SPAWNED not in events
         # ... and a run of identical contaminated frames wipes the board.
         assert GameEvent.BOARD_RESET in events
+
+
+class TestRealFixtureMasking:
+    """Smoke test on real captured frames from the failing live ROAS Stacker
+    session (board region, 10x12). Each frame's raw occupancy carries NEXT-
+    preview cells in the top-right corner; the session's mask clears them."""
+
+    FIXTURES = Path(__file__).parent / "fixtures" / "roas_stacker"
+    FRAMES = ("live_board_500", "live_board_600", "live_board_700", "live_board_800")
+
+    def test_mask_clears_the_next_cells_on_real_frames(self) -> None:
+        from PIL import Image
+
+        from tetris_coach.vision.grid import GridClassifier
+
+        mask = compute_overlap_mask(ROAS_BOARD, ROAS_NEXT, rows=12)
+        assert mask == frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+        # Reuse the engine's own masking so the fixture pins the real path.
+        engine = CoachEngine(CoachConfig(rows=12), masked_cells=mask)
+
+        any_contaminated = False
+        for name in self.FRAMES:
+            rgb = np.asarray(Image.open(self.FIXTURES / f"{name}.png"))
+            bgr = rgb[:, :, ::-1]  # match the BGR capture pipeline
+            occupancy, _confidence = GridClassifier(rows=12).classify(bgr)
+            # The raw reading has NEXT-preview cells in the masked corner ...
+            if any(occupancy[r, c] for r, c in mask):
+                any_contaminated = True
+            masked = engine._masked(occupancy)
+            # ... and after masking not one of those cells survives.
+            for r, c in mask:
+                assert not masked[r, c], f"{name}: cell ({r},{c}) not cleared"
+            # Masking touches nothing outside the corner.
+            outside = occupancy.copy()
+            for r, c in mask:
+                outside[r, c] = False
+            assert np.array_equal(masked, outside)
+        assert any_contaminated, "fixtures no longer exhibit the corner contamination"

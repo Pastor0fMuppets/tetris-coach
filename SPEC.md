@@ -46,6 +46,14 @@ vision/
                   # reading is never vouched for while its polarity rests on
                   # an unverifiable top-row prior (a stack legally reaching
                   # row 0 would otherwise invert the whole board).
+                  # The classifier stays pure of layout. When a game floats its
+                  # NEXT preview over the board's top corner (inside the
+                  # selected board region — ROAS Stacker does this at cols 8-9,
+                  # rows 0-1), those cells show the NEXT piece, not the board;
+                  # app.compute_overlap_mask names them from the two rects and
+                  # the engine forces them empty before the tracker sees them
+                  # (see app.py). Left unmasked they added a second tetromino
+                  # of cells every frame -> UNEXPLAINED -> spurious BOARD_RESET.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, UNEXPLAINED). The falling piece is the added-cell diff
@@ -81,6 +89,17 @@ app.py            # Main loop wiring: capture -> vision -> state -> solve -> ove
                   # Precompute: while piece A falls, assume it lands on target and
                   # pre-solve piece B; on lock, flip hint instantly; if observed
                   # board != predicted, re-solve from observed.
+                  # compute_overlap_mask: when the next-piece region overlaps
+                  # the board region (a preview floated over the top corner),
+                  # project next_rect into the board's unit square (board-
+                  # relative fractions, so Retina-agnostic) and mask the cells
+                  # whose center falls inside; the engine forces those empty in
+                  # the occupancy after confidence is judged on the full grid
+                  # and before the tracker (and debug view) see it. Computed
+                  # once from the fixed session rects; empty (a no-op) when the
+                  # next box is drawn outside the board. Tradeoff: a real piece
+                  # crossing the masked corner is invisible there and re-tracked
+                  # as it moves out — only the tiny overlap corner is affected.
 cli.py            # `tetris-coach` entry point: select regions, start loop; flags
                   # for poll rate, colors, and a terminal debug view (per
                   # committed frame: observed grid, falling piece, next piece,
