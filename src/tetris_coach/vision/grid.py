@@ -22,18 +22,45 @@ from numpy.typing import NDArray
 _MIN_SPREAD = 0.15
 
 
-def score_map(image: NDArray[np.uint8]) -> NDArray[np.float32]:
-    """Per-pixel occupancy score in [0, 1]: max(brightness, saturation)."""
-    img = np.asarray(image)
-    if img.ndim == 2:
-        return (img.astype(np.float32) / 255.0).clip(0.0, 1.0)
-    channels = img[:, :, :3].astype(np.float32) / 255.0
-    mx = channels.max(axis=2)
-    mn = channels.min(axis=2)
+def _build_score_lut() -> NDArray[np.float32]:
+    """256x256 lookup of the color score for a (channel max, channel min) pair.
+
+    The score of a color pixel depends only on its uint8 channel max and
+    min, so all 65536 combinations are precomputed once — with exactly the
+    float32 arithmetic documented in :func:`score_map`, making table lookups
+    bit-identical to computing the formula per pixel.
+    """
+    mx = (np.arange(256).astype(np.float32) / 255.0)[:, None]
+    mn = (np.arange(256).astype(np.float32) / 255.0)[None, :]
     # HSV-style saturation, but with the denominator clamped so that sensor
     # noise on near-black pixels cannot masquerade as strong color.
     saturation = (mx - mn) / np.maximum(mx, 0.25)
     return np.maximum(mx, saturation).astype(np.float32)
+
+
+_SCORE_LUT = _build_score_lut()
+
+
+def score_map(image: NDArray[np.uint8]) -> NDArray[np.float32]:
+    """Per-pixel occupancy score in [0, 1]: max(brightness, saturation).
+
+    Brightness is the channel max ``mx`` (as a 0..1 float) and saturation
+    the clamped HSV-style spread ``(mx - mn) / max(mx, 0.25)``. The channel
+    max/min are reduced on the raw uint8 pixels (``x -> x/255`` is monotone,
+    so the reduction commutes with the conversion) and the score comes from
+    a precomputed 256x256 table: one float lane of work per pixel instead
+    of five, with bit-identical results.
+    """
+    img = np.asarray(image)
+    if img.ndim == 2:
+        return (img.astype(np.float32) / 255.0).clip(0.0, 1.0)
+    # Elementwise plane max/min: identical to ``.max(axis=2)`` but ~4x
+    # faster (numpy's 3-element axis reduce pays iterator overhead per
+    # pixel; the two-plane ufunc runs a straight vector loop).
+    c0, c1, c2 = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+    mx = np.maximum(np.maximum(c0, c1), c2)
+    mn = np.minimum(np.minimum(c0, c1), c2)
+    return _SCORE_LUT[mx, mn]
 
 
 def cell_scores(
@@ -46,9 +73,13 @@ def cell_scores(
 
     ``margin`` is the fraction of each cell inset on every side before
     sampling, which skips gridlines and cell borders.
+
+    Only the sampled sub-rects are scored: with the default margin that is
+    a quarter of the image, so running :func:`score_map` per patch beats
+    scoring the whole image up front by ~4x with identical results.
     """
-    scores = score_map(image)
-    h, w = scores.shape
+    img = np.asarray(image)
+    h, w = int(img.shape[0]), int(img.shape[1])
     if h < rows or w < cols:
         raise ValueError(f"image {w}x{h} too small for a {cols}x{rows} grid")
     ys = np.linspace(0, h, rows + 1)
@@ -62,7 +93,7 @@ def cell_scores(
             cell_w = float(xs[c + 1] - xs[c])
             x0 = round(float(xs[c]) + cell_w * margin)
             x1 = max(x0 + 1, round(float(xs[c + 1]) - cell_w * margin))
-            out[r, c] = scores[y0:y1, x0:x1].mean()
+            out[r, c] = score_map(img[y0:y1, x0:x1]).mean()
     return out
 
 
