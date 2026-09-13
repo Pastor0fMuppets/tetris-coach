@@ -11,6 +11,7 @@ BOARD_RESET must never fire.
 import random
 
 import numpy as np
+import pytest
 
 from tetris_coach.core.board import FULL_ROW, HEIGHT, Board
 from tetris_coach.core.pieces import PIECES
@@ -41,7 +42,7 @@ def _touching(a_cells: list[Cell], b_cells: list[Cell]) -> bool:
 
 def _fade_frames(pre: tuple[int, ...]) -> list[tuple[int, ...]]:
     """Morphing partial-row frames of a clear animation."""
-    full = [r for r in range(HEIGHT) if pre[r] == FULL_ROW]
+    full = [r for r in range(len(pre)) if pre[r] == FULL_ROW]
     frames = []
     for mask in (0b1010101010, 0b0001111000):
         rows = list(pre)
@@ -51,10 +52,11 @@ def _fade_frames(pre: tuple[int, ...]) -> list[tuple[int, ...]]:
     return frames
 
 
-def test_tracker_soak_self_play() -> None:
+@pytest.mark.parametrize("rows", [HEIGHT, 12])
+def test_tracker_soak_self_play(rows: int) -> None:
     rng = random.Random(20260913)
-    board = Board()
-    tracker = GameStateTracker()
+    board = Board([0] * rows)
+    tracker = GameStateTracker(rows=rows)
     lock_count = 0
     reset_count = 0
 

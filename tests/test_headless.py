@@ -820,3 +820,31 @@ class TestTwelveRowEngine:
         out = capsys.readouterr().out
         assert f"/{self.ROWS * 10}," in out
         assert "/200," not in out
+
+
+def test_no_stray_board_size_literals_in_src() -> None:
+    """Guard the height generalization: no bare 20/200 board sizes in src.
+
+    Allowed: DEFAULT_HEIGHT's definition, prose naming the default in
+    docstrings/comments, and the demo's --pieces count (200 pieces, not
+    200 cells).
+    """
+    import re
+    from pathlib import Path
+
+    import tetris_coach
+
+    src = Path(tetris_coach.__file__).parent
+    pattern = re.compile(r"\b(20|200)\b")
+    allowed = (
+        "DEFAULT_HEIGHT = 20",  # the one definition
+        "default 20",  # docstring/comment prose about the default
+        "default=200",  # cli --pieces: demo piece count, not a board size
+        "default {DEFAULT_HEIGHT}",  # cli --rows help text
+    )
+    offenders: list[str] = []
+    for path in sorted(src.rglob("*.py")):
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            if pattern.search(line) and not any(mark in line for mark in allowed):
+                offenders.append(f"{path.relative_to(src)}:{lineno}: {line.strip()}")
+    assert not offenders, "bare board-size literals in src:\n" + "\n".join(offenders)
