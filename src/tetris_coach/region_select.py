@@ -11,7 +11,7 @@ from .capture.screen import Rect
 
 try:  # pragma: no cover - depends on platform
     from PySide6.QtCore import QPoint, QRect, Qt
-    from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPaintEvent, QPainter
+    from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPaintEvent
     from PySide6.QtWidgets import QApplication, QWidget
 
     HAVE_QT = True
@@ -37,7 +37,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
             if screen is not None:
                 self.setGeometry(screen.geometry())
 
-        def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt API
+        def paintEvent(self, event: QPaintEvent) -> None:
             painter = QPainter(self)
             painter.fillRect(self.rect(), QColor(0, 0, 0, 110))
             painter.setPen(QColor(255, 255, 255))
@@ -57,17 +57,17 @@ if HAVE_QT:  # pragma: no cover - macOS only
                 painter.drawRect(selection)
             painter.end()
 
-        def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        def mousePressEvent(self, event: QMouseEvent) -> None:
             self._origin = event.position().toPoint()
             self._current = self._origin
             self.update()
 
-        def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        def mouseMoveEvent(self, event: QMouseEvent) -> None:
             if self._origin is not None:
                 self._current = event.position().toPoint()
                 self.update()
 
-        def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        def mouseReleaseEvent(self, event: QMouseEvent) -> None:
             if self._origin is None:
                 return
             selection = QRect(self._origin, event.position().toPoint()).normalized()
@@ -80,7 +80,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
             )
             self.close()
 
-        def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        def keyPressEvent(self, event: QKeyEvent) -> None:
             if event.key() == Qt.Key.Key_Escape:
                 self.result = None
                 self.close()

@@ -8,7 +8,7 @@ callable when PySide6 is installed (macOS).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..solver.search import Move
 
@@ -19,9 +19,6 @@ try:  # pragma: no cover - depends on platform
     HAVE_QT = True
 except ImportError:  # pragma: no cover
     HAVE_QT = False
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from PySide6.QtGui import QPainter
 
 
 @dataclass(frozen=True)
@@ -52,7 +49,7 @@ def placement_cell_rects(
 
 
 def draw_hint(
-    painter: "QPainter",
+    painter: QPainter,
     move: Move,
     cell_width: float,
     cell_height: float,
@@ -79,7 +76,7 @@ def draw_hint(
 
 
 def _draw_rotation_badge(
-    painter: "QPainter",
+    painter: QPainter,
     move: Move,
     cell_width: float,
     cell_height: float,

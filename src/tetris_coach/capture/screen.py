@@ -9,7 +9,7 @@ this module never touches mss.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, Self
 
 import numpy as np
 from numpy.typing import NDArray
@@ -80,7 +80,7 @@ class ScreenCapture:
     def close(self) -> None:
         self._sct.close()
 
-    def __enter__(self) -> ScreenCapture:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc_info: object) -> None:

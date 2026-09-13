@@ -12,7 +12,7 @@ from .renderer import HintStyle, draw_hint
 
 try:  # pragma: no cover - depends on platform
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QPaintEvent, QPainter
+    from PySide6.QtGui import QPainter, QPaintEvent
     from PySide6.QtWidgets import QWidget
 
     HAVE_QT = True
@@ -53,7 +53,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
             self._style = style
             self.update()
 
-        def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt API
+        def paintEvent(self, event: QPaintEvent) -> None:
             if self._move is None:
                 return
             painter = QPainter(self)

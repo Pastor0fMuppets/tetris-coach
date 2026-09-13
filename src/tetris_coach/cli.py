@@ -74,15 +74,16 @@ def run_demo(pieces: int, seed: int, delay: float) -> int:
         upcoming = rng.choice(PIECES)
 
     elapsed = time.perf_counter() - started
-    search_times.sort()
-    p50 = search_times[len(search_times) // 2]
-    p95 = search_times[int(len(search_times) * 0.95)]
     print(_render_demo_board(board, None))
     print(
         f"Placed {placed} pieces, cleared {lines_cleared} lines "
         f"in {elapsed:.1f}s (seed {seed})."
     )
-    print(f"2-ply search time: p50 {p50 * 1000:.1f} ms, p95 {p95 * 1000:.1f} ms.")
+    if search_times:
+        search_times.sort()
+        p50 = search_times[len(search_times) // 2]
+        p95 = search_times[min(len(search_times) - 1, int(len(search_times) * 0.95))]
+        print(f"2-ply search time: p50 {p50 * 1000:.1f} ms, p95 {p95 * 1000:.1f} ms.")
     return 0
 
 
