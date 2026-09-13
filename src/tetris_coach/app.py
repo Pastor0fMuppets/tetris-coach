@@ -169,8 +169,16 @@ class CoachEngine:
         # (where the per-frame top-row estimate inverts) and gates solid
         # overlays whose color is not the board's background (a bright
         # pause panel on a dark theme must never read as a board wipe).
+        # The covered cells go in HERE as well as into the blanking below:
+        # the classifier estimates the board's background from the top row,
+        # and a preview box parked on two top-row cells otherwise poisons
+        # that estimate on every frame and — via the top-row cap — rejects
+        # every frame, so the memory never anchors and the session is
+        # deadlocked (the diagnosed ROAS Stacker failure).
         self.classifier = GridClassifier(
-            rows=self.config.rows, min_confidence=self.config.min_confidence
+            rows=self.config.rows,
+            min_confidence=self.config.min_confidence,
+            unobservable_cells=self._unobservable_cells,
         )
         self.current_hint: Move | None = None
         self._predicted_board: Board | None = None

@@ -227,27 +227,72 @@ def test_near_top_out_recovered(style) -> None:  # type: ignore[no-untyped-def]
     assert confidence > 0.2
 
 
-@pytest.mark.parametrize("style", [STYLES[0], STYLES[4]], ids=lambda s: s.name)
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
 def test_spawn_in_top_row_recovered(style) -> None:  # type: ignore[no-untyped-def]
     # An I-piece lying across row 0 contaminates 4 of the 10 top-row
     # cells the background estimator samples; the per-channel median
     # still lands on the 6 background cells and the occupancy is exact.
-    # The confidence is nonetheless capped to 0.0: from a single frame
-    # the classifier cannot tell this benign case from a 6-column stack
-    # reaching row 0, where the same estimator inverts the whole board —
-    # so a self-estimated reading with occupied top-row cells is never
-    # vouched for. With a background hint the same frame reads at full
-    # confidence.
+    # It is also VOUCHED FOR: the piece is airborne (empty board under
+    # every one of its cells), which is what separates it from the stack
+    # grounded at row 0 that inverts the estimate. Capping this case —
+    # and pieces are visible in row 0 in most games — is what left a
+    # whole real game unreadable. With a background hint, same reading.
     grid = np.zeros((20, 10), dtype=bool)
     grid[0, 3:7] = True  # I across the top row
     grid[19, :] = [True] * 6 + [False] * 4  # some stack far below
     image = render_board(grid, style, cell_size=18)
     occupancy, confidence = classify_grid(image)
     np.testing.assert_array_equal(occupancy, grid)
-    assert confidence == 0.0
+    assert confidence >= CoachConfig().min_confidence
     occupancy, confidence = classify_grid(image, background=style.background)
     np.testing.assert_array_equal(occupancy, grid)
     assert confidence >= CoachConfig().min_confidence
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_falling_piece_through_the_top_rows_stays_vouched(style) -> None:  # type: ignore[no-untyped-def]
+    # The same piece on its way down, one row at a time, over a stack:
+    # every frame in which it still touches row 0 must be exact AND
+    # above the gate. This is the frame-to-frame availability the strict
+    # cap destroyed — a T spawning at row 0 blanked the coach until it
+    # had fallen clear of the top row.
+    gate = CoachConfig().min_confidence
+    for row in range(3):
+        grid = np.zeros((20, 10), dtype=bool)
+        grid[row, 3:6] = True  # T's bar
+        grid[row + 1, 4] = True  # T's nub
+        grid[18:, 0:6] = True  # a stack, well below
+        image = render_board(grid, style, cell_size=18)
+        occupancy, confidence = classify_grid(image)
+        np.testing.assert_array_equal(occupancy, grid)
+        assert confidence >= gate, f"{style.name} row {row}: conf={confidence:.3f}"
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_majority_occupied_top_row_still_caps(style) -> None:  # type: ignore[no-untyped-def]
+    # The other half of the relaxation: six of the ten top-row cells
+    # reading occupied contradicts the estimator's own majority-
+    # background premise (and no single tetromino can put six cells in
+    # one row), so the reading is not vouched for whatever it says.
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[0:2, 0:6] = True
+    image = render_board(grid, style, cell_size=18)
+    _occupancy, confidence = classify_grid(image)
+    assert confidence == 0.0
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_grounded_top_row_cell_still_caps(style) -> None:  # type: ignore[no-untyped-def]
+    # A single column stacked from row 0 to the floor puts ONE cell in
+    # the top row — a minority, and indistinguishable by count from a
+    # spawned piece. It is grounded, not airborne, so it is capped: this
+    # is the configuration whose median inverts once enough columns join
+    # it, and the count alone can never tell the two apart.
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[:, 2] = True
+    image = render_board(grid, style, cell_size=18)
+    _occupancy, confidence = classify_grid(image)
+    assert confidence == 0.0
 
 
 def side_stack_grid() -> np.ndarray:
@@ -282,16 +327,23 @@ def test_top_row_stack_never_wrong_above_gate(style) -> None:  # type: ignore[no
         )
 
 
-def test_growth_into_top_row_never_flips_polarity() -> None:
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_growth_into_top_row_never_flips_polarity(style) -> None:  # type: ignore[no-untyped-def]
     # The adjacent-frame failure the cap exists for (gray-flat, worst
     # case: monochrome pieces): as side columns grow into row 0, the
     # pre-cap pipeline read 4 filled top-row cells exactly @0.95, then 5
     # rejected @0.0, then 6 INVERTED @0.95 — a polarity flip between
     # adjacent frames that sails through any confidence gate. Every
     # contaminated frame must now be exact or below the gate.
-    style = STYLES[1]
+    #
+    # Swept over every style because a COUNT-based cap is not enough here:
+    # once the median inverts, the reading shows 10-k occupied top-row
+    # cells, a MINORITY, so a majority rule waves the inverted board
+    # through at 0.95 on both monochrome styles (measured at k=6..9 on
+    # gray-flat and cream-mono). What refuses it is that the cells it
+    # calls occupied run all the way down — grounded, not airborne.
     gate = CoachConfig().min_confidence
-    for k in range(9):
+    for k in range(10):
         grid = np.zeros((20, 10), dtype=bool)
         grid[:, 0:k] = True
         grid[19, :] = True
@@ -300,6 +352,105 @@ def test_growth_into_top_row_never_flips_polarity() -> None:
         assert bool(np.array_equal(occupancy, grid)) or confidence < gate, (
             f"wrong reading above the gate at k={k}: conf={confidence:.3f}"
         )
+
+
+class TestUnobservableCells:
+    """Cells a game UI panel covers: out of the background sample, out of
+    the top-row cap.
+
+    A floating NEXT preview parks opaque pixels on fixed board cells for a
+    whole session. Fed to the top-row median they bias the board's
+    background estimate on every frame, and fed to the top-row cap they
+    make the top row permanently "occupied" — which, before this, rejected
+    every frame and so kept :class:`GridClassifier`'s memory (which anchors
+    only from accepted frames) from ever forming.
+    """
+
+    ROWS = 12
+    STYLE = STYLES[2]  # jstris-like: solid colors, no noise
+    CELL = 16
+    PANEL = (9, 200, 40)  # a color on no style's palette
+
+    def _board(self, grid: np.ndarray) -> np.ndarray:
+        return render_board(grid, self.STYLE, cell_size=self.CELL)
+
+    def _paint(self, image: np.ndarray, cells) -> np.ndarray:  # type: ignore[no-untyped-def]
+        """Stamp the panel color over whole cells, as an opaque box does."""
+        out = image.copy()
+        for r, c in cells:
+            out[
+                r * self.CELL : (r + 1) * self.CELL,
+                c * self.CELL : (c + 1) * self.CELL,
+            ] = self.PANEL
+        return out
+
+    @staticmethod
+    def _mask(rows: range, cols: range) -> frozenset[tuple[int, int]]:
+        return frozenset((r, c) for r in rows for c in cols)
+
+    def test_panel_cells_are_out_of_the_background_median(self) -> None:
+        # A five-cell-wide panel over the top row is HALF the estimator's
+        # sample: the median lands between the panel color and the board,
+        # and every score in the frame is measured from a color that is on
+        # neither. Declared unobservable, the estimate is bit-identical to
+        # the same board with no panel at all.
+        grid = twelve_row_grid()
+        clean = self._board(grid)
+        mask = self._mask(range(2), range(5, 10))
+        painted = self._paint(clean, mask)
+        observable = np.ones((self.ROWS, 10), dtype=bool)
+        for r, c in mask:
+            observable[r, c] = False
+
+        clean_scores = cell_scores(clean, rows=self.ROWS)
+        masked_scores = cell_scores(painted, rows=self.ROWS, unobservable_cells=mask)
+        np.testing.assert_allclose(masked_scores[observable], clean_scores[observable], atol=1e-6)
+        # Undeclared, the same frame is measured from a color the board
+        # never shows: the estimate moves off the background.
+        naive_scores = cell_scores(painted, rows=self.ROWS)
+        assert float(np.abs(naive_scores[observable] - clean_scores[observable]).max()) > 0.1
+
+        # ... and the occupancy that follows from it is the true board.
+        occupancy, confidence = classify_grid(painted, rows=self.ROWS, unobservable_cells=mask)
+        np.testing.assert_array_equal(occupancy[observable], grid[observable])
+        assert confidence >= CoachConfig().min_confidence
+
+    def test_panel_over_the_top_row_no_longer_caps_every_frame(self) -> None:
+        # Six of the ten top-row cells covered: undeclared, a majority of
+        # the top row reads occupied on EVERY frame and the cap fires on
+        # every frame — the permanent rejection that deadlocked the live
+        # session. Declared, the remaining four cells are the sample and
+        # the frame is read and vouched for.
+        grid = twelve_row_grid()
+        mask = self._mask(range(2), range(4, 10))
+        painted = self._paint(self._board(grid), mask)
+        _naive_occupancy, naive_confidence = classify_grid(painted, rows=self.ROWS)
+        assert naive_confidence == 0.0
+        occupancy, confidence = classify_grid(painted, rows=self.ROWS, unobservable_cells=mask)
+        assert confidence >= CoachConfig().min_confidence
+        observable = np.ones((self.ROWS, 10), dtype=bool)
+        for r, c in mask:
+            observable[r, c] = False
+        np.testing.assert_array_equal(occupancy[observable], grid[observable])
+
+    def test_memory_anchors_and_skips_the_panel(self) -> None:
+        # The deadlock in one stream: a classifier told about the panel
+        # accepts frames, anchors its background memory, and confirms it —
+        # on the exact background of the board, not a blend with the panel
+        # color. Undeclared, nothing is ever accepted and nothing anchors.
+        mask = self._mask(range(2), range(4, 10))
+        frames = [self._paint(self._board(twelve_row_grid()), mask) for _ in range(3)]
+
+        deaf = GridClassifier(rows=self.ROWS)
+        for frame in frames:
+            assert deaf.classify(frame)[1] < CoachConfig().min_confidence
+        assert deaf.background is None and not deaf.confirmed
+
+        told = GridClassifier(rows=self.ROWS, unobservable_cells=mask)
+        for frame in frames:
+            assert told.classify(frame)[1] >= CoachConfig().min_confidence
+        assert told.confirmed
+        np.testing.assert_allclose(told.background, self.STYLE.background, atol=2.0)
 
 
 @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)

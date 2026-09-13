@@ -18,7 +18,17 @@ classes; distance-from-background makes the polarity fixed by
 construction (high score = occupied) — provided the estimate really is
 the background, which is exactly what the top-row prior cannot guarantee
 when a stack legally reaches the visible top row (see
-:func:`classify_grid`'s strict cap).
+:func:`classify_grid`'s top-row cap).
+
+``unobservable_cells`` names board cells the capture can never read
+because a game UI panel floats over them (ROAS Stacker's NEXT preview
+sits on the board's top corner; ``app.compute_overlap_mask`` computes
+the set). Their pixels are the panel's, not the board's, so they are
+excluded from the top-row background sample and from the top-row cap —
+otherwise a permanently covered top-row cell is a permanently "occupied"
+top row, the cap fires on every frame, and :class:`GridClassifier`'s
+memory (which only anchors from ACCEPTED frames) can never form. The
+default, an empty set, leaves every behavior exactly as it was.
 
 Channel order does not matter (BGR vs RGB): Euclidean distance and the
 per-channel median are permutation-equivariant in the channel axis.
@@ -60,6 +70,11 @@ MIN_SPREAD = 0.35
 # two-class frame: a board wipe must reach the tracker whatever color the
 # empty board is.
 _UNIFORM_EMPTY_CONFIDENCE = 0.5
+
+# Rows a tetromino can span: the vertical reach of the ONLY thing that may
+# legitimately contaminate the top row without breaking the background
+# estimate — a piece in flight. Used by :func:`_top_row_vouchable`.
+_MAX_PIECE_ROWS = 4
 
 
 def _cell_colors(
@@ -119,21 +134,116 @@ def _distance_scores(
     return np.sqrt(dist / max_dist).astype(np.float32)
 
 
+def _top_row_background(
+    colors: NDArray[np.float32],
+    unobservable: frozenset[tuple[int, int]],
+) -> NDArray[np.float64]:
+    """Per-channel median of the OBSERVABLE top-row cell colors.
+
+    A cell the capture cannot read holds the covering panel's pixels, so
+    including it biases the median toward a color that is not on the board
+    at all — and a panel is opaque and permanent, so the bias is on every
+    frame of the session. Falls back to the whole top row if every one of
+    its cells is declared unobservable (nothing better is available, and a
+    board whose entire top row is covered is not a board this estimator
+    can vouch for anyway — the cap below refuses it).
+    """
+    top = colors[0]
+    if unobservable:
+        keep = [c for c in range(int(top.shape[0])) if (0, c) not in unobservable]
+        if keep:
+            top = top[keep]
+    return np.asarray(np.median(top, axis=0), dtype=np.float64)
+
+
+def _airborne(
+    occupancy: NDArray[np.bool_],
+    col: int,
+    unobservable: frozenset[tuple[int, int]],
+) -> bool:
+    """Does the occupied run that starts at ``occupancy[0, col]`` have air
+    under it within a tetromino's reach?
+
+    True for a piece in flight (at most :data:`_MAX_PIECE_ROWS` rows, with
+    empty board below it), False for a column whose stack is GROUNDED at
+    row 0 — the configuration that inverts the top-row median. Cells the
+    capture cannot read are evidence for neither: they are skipped, so
+    they neither end the run nor extend it.
+    """
+    rows = int(occupancy.shape[0])
+    run = 1  # row 0 itself
+    for r in range(1, rows):
+        if (r, col) in unobservable:
+            continue
+        if not bool(occupancy[r, col]):
+            return True
+        run += 1
+        if run > _MAX_PIECE_ROWS:
+            return False
+    return False  # occupied all the way to the floor
+
+
+def _top_row_vouchable(
+    occupancy: NDArray[np.bool_],
+    unobservable: frozenset[tuple[int, int]],
+) -> bool:
+    """May a self-estimated reading be vouched for, given its own top row?
+
+    The top-row median is the background as long as a MAJORITY of the
+    sampled cells really are background; past that the estimate locks onto
+    piece colors and every score in the frame inverts (see
+    :func:`cell_scores`). The reading itself is the only evidence
+    available, so two things are asked of it, both over the OBSERVABLE
+    top-row cells only:
+
+    1. A strict majority of them must read empty. More cells occupied than
+       not contradicts the estimator's own premise outright — and no
+       single falling piece can put that many cells in one row.
+    2. Every occupied one must be AIRBORNE (:func:`_airborne`). This is
+       what separates the two states that a count alone cannot: a piece
+       spawning or falling through row 0 leaves board under it, while a
+       stack reaching row 0 continues down — and an INVERTED reading is
+       always of the second kind, because the cells it calls occupied are
+       the true board background, which runs from row 0 down to the top of
+       the stack. (A count cannot separate them at all: with m of N
+       top-row cells truly non-background, a benign reading shows m
+       occupied and an inverted one shows N - m, and inversion needs
+       m > N/2, so both land under N/2. Measured: a plain majority rule
+       lets six monochrome-theme inversions through at confidence 0.95.)
+
+    The residual: a near-top-out board with six-plus columns grounded at
+    row 0 AND a background column whose stack top is within four rows of
+    it reads inverted and vouchable. It takes a board that is already
+    one piece from a game over, and only on the bootstrap path —
+    :class:`GridClassifier`'s memory, once anchored, never consults this.
+    """
+    cols = int(occupancy.shape[1])
+    observable = [c for c in range(cols) if (0, c) not in unobservable]
+    occupied = [c for c in observable if bool(occupancy[0, c])]
+    if not occupied:
+        return True
+    if len(occupied) * 2 > len(observable):
+        return False
+    return all(_airborne(occupancy, c, unobservable) for c in occupied)
+
+
 def cell_scores(
     image: NDArray[np.uint8],
     rows: int = DEFAULT_HEIGHT,
     cols: int = 10,
     margin: float = 0.25,
+    unobservable_cells: frozenset[tuple[int, int]] | None = None,
 ) -> NDArray[np.float32]:
     """Per-cell occupancy score in [0, 1]: distance from the background.
 
     The background is estimated per frame as the per-channel median of the
-    TOP ROW's cell colors — a gravity prior: the top row is usually
-    background, contaminated by at most the 4 cells of a freshly spawned
-    piece, so the median is taken over a majority of true background
+    TOP ROW's OBSERVABLE cell colors — a gravity prior: the top row is
+    usually background, contaminated by at most the 4 cells of a piece in
+    flight, so the median is taken over a majority of true background
     cells. This recovers even boards that are mostly filled (where any
     dominant-cluster estimate would lock onto the pieces and invert the
-    reading).
+    reading). ``unobservable_cells`` names cells whose pixels belong to a
+    UI panel rather than the board; they are left out of the sample.
 
     The prior's limit: a STACK reaching the visible top row is legal,
     reachable Tetris (side columns stacked to row 0 while the spawn
@@ -141,12 +251,13 @@ def cell_scores(
     to the top) — it is NOT game over. With >= 6 of the 10 top-row cells
     non-background the median locks onto the pieces and the polarity of
     every score inverts. :func:`classify_grid` therefore refuses to vouch
-    for a reading whose own top row comes out occupied (strict cap);
-    streaming callers should use :class:`GridClassifier`, whose committed
-    background memory keeps such boards readable at full confidence.
+    for a reading whose own top row is grounded in it (see
+    :func:`_top_row_vouchable`); streaming callers should use
+    :class:`GridClassifier`, whose committed background memory keeps such
+    boards readable at full confidence.
     """
     colors = _cell_colors(image, rows, cols, margin)
-    background = np.median(colors[0], axis=0)
+    background = _top_row_background(colors, unobservable_cells or frozenset())
     return _distance_scores(colors, background)
 
 
@@ -221,6 +332,7 @@ def classify_grid(
     rows: int = DEFAULT_HEIGHT,
     cols: int = 10,
     background: NDArray[np.float64] | tuple[float, ...] | None = None,
+    unobservable_cells: frozenset[tuple[int, int]] | None = None,
 ) -> tuple[NDArray[np.bool_], float]:
     """Classify a board-region image into per-cell occupancy.
 
@@ -236,23 +348,40 @@ def classify_grid(
     cross-frame memory; when given, scores are distances from it and the
     top-row prior below is not consulted.
 
+    ``unobservable_cells`` names ``(row, col)`` cells whose pixels are a UI
+    panel's rather than the board's; they are excluded from the top-row
+    background sample and from the top-row cap below. Omitted (the
+    default), every behavior is exactly what it was.
+
     Without ``background`` the top-row-median estimate is used, under one
-    strict cap: a two-class reading whose OWN top row contains occupied
-    cells contradicts the estimate's majority-background prior — the very
-    configuration in which the median can lock onto piece colors and
-    invert every cell at high apparent confidence (a legal, reachable
-    state: side columns stacked to row 0, versus garbage pushed to the
-    top; see :func:`cell_scores`). Such readings keep their occupancy
-    (still exact in the benign spawned-piece case) but are capped to
-    confidence 0.0: without cross-frame memory their polarity cannot be
-    vouched for, and a wrong reading above the gate is worse than a
-    dropped frame.
+    cap: a two-class reading whose OWN top row contradicts the estimate's
+    majority-background prior — because a majority of its observable cells
+    read occupied, or because an occupied one is GROUNDED rather than a
+    piece in flight — is the very configuration in which the median can
+    lock onto piece colors and invert every cell at high apparent
+    confidence (a legal, reachable state: side columns stacked to row 0,
+    versus garbage pushed to the top; see :func:`cell_scores` and
+    :func:`_top_row_vouchable`). Such readings keep their occupancy but
+    are capped to confidence 0.0: without cross-frame memory their
+    polarity cannot be vouched for, and a wrong reading above the gate is
+    worse than a dropped frame. A piece merely spawning or falling through
+    row 0 is NOT that configuration and keeps its confidence — pieces are
+    visible in row 0 in most games, and capping those was what left a game
+    whose preview also covers two top-row cells permanently unreadable.
     """
     colors = _cell_colors(image, rows, cols, margin=0.25)
     if background is not None:
         return _classify_scored(colors, np.asarray(background, dtype=np.float64))
-    occupancy, confidence = _classify_scored(colors, np.median(colors[0], axis=0))
-    if confidence > 0.0 and bool(occupancy[0].any()):
+    return _self_estimated(colors, unobservable_cells or frozenset())
+
+
+def _self_estimated(
+    colors: NDArray[np.float32],
+    unobservable: frozenset[tuple[int, int]],
+) -> tuple[NDArray[np.bool_], float]:
+    """The memoryless path: top-row-median background, plus the top-row cap."""
+    occupancy, confidence = _classify_scored(colors, _top_row_background(colors, unobservable))
+    if confidence > 0.0 and not _top_row_vouchable(occupancy, unobservable):
         confidence = 0.0
     return occupancy, confidence
 
@@ -339,7 +468,7 @@ class GridClassifier:
     invariant):
 
     - No memory yet: frames classify with the self-estimated top-row
-      prior, strict cap included. An accepted two-class frame anchors the
+      prior, top-row cap included. An accepted two-class frame anchors the
       memory on its empty-class median and CONFIRMS it; an accepted
       uniform-empty frame anchors it provisionally (the frame's overall
       median) — a solid frame alone cannot prove it is the board.
@@ -355,6 +484,13 @@ class GridClassifier:
       exists to prevent. It still tracks slow drift, re-measuring from
       every accepted frame.
 
+    ``unobservable_cells`` is the same set the engine computes from the two
+    selected rectangles. It matters most HERE: a covered top-row cell is
+    occupied on every frame of the session, so before this the cap fired
+    on every frame, nothing was ever accepted, and the memory that exists
+    to rescue exactly these boards could never anchor — a deadlock, not a
+    degradation.
+
     Single-threaded use only (the engine's worker thread).
     """
 
@@ -363,10 +499,12 @@ class GridClassifier:
         rows: int = DEFAULT_HEIGHT,
         cols: int = 10,
         min_confidence: float = _DEFAULT_MIN_CONFIDENCE,
+        unobservable_cells: frozenset[tuple[int, int]] | None = None,
     ) -> None:
         self._rows = rows
         self._cols = cols
         self._min_confidence = min_confidence
+        self._unobservable: frozenset[tuple[int, int]] = unobservable_cells or frozenset()
         self._background: NDArray[np.float64] | None = None
         self._confirmed = False
 
@@ -400,25 +538,40 @@ class GridClassifier:
 
     def _bootstrap(self, colors: NDArray[np.float32]) -> tuple[NDArray[np.bool_], float]:
         """Self-estimated classification: classify_grid's memoryless path."""
-        occupancy, confidence = _classify_scored(colors, np.median(colors[0], axis=0))
-        if confidence > 0.0 and bool(occupancy[0].any()):
-            confidence = 0.0  # the strict cap, verbatim (see classify_grid)
-        return occupancy, confidence
+        return _self_estimated(colors, self._unobservable)
 
     def _remember(self, colors: NDArray[np.float32], occupancy: NDArray[np.bool_]) -> None:
-        """Re-measure the background from an accepted frame."""
+        """Re-measure the background from an accepted frame.
+
+        Unobservable cells are left out of every sample: their pixels are
+        the covering panel's, and a memory measured partly from the panel
+        would drift toward a color the board never shows.
+        """
+        observable = self._observable_mask(occupancy.shape)
         flat = colors.reshape(-1, colors.shape[-1])
-        if bool(occupancy.any()):
+        keep = observable.ravel()
+        if bool((occupancy & observable).any()):
             # Two-class frame: the empty class IS the background, freshly
             # measured. Anchoring here is what makes polarity survive the
             # stack growing into row 0.
-            self._background = np.asarray(
-                np.median(flat[~occupancy.ravel()], axis=0), dtype=np.float64
-            )
+            sample = flat[(~occupancy.ravel()) & keep]
+            if sample.size == 0:  # every observable cell reads occupied
+                return
+            self._background = np.asarray(np.median(sample, axis=0), dtype=np.float64)
             self._confirmed = True
         else:
             # Uniform-empty frame: the whole frame is the background —
             # but only provisionally, since a solid pause panel is
             # indistinguishable from an empty board (never CONFIRM from
             # one, or a panel at startup would poison the session).
-            self._background = np.asarray(np.median(flat, axis=0), dtype=np.float64)
+            sample = flat[keep] if keep.any() else flat
+            self._background = np.asarray(np.median(sample, axis=0), dtype=np.float64)
+
+    def _observable_mask(self, shape: tuple[int, ...]) -> NDArray[np.bool_]:
+        """(rows, cols) True wherever the capture really shows the board."""
+        mask = np.ones(shape, dtype=np.bool_)
+        rows, cols = int(shape[0]), int(shape[1])
+        for r, c in self._unobservable:
+            if 0 <= r < rows and 0 <= c < cols:
+                mask[r, c] = False
+        return mask
