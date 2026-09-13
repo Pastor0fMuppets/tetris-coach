@@ -528,14 +528,19 @@ class TestCoachEngineScenarios:
         assert engine._hint_is_provisional
 
     def test_flash_and_transient_occlusion_never_reset(self) -> None:
-        # F4, distance-from-background era: a uniform frame at ANY level
-        # (bright line-clear flash, dark occlusion) reads as an EMPTY
-        # board with usable confidence — pixel-indistinguishable from a
-        # real wipe (see test_board_wipe_resets_and_clears_hint). Against
-        # a non-empty committed stack it is UNEXPLAINED, so it holds the
-        # hint and commits nothing while the streak stays below the reset
-        # debounce (4 identical frames); a coherent frame in between
-        # resets the streak.
+        # F4, background-memory era: by the time a mid-game flash can
+        # happen, the classifier's memory is anchored on this dark
+        # theme's background, so the two uniform frames part ways. The
+        # bright flash is uniform-FAR from the anchor: gated outright
+        # (all-occupied @0.0) on every frame of ANY duration — the
+        # strong original F4 guarantee, see
+        # test_bright_overlay_on_dark_theme_never_resets. The dark
+        # occlusion sits AT the anchor: pixel-indistinguishable from a
+        # real wipe (see test_board_wipe_resets_and_clears_hint), it
+        # reads empty with usable confidence and is UNEXPLAINED against
+        # the committed stack — held harmless while its identical-frame
+        # streak stays below the reset debounce (4 frames); a coherent
+        # frame in between resets the streak.
         engine, events_log = self._engine_with_spy()
         stack = rows_of(bottom_lines("#########."))
         self._attach(engine, stack, "I")
@@ -548,9 +553,6 @@ class TestCoachEngineScenarios:
         shape = (20 * self.CELL, 10 * self.CELL, 3)
         flash = np.full(shape, 245, dtype=np.uint8)
         occluded = np.full(shape, 15, dtype=np.uint8)
-        # Flash and occlusion both derive the SAME all-empty occupancy,
-        # so they share one identical-frame streak: 3 uniform frames
-        # (below the debounce), a good frame, then 3 more.
         for image in (flash, flash, occluded):
             assert engine.process_frame(image, self._preview("T")) is hint
         assert self._process(engine, falling, "T") is hint  # streak resets
@@ -560,6 +562,32 @@ class TestCoachEngineScenarios:
         assert GameEvent.BOARD_RESET not in events_log
         # The next good frame carries on as if nothing happened.
         assert self._process(engine, falling, "T") is hint
+
+    def test_bright_overlay_on_dark_theme_never_resets(self) -> None:
+        # The restored strong F4: a bright uniform frame CANNOT be this
+        # board's empty state once the background memory is anchored
+        # dark, so a solid pause panel / game-over splash / whole-board
+        # flash of ANY duration — far beyond the reset debounce — never
+        # commits anything, and when it lifts the same committed stack
+        # still explains the next frame (no second re-sync needed).
+        engine, events_log = self._engine_with_spy()
+        stack = rows_of(bottom_lines("####..####", "#########."))
+        self._attach(engine, stack, "I")
+        falling = merge(stack, piece_cells("T", 0, 1, 3))
+        hint = self._process(engine, falling, "I", times=2)
+        assert hint is not None
+        committed = engine.tracker.committed
+        events_log.clear()  # setup: the attach resync and the T spawn
+
+        overlay = np.full((20 * self.CELL, 10 * self.CELL, 3), 245, dtype=np.uint8)
+        for _ in range(12):  # 3x the 4-frame reset debounce
+            assert engine.process_frame(overlay, self._preview("I")) is hint
+        assert engine.tracker.committed == committed
+        assert events_log == []
+        # Overlay lifts: play continues on the same committed state.
+        assert self._process(engine, falling, "I") is hint
+        assert engine.tracker.committed == committed
+        assert events_log == []
 
     def test_board_wipe_resets_and_clears_hint(self) -> None:
         # A mid-game wipe (game over / new game) renders a uniform DARK
@@ -597,3 +625,111 @@ class TestCoachEngineScenarios:
         assert engine.tracker.committed == committed
         # The next good frame carries on as if nothing happened.
         assert self._process(engine, spawn, "I") is hint
+
+
+class TestBackgroundMemoryScenarios:
+    """Engine-level pins for the classifier's cross-frame background memory.
+
+    The states here are legal, reachable Tetris that the memoryless
+    top-row estimator misread at committable confidence: a stack growing
+    into visible row 0 and versus-mode garbage pushed to the top row both
+    leave the top row majority piece-colored, inverting every cell of a
+    self-estimated reading (at 0.95 on monochrome themes). Four identical
+    inverted frames then passed the reset debounce and BOARD_RESET
+    committed the inverted board. With the memory anchored during normal
+    play, the same frames read exactly.
+    """
+
+    CELL = 20
+
+    @staticmethod
+    def _rows(grid: np.ndarray) -> tuple[int, ...]:
+        return tuple(int(sum(1 << c for c in range(10) if grid[r, c])) for r in range(20))
+
+    @staticmethod
+    def _engine_with_spy():  # type: ignore[no-untyped-def]
+        from tetris_coach.app import CoachEngine
+
+        engine = CoachEngine()
+        events_log: list[GameEvent] = []
+        original = engine.tracker.update
+
+        def spy(occupancy, nxt):  # type: ignore[no-untyped-def]
+            events = original(occupancy, nxt)
+            events_log.extend(events)
+            return events
+
+        engine.tracker.update = spy  # type: ignore[method-assign]
+        return engine, events_log
+
+    def _feed(self, engine, grid: np.ndarray, style, times: int = 1):  # type: ignore[no-untyped-def]
+        image = render_board(grid, style, cell_size=self.CELL)
+        hint = None
+        for _ in range(times):
+            hint = engine.process_frame(image, None)
+        return hint
+
+    def test_growth_into_top_row_commits_exactly(self) -> None:
+        # gray-flat: monochrome pieces, the worst case — self-estimated
+        # readings of the final stages inverted at confidence ~0.95, and
+        # polarity flipped between ADJACENT frames as the stack grew
+        # (4 filled top-row cells: exact; 5: rejected; 6: inverted).
+        # Anchored during the empty pre-game frame, every stage commits
+        # exactly, through the last one with row 0 filled.
+        style = STYLES[1]
+        engine, _events_log = self._engine_with_spy()
+        self._feed(engine, np.zeros((20, 10), dtype=bool), style)
+        for top in range(6, -1, -1):  # stack top row: 6, 5, ..., 0
+            grid = np.zeros((20, 10), dtype=bool)
+            grid[top:, 0:3] = True
+            grid[top:, 7:10] = True
+            # Each jump is a mid-game attach: unexplained, committed via
+            # the 4-frame reset debounce — to the TRUE board every time.
+            self._feed(engine, grid, style, times=5)
+            assert engine.tracker.committed.stack_rows == self._rows(grid), (
+                f"wrong commit with stack top at row {top}"
+            )
+
+    @pytest.mark.parametrize(
+        "style",
+        [STYLES[1], STYLES[4]],
+        ids=lambda s: s.name,  # type: ignore[no-untyped-def]
+    )
+    def test_garbage_push_resyncs_to_true_board(self, style) -> None:  # type: ignore[no-untyped-def]
+        # Versus garbage (9/10 filled, one well) pushed up to the top
+        # row: 190/200 non-background cells, top row included. gray-flat
+        # pins the monochrome inversion; paper-white pins the MIN_SPREAD
+        # re-split (near-background lavender pieces) through the engine.
+        engine, _events_log = self._engine_with_spy()
+        self._feed(engine, np.zeros((20, 10), dtype=bool), style)
+        stack = np.zeros((20, 10), dtype=bool)
+        stack[18:, 0:6] = True
+        self._feed(engine, stack, style, times=5)
+        assert engine.tracker.committed.stack_rows == self._rows(stack)
+        garbage = np.ones((20, 10), dtype=bool)
+        garbage[:, 6] = False
+        self._feed(engine, garbage, style, times=5)
+        assert engine.tracker.committed.stack_rows == self._rows(garbage)
+
+    def test_pause_panel_at_startup_recovers(self) -> None:
+        # Session started while a solid bright panel covers a dark-theme
+        # board: with no memory the panel reads as an empty board (a
+        # lone frame cannot know better) and anchors only provisionally.
+        # Real frames then re-bootstrap and confirm the true background;
+        # from that point the same panel is gated on every frame, so it
+        # can never wipe the committed stack.
+        style = STYLES[0]
+        engine, events_log = self._engine_with_spy()
+        panel = np.full((20 * self.CELL, 10 * self.CELL, 3), 235, dtype=np.uint8)
+        for _ in range(6):
+            assert engine.process_frame(panel, None) is None
+        assert engine.tracker.committed.stack_rows == (0,) * 20
+        stack = np.zeros((20, 10), dtype=bool)
+        stack[17:, 0:5] = True
+        self._feed(engine, stack, style, times=5)
+        assert engine.tracker.committed.stack_rows == self._rows(stack)
+        events_log.clear()  # the mid-game attach above is expected
+        for _ in range(10):
+            engine.process_frame(panel, None)
+        assert engine.tracker.committed.stack_rows == self._rows(stack)
+        assert events_log == []

@@ -45,8 +45,11 @@ suite's enforced benchmark covers the solver).
 
 Current pipeline: background-distance scoring — each cell's central-patch
 mean color is scored by its sqrt-compressed Euclidean distance from a
-per-frame background estimate (top-row cell-color median for the board,
-whole-image pixel median for the preview box), then split by Otsu. The
+background estimate (for the board, `GridClassifier`'s cross-frame memory,
+bootstrapped from the top-row cell-color median — the memory update is one
+median over at most 200 cell colors per accepted frame, noise next to the
+patch sampling below; whole-image pixel median for the preview box), then
+split by Otsu. The
 "before" column is the previous absolute-score pipeline (per-pixel
 max(brightness, saturation) via a 256x256 LUT), which assumed a dark
 background.

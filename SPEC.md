@@ -37,9 +37,14 @@ solver/
                   # Must run < 50 ms in pure Python via bitboards; benchmark it.
 vision/
   grid.py         # Given BGR image of board region + (rows, cols): per-cell
-                  # occupancy via color distance from a per-frame background
-                  # estimate (top-row cell-color median), split by Otsu.
-                  # Returns 20×10 bool array + confidence.
+                  # occupancy via color distance from a background estimate,
+                  # split by Otsu. Returns 20×10 bool array + confidence.
+                  # The estimate is a cross-frame memory (GridClassifier:
+                  # the empty class of every accepted frame re-measures it),
+                  # bootstrapped from the top-row cell-color median — a
+                  # reading is never vouched for while its polarity rests on
+                  # an unverifiable top-row prior (a stack legally reaching
+                  # row 0 would otherwise invert the whole board).
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, UNEXPLAINED). The falling piece is the added-cell diff
