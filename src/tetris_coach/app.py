@@ -262,12 +262,21 @@ class FrameWorker:
         self.board_rect = board_rect
         self.next_rect = next_rect
         self.consecutive_failures = 0
-        self._dumped = 0
+        self._ticks = 0
+        self._dump_disabled = False
 
     def _dump_frames(self, board_image: np.ndarray, next_image: np.ndarray | None) -> None:
-        """Save captured frames as PNGs for offline inspection (debug aid)."""
+        """Save captured frames as PNGs for offline inspection (debug aid).
+
+        The first 12 ticks are all saved (setup/alignment problems show up
+        immediately); after that every 100th tick is, so a long session
+        leaves periodic mid-game evidence without unbounded disk growth.
+        """
         dump_dir = self.engine.config.dump_dir
-        if dump_dir is None or self._dumped >= 12:
+        self._ticks += 1
+        if dump_dir is None or self._dump_disabled:
+            return
+        if self._ticks > 12 and self._ticks % 100 != 0:
             return
         try:  # pragma: no cover - debug-only, Pillow is a dev dependency
             from pathlib import Path
@@ -276,13 +285,12 @@ class FrameWorker:
 
             out = Path(dump_dir)
             out.mkdir(parents=True, exist_ok=True)
-            n = self._dumped
-            Image.fromarray(board_image[:, :, ::-1]).save(out / f"board_{n:03d}.png")
+            n = self._ticks
+            Image.fromarray(board_image[:, :, ::-1]).save(out / f"board_{n:05d}.png")
             if next_image is not None:
-                Image.fromarray(next_image[:, :, ::-1]).save(out / f"next_{n:03d}.png")
-            self._dumped += 1
+                Image.fromarray(next_image[:, :, ::-1]).save(out / f"next_{n:05d}.png")
         except Exception:  # noqa: BLE001 - dumping must never break the loop
-            self._dumped = 12  # give up quietly
+            self._dump_disabled = True  # give up quietly
 
     def run_tick(self) -> TickResult:
         """Run one blocking capture->vision->solve pass."""

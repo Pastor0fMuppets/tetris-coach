@@ -43,6 +43,11 @@ if HAVE_QT:  # pragma: no cover - macOS only
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            # A Qt.Tool window is an NSPanel on macOS, and NSPanels hide
+            # whenever their application is inactive — which is ALWAYS for
+            # this overlay, since the user is focused on the game. This
+            # attribute keeps the panel visible while the app is inactive.
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
             self._board_rect = board_rect
             self._style = style or HintStyle()
             self._rows = rows
