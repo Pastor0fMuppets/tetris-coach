@@ -1,15 +1,23 @@
 """Occupancy classification of a board-region image.
 
-Game-agnostic: works on *occupancy*, not colors. Each cell of the (rows x
-cols) grid is scored by sampling the central portion of its patch (skipping
-gridlines) and combining brightness and saturation — occupied cells are
-either bright or strongly colored, while the background is darker and duller
-(a hard requirement of the product). The 200 cell scores are then split by
-Otsu's method into empty/occupied classes.
+Game-agnostic: works on *occupancy*, not colors — and not on any absolute
+brightness scale either. Each cell of the (rows x cols) grid is sampled at
+the central portion of its patch (skipping gridlines) and scored by its
+color's Euclidean distance from a per-frame estimate of the board's own
+background color, so 0 means "at the background" BY CONSTRUCTION whatever
+the theme: dark boards with bright pieces, white boards with colored
+pieces, and colored backgrounds all score the same way. The darker-
+background restriction of earlier versions is lifted at this layer.
 
-Channel order does not matter (BGR vs RGB): brightness is the per-pixel
-channel maximum and saturation the normalized max-min spread, both of which
-are permutation-invariant.
+The background estimate is the per-channel median of the TOP ROW's cell
+colors (see :func:`cell_scores` for the gravity-prior argument). The 200
+cell scores are then split by Otsu's method into empty/occupied classes;
+distance-from-background makes the polarity fixed by construction (high
+score = occupied).
+
+Channel order does not matter (BGR vs RGB): Euclidean distance and the
+per-channel median are permutation-equivariant in the channel axis.
+A 2-D grayscale image is simply the single-channel (C=1) case.
 """
 
 from __future__ import annotations
@@ -17,90 +25,53 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-# Minimum score spread before Otsu thresholding is considered meaningful;
-# below this the region is treated as uniform (unreadable — see
-# classify_grid). Shared with pieces_vision.identify_next so the two
-# uniform-region tests cannot drift apart.
-MIN_SPREAD = 0.15
+# Uniformity floor on the sqrt-compressed distance-score scale: below this
+# spread there are no two classes for Otsu to separate (see classify_grid).
+# 0.35 on this scale is a raw normalized distance of ~0.12, i.e. ~54 uint8
+# Euclidean units. Measured anchors:
+#   - empty-board cell scores <= 0.06 (patch means average the noise out);
+#   - blank_light_preview.png fixture, per-pixel max: 0.26;
+#   - classic-dark gridline pixels: 0.36;
+#   - faintest piece color of the synthetic light-style battery: 0.47.
+# Chosen low (0.35 over 0.40) because the floor's failure asymmetry favors
+# low: a theme whose pieces score just above it is still read exactly,
+# while a floor above the piece scores would declare the board empty at a
+# gate-passing confidence. Shared with pieces_vision.identify_next so the
+# two uniform-region rules cannot drift apart.
+MIN_SPREAD = 0.35
 
-# Absolute score level separating a uniformly DARK region (the only kind
-# consistent with an empty board, given the darker-background requirement)
-# from a uniformly BRIGHT one (occlusion, pause overlay, line-clear flash,
-# fully filled board). Every background in practice scores well below this
-# and every piece color well above it.
-_UNIFORM_BRIGHT_LEVEL = 0.6
-
-# Confidence reported for a uniformly DARK region. An empty board offers no
-# occupied/empty split to measure, but the darker-background requirement
-# makes the empty reading itself trustworthy — so report enough confidence
-# to pass any sane frame gate (well above CoachConfig.min_confidence),
-# while staying below a cleanly separated two-class frame.
-_UNIFORM_DARK_CONFIDENCE = 0.5
-
-
-def _build_score_lut() -> NDArray[np.float32]:
-    """256x256 lookup of the color score for a (channel max, channel min) pair.
-
-    The score of a color pixel depends only on its uint8 channel max and
-    min, so all 65536 combinations are precomputed once — with exactly the
-    float32 arithmetic documented in :func:`score_map`, making table lookups
-    bit-identical to computing the formula per pixel.
-    """
-    mx = (np.arange(256).astype(np.float32) / 255.0)[:, None]
-    mn = (np.arange(256).astype(np.float32) / 255.0)[None, :]
-    # HSV-style saturation, but with the denominator clamped so that sensor
-    # noise on near-black pixels cannot masquerade as strong color.
-    saturation = (mx - mn) / np.maximum(mx, 0.25)
-    return np.maximum(mx, saturation).astype(np.float32)
+# Confidence reported for a uniform region at the background color — an
+# empty board, whatever color the theme paints it. There is no occupied/
+# empty split to measure, but the reading is structurally grounded (every
+# cell sits at the frame's own background estimate), so report enough
+# confidence to pass any sane frame gate (well above
+# CoachConfig.min_confidence) while staying below a cleanly separated
+# two-class frame: a board wipe must reach the tracker whatever color the
+# empty board is.
+_UNIFORM_EMPTY_CONFIDENCE = 0.5
 
 
-_SCORE_LUT = _build_score_lut()
+def _cell_colors(
+    image: NDArray[np.uint8],
+    rows: int,
+    cols: int,
+    margin: float,
+) -> NDArray[np.float32]:
+    """Mean color of the central patch of every cell: (rows, cols, C) float32.
 
-
-def score_map(image: NDArray[np.uint8]) -> NDArray[np.float32]:
-    """Per-pixel occupancy score in [0, 1]: max(brightness, saturation).
-
-    Brightness is the channel max ``mx`` (as a 0..1 float) and saturation
-    the clamped HSV-style spread ``(mx - mn) / max(mx, 0.25)``. The channel
-    max/min are reduced on the raw uint8 pixels (``x -> x/255`` is monotone,
-    so the reduction commutes with the conversion) and the score comes from
-    a precomputed 256x256 table: one float lane of work per pixel instead
-    of five, with bit-identical results.
+    ``margin`` is the fraction of each cell inset on every side before
+    sampling, which skips gridlines and cell borders. A 2-D grayscale
+    image is treated as (H, W, 1).
     """
     img = np.asarray(image)
     if img.ndim == 2:
-        return (img.astype(np.float32) / 255.0).clip(0.0, 1.0)
-    # Elementwise plane max/min: identical to ``.max(axis=2)`` but ~4x
-    # faster (numpy's 3-element axis reduce pays iterator overhead per
-    # pixel; the two-plane ufunc runs a straight vector loop).
-    c0, c1, c2 = img[:, :, 0], img[:, :, 1], img[:, :, 2]
-    mx = np.maximum(np.maximum(c0, c1), c2)
-    mn = np.minimum(np.minimum(c0, c1), c2)
-    return _SCORE_LUT[mx, mn]
-
-
-def cell_scores(
-    image: NDArray[np.uint8],
-    rows: int = 20,
-    cols: int = 10,
-    margin: float = 0.25,
-) -> NDArray[np.float32]:
-    """Mean occupancy score of the central patch of every cell.
-
-    ``margin`` is the fraction of each cell inset on every side before
-    sampling, which skips gridlines and cell borders.
-
-    Only the sampled sub-rects are scored: with the default margin that is
-    a quarter of the image, so running :func:`score_map` per patch beats
-    scoring the whole image up front by ~4x with identical results.
-    """
-    img = np.asarray(image)
+        img = img[:, :, None]
     h, w = int(img.shape[0]), int(img.shape[1])
     if h < rows or w < cols:
         raise ValueError(f"image {w}x{h} too small for a {cols}x{rows} grid")
     ys = np.linspace(0, h, rows + 1)
     xs = np.linspace(0, w, cols + 1)
-    out = np.empty((rows, cols), dtype=np.float32)
+    out = np.empty((rows, cols, int(img.shape[2])), dtype=np.float32)
     for r in range(rows):
         cell_h = float(ys[r + 1] - ys[r])
         y0 = round(float(ys[r]) + cell_h * margin)
@@ -109,8 +80,53 @@ def cell_scores(
             cell_w = float(xs[c + 1] - xs[c])
             x0 = round(float(xs[c]) + cell_w * margin)
             x1 = max(x0 + 1, round(float(xs[c + 1]) - cell_w * margin))
-            out[r, c] = score_map(img[y0:y1, x0:x1]).mean()
+            out[r, c] = img[y0:y1, x0:x1].mean(axis=(0, 1))
     return out
+
+
+def _distance_scores(
+    colors: NDArray[np.uint8] | NDArray[np.float32],
+    background: NDArray[np.float64] | NDArray[np.float32],
+) -> NDArray[np.float32]:
+    """sqrt-compressed normalized Euclidean distance from ``background``.
+
+    ``colors`` has channels on the last axis (any leading shape: cell-color
+    arrays and per-pixel arrays alike); the raw distance is normalized by
+    its maximum possible value ``255 * sqrt(C)`` and square-rooted, giving
+    a score in [0, 1] with no clipping needed.
+
+    The sqrt compression is load-bearing, not cosmetic: it expands the
+    gap between the background cluster (near 0) and the NEAREST piece
+    color while compressing the spread among distant piece colors, so a
+    palette containing one near-background color and one far color still
+    splits empty-vs-piece rather than piece-vs-piece under Otsu.
+    """
+    arr = np.asarray(colors, dtype=np.float32)
+    diff = arr - np.asarray(background, dtype=np.float32)
+    dist = np.sqrt(np.sum(diff * diff, axis=-1))
+    max_dist = 255.0 * float(np.sqrt(arr.shape[-1]))
+    return np.sqrt(dist / max_dist).astype(np.float32)
+
+
+def cell_scores(
+    image: NDArray[np.uint8],
+    rows: int = 20,
+    cols: int = 10,
+    margin: float = 0.25,
+) -> NDArray[np.float32]:
+    """Per-cell occupancy score in [0, 1]: distance from the background.
+
+    The background is estimated per frame as the per-channel median of the
+    TOP ROW's cell colors — a gravity prior: on a legal board a spawning
+    piece covers at most 4 of the top row's 10 cells (so the median is
+    taken over a majority of true background cells), and a *stack* reaching
+    row 0 is game over. This recovers even boards that are mostly filled
+    (where any dominant-cluster estimate would lock onto the pieces and
+    invert the reading).
+    """
+    colors = _cell_colors(image, rows, cols, margin)
+    background = np.median(colors[0], axis=0)
+    return _distance_scores(colors, background)
 
 
 def otsu_threshold(values: NDArray[np.float32]) -> float:
@@ -187,25 +203,34 @@ def classify_grid(
 
     Returns ``(occupancy, confidence)`` where ``occupancy`` is a
     (rows, cols) bool array (True = occupied) and ``confidence`` in [0, 1]
-    reflects how cleanly the two classes separate.
+    reflects how cleanly the two classes separate. Confidence semantics:
+    0.0 = unreadable, the caller's gate must reject; 0.5 = trusted
+    uniform-empty; (0, 1] = class-gap fraction for a two-class frame.
     """
     scores = cell_scores(image, rows, cols)
     lo = float(scores.min())
     hi = float(scores.max())
+    if hi < MIN_SPREAD:
+        # Uniform-near: every cell sits at the frame's own background
+        # estimate — an EMPTY board, whatever color the theme paints it
+        # (a solid near-white region is a light theme's empty board just
+        # as a solid dark one is a dark theme's). Classified empty with
+        # usable confidence so a board wipe (game over, new game) reaches
+        # the tracker instead of being dropped at the gate. A whole-board
+        # flash or a solid pause overlay reads the same way — the frames
+        # are pixel-indistinguishable from an empty board — and the
+        # tracker's reset debounce (several consecutive identical
+        # unexplained frames) is what keeps short flashes from committing
+        # anything; that is where the cross-frame information lives.
+        return np.zeros((rows, cols), dtype=np.bool_), _UNIFORM_EMPTY_CONFIDENCE
     if hi - lo < MIN_SPREAD:
-        # Uniform region: no two classes to separate; the absolute level
-        # decides what it means. A uniformly BRIGHT region is truly
-        # unreadable (occlusion, pause overlay, full-width clear flash,
-        # fully filled garbage): described as all-occupied at zero
-        # confidence so the caller's gate rejects it — it is never
-        # classified as empty. A uniformly DARK region is exactly the
-        # empty board the darker-background requirement guarantees:
-        # classified empty with usable confidence, so a tracker actually
-        # observes a board wipe (game over, new game) instead of holding
-        # a stale stack and hint until the next game's pieces appear.
-        bright = float(scores.mean()) >= _UNIFORM_BRIGHT_LEVEL
-        occupancy = np.full((rows, cols), bright, dtype=np.bool_)
-        return occupancy, 0.0 if bright else _UNIFORM_DARK_CONFIDENCE
+        # Uniform-far: every cell is far from the top-row background
+        # estimate yet mutually similar — the estimator is inconsistent
+        # with the field (e.g. a heterogeneous banner drawn across the top
+        # row over a solid field). Truly unreadable: described as
+        # all-occupied at zero confidence so the caller's gate rejects it;
+        # it is never classified as empty.
+        return np.ones((rows, cols), dtype=np.bool_), 0.0
 
     threshold = otsu_threshold(scores)
     occupancy = scores > threshold

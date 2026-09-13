@@ -11,8 +11,9 @@ Purpose: training human placement intuition at full game speed.
 ## Hard requirements
 
 - **Game-agnostic**: works on any Tetris rendering a standard 10×20 board with
-  reasonably solid cell colors on a darker background. No per-game config beyond the
-  user-selected regions.
+  reasonably solid cell colors distinguishable from the board's background — dark,
+  light, and colored themes alike. No per-game config beyond the user-selected
+  regions.
 - **Fast**: end-to-end capture→overlay under ~100 ms; hint for a newly spawned piece
   visible within ~1 frame in the common case (via precomputation, see below).
 - **Visual only**: never send input to the game.
@@ -36,8 +37,9 @@ solver/
                   # Must run < 50 ms in pure Python via bitboards; benchmark it.
 vision/
   grid.py         # Given BGR image of board region + (rows, cols): per-cell
-                  # occupancy via brightness/saturation threshold (Otsu or adaptive
-                  # vs. background sample). Returns 20×10 bool array + confidence.
+                  # occupancy via color distance from a per-frame background
+                  # estimate (top-row cell-color median), split by Otsu.
+                  # Returns 20×10 bool array + confidence.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, UNEXPLAINED). The falling piece is the added-cell diff

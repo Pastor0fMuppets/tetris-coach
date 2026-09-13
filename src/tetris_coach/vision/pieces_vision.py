@@ -25,7 +25,7 @@ from numpy.typing import NDArray
 
 from ..core.board import FULL_ROW, HEIGHT, WIDTH, Board
 from ..core.pieces import PIECES, ROTATIONS
-from .grid import MIN_SPREAD, otsu_threshold_hist, score_map
+from .grid import MIN_SPREAD, _distance_scores, otsu_threshold_hist
 
 Cell = tuple[int, int]
 
@@ -344,14 +344,30 @@ def identify_next(image: NDArray[np.uint8]) -> str | None:
     Thresholds the image, crops the foreground to its bounding box,
     resamples it to each candidate rotation's cell grid, and returns the
     piece whose shape signature matches exactly (or ``None``).
+
+    Scoring is per-pixel distance from the box's own background color,
+    estimated as the per-channel median of ALL pixels: a preview box is
+    majority-background (a piece is at most 4 cells of a >= 24-cell box),
+    and an arbitrary crop has no meaningful top row to sample instead.
     """
-    scores = score_map(image)
+    img = np.asarray(image)
+    if img.ndim == 2:
+        img = img[:, :, None]
+    background = np.median(img.reshape(-1, img.shape[2]), axis=0)
+    scores = _distance_scores(img, background)
     flat = scores.ravel()
     if float(flat.max()) - float(flat.min()) < MIN_SPREAD:
         return None  # empty preview box
     # Histogram Otsu: the input is every pixel of the preview image, far
-    # too many for the exact small-N variant's per-sample loop.
-    mask = scores > otsu_threshold_hist(flat)
+    # too many for the exact small-N variant's per-sample loop. The mask
+    # is additionally floored at MIN_SPREAD: a pixel closer to the
+    # background than the uniformity floor is background by the pipeline's
+    # own definition. Without the floor, a dense gridline lattice (a mid
+    # class between background and piece, lifted by the sqrt compression)
+    # can tip pixel-scale Otsu into splitting background|(gridlines+piece)
+    # and ruin the bounding box; every real piece color sits well above
+    # the floor (see the measured anchors on MIN_SPREAD).
+    mask = scores > max(otsu_threshold_hist(flat), MIN_SPREAD)
 
     ys, xs = np.nonzero(mask)
     if ys.size == 0:

@@ -154,14 +154,23 @@ def test_uniform_dark_region_is_empty_with_usable_confidence() -> None:
     assert confidence >= CoachConfig().min_confidence
 
 
-def test_uniform_bright_region_never_classified_empty() -> None:
-    # F4: a full-width line-clear flash or fully filled (garbage) board is
-    # uniformly bright — truly unreadable; it must never be reported as an
-    # EMPTY board, and its zero confidence keeps it behind the gate.
-    flash = np.full((200, 100, 3), 245, dtype=np.uint8)
-    occupancy, confidence = classify_grid(flash)
-    assert occupancy.all()
-    assert confidence == 0.0
+def test_uniform_region_reads_empty_at_any_level() -> None:
+    # A uniform region sits at its own background estimate whatever its
+    # absolute level: a solid dark region is a dark theme's empty board
+    # and a solid near-white region is a light theme's empty board. Both
+    # classify empty with gate-passing confidence — no pure per-frame
+    # classifier can tell a real white empty board from a pixel-identical
+    # white flash; the flash safety this replaces (the old uniform-BRIGHT
+    # all-filled rule) lives where the cross-frame information lives, the
+    # tracker's reset debounce: see test_state.py's
+    # test_three_unexplained_frames_then_recovery,
+    # test_stable_empty_board_resets_on_fourth_frame, and
+    # test_clear_lock_with_fade_frames_never_reset.
+    for level in (20, 245):
+        image = np.full((200, 100, 3), level, dtype=np.uint8)
+        occupancy, confidence = classify_grid(image)
+        assert not occupancy.any()
+        assert confidence >= CoachConfig().min_confidence
 
 
 def test_uniform_empty_board_render_passes_gate() -> None:

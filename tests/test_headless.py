@@ -528,12 +528,14 @@ class TestCoachEngineScenarios:
         assert engine._hint_is_provisional
 
     def test_flash_and_transient_occlusion_never_reset(self) -> None:
-        # F4: a full-board BRIGHT flash (line clear, pause overlay) is
-        # truly unreadable — zero confidence, gated out for any duration.
-        # A uniform DARK frame reads as an empty board (that is how a real
-        # wipe is observed; see test_board_wipe_resets_and_clears_hint),
-        # so a dark occlusion holds the hint only while shorter than the
-        # reset debounce. Neither must commit anything here.
+        # F4, distance-from-background era: a uniform frame at ANY level
+        # (bright line-clear flash, dark occlusion) reads as an EMPTY
+        # board with usable confidence — pixel-indistinguishable from a
+        # real wipe (see test_board_wipe_resets_and_clears_hint). Against
+        # a non-empty committed stack it is UNEXPLAINED, so it holds the
+        # hint and commits nothing while the streak stays below the reset
+        # debounce (4 identical frames); a coherent frame in between
+        # resets the streak.
         engine, events_log = self._engine_with_spy()
         stack = rows_of(bottom_lines("#########."))
         self._attach(engine, stack, "I")
@@ -546,8 +548,13 @@ class TestCoachEngineScenarios:
         shape = (20 * self.CELL, 10 * self.CELL, 3)
         flash = np.full(shape, 245, dtype=np.uint8)
         occluded = np.full(shape, 15, dtype=np.uint8)
-        frames = (flash,) * 5 + (occluded,) * 3  # occlusion below the debounce
-        for image in frames:
+        # Flash and occlusion both derive the SAME all-empty occupancy,
+        # so they share one identical-frame streak: 3 uniform frames
+        # (below the debounce), a good frame, then 3 more.
+        for image in (flash, flash, occluded):
+            assert engine.process_frame(image, self._preview("T")) is hint
+        assert self._process(engine, falling, "T") is hint  # streak resets
+        for image in (occluded, occluded, flash):
             assert engine.process_frame(image, self._preview("T")) is hint
         assert engine.tracker.committed == committed
         assert GameEvent.BOARD_RESET not in events_log
