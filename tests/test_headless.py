@@ -253,6 +253,96 @@ class TestCoachEngine:
         assert not engine._hint_is_provisional
 
 
+class TestFrameWorker:
+    """F10: the worker-thread tick logic, driven headless (no Qt).
+
+    FrameWorker is exactly what the live app runs on the QThreadPool
+    thread; these tests exercise its grab->engine->result contract and
+    the consecutive-failure accounting without any GUI.
+    """
+
+    BOARD_RECT = Rect(0, 0, 160, 320)
+    NEXT_RECT = Rect(200, 0, 96, 64)
+
+    def _worker(self):  # type: ignore[no-untyped-def]
+        from tetris_coach.app import CoachEngine, FrameWorker
+        from tetris_coach.core.pieces import ROTATIONS
+
+        style = STYLES[0]
+        grid = np.zeros((20, 10), dtype=bool)
+        for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):
+            grid[r, c] = True
+        board_image = render_board(grid, style, cell_size=16)
+        next_image = render_next_preview(ROTATIONS["I"][0].cells, style, cell_size=16)
+        board_rect, next_rect = self.BOARD_RECT, self.NEXT_RECT
+
+        class Source:
+            def grab(self, rect: Rect) -> np.ndarray:
+                return board_image if rect == board_rect else next_image
+
+        return FrameWorker(CoachEngine(), Source(), board_rect, next_rect)
+
+    def test_tick_processes_frames_and_reports_hint(self) -> None:
+        worker = self._worker()
+        first = worker.run_tick()
+        # Debounce: the first committed-nothing frame is still a success.
+        assert first.ok and not first.stop and first.hint is None
+        second = worker.run_tick()
+        assert second.ok and not second.stop
+        assert second.hint is not None
+        assert second.hint.piece == "T"
+        assert worker.consecutive_failures == 0
+
+    def test_failure_streak_logs_once_and_stops_at_cap(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from tetris_coach.app import (
+            MAX_CONSECUTIVE_TICK_FAILURES,
+            CoachEngine,
+            FrameWorker,
+        )
+
+        class Broken:
+            def grab(self, rect: Rect) -> np.ndarray:
+                raise OSError("display gone")
+
+        worker = FrameWorker(CoachEngine(), Broken(), self.BOARD_RECT, None)
+        results = [worker.run_tick() for _ in range(MAX_CONSECUTIVE_TICK_FAILURES)]
+        assert all(not r.ok and r.hint is None for r in results)
+        # Every failed tick below the cap asks the loop to carry on ...
+        assert not any(r.stop for r in results[:-1])
+        # ... and the tick that reaches the cap asks it to shut down.
+        assert results[-1].stop
+        err = capsys.readouterr().err
+        # Logged once per failure streak (plus the final give-up notice),
+        # never once per frame.
+        assert err.count("skipping frames") == 1
+        assert err.count("consecutive frames") == 1
+
+    def test_success_resets_failure_streak(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from tetris_coach.app import MAX_CONSECUTIVE_TICK_FAILURES
+
+        worker = self._worker()
+        good_source = worker.frame_source
+
+        class Broken:
+            def grab(self, rect: Rect) -> np.ndarray:
+                raise OSError("display gone")
+
+        for _ in range(MAX_CONSECUTIVE_TICK_FAILURES - 1):
+            worker.frame_source = Broken()
+            assert not worker.run_tick().ok
+            worker.frame_source = good_source
+            result = worker.run_tick()
+            assert result.ok and not result.stop
+            assert worker.consecutive_failures == 0
+        # Interleaved successes: the cap is never reached, and each new
+        # streak logs afresh.
+        assert capsys.readouterr().err.count("skipping frames") == (
+            MAX_CONSECUTIVE_TICK_FAILURES - 1
+        )
+
+
 class TestCoachEngineScenarios:
     """End-to-end regressions for the diff-anchored vision redesign."""
 

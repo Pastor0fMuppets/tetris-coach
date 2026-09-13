@@ -7,6 +7,13 @@ re-solve from the observed board.
 
 This module is headless-importable; GUI/capture objects are only created
 inside :func:`run`.
+
+Threading: in the live app the QTimer on the Qt GUI thread only *schedules*
+ticks; the blocking capture->vision->solve pass (:class:`FrameWorker`, which
+wraps the synchronous :class:`CoachEngine`) runs on a single worker thread,
+and its result crosses back to the GUI thread through a queued signal so the
+overlay always repaints there. Ticks never overlap: timer fires while the
+worker is busy are skipped.
 """
 
 from __future__ import annotations
@@ -189,14 +196,83 @@ class CoachEngine:
         self._precomputed = best_move(predicted, next_piece)
 
 
+@dataclass(frozen=True)
+class TickResult:
+    """Outcome of one capture->vision->solve tick."""
+
+    hint: Move | None  # the hint to display; meaningful only when ok is True
+    ok: bool  # the frame pair was captured and processed
+    stop: bool  # the consecutive-failure cap was reached: shut the loop down
+
+
+class FrameWorker:
+    """Headless per-tick logic: grab a frame pair, digest it, account failures.
+
+    This is exactly what runs on the worker thread in the live app; the Qt
+    layer only schedules :meth:`run_tick` off the GUI thread and routes the
+    returned :class:`TickResult` back to the overlay. Keeping it Qt-free
+    lets tests drive the production tick logic without a display.
+    """
+
+    def __init__(
+        self,
+        engine: CoachEngine,
+        frame_source: FrameSource,
+        board_rect: Rect,
+        next_rect: Rect | None,
+    ) -> None:
+        self.engine = engine
+        self.frame_source = frame_source
+        self.board_rect = board_rect
+        self.next_rect = next_rect
+        self.consecutive_failures = 0
+
+    def run_tick(self) -> TickResult:
+        """Run one blocking capture->vision->solve pass."""
+        try:
+            board_image = self.frame_source.grab(self.board_rect)
+            next_image = (
+                self.frame_source.grab(self.next_rect) if self.next_rect is not None else None
+            )
+            hint = self.engine.process_frame(board_image, next_image)
+        except Exception:  # noqa: BLE001 - one bad frame must not kill the loop
+            self.consecutive_failures += 1
+            if self.consecutive_failures == 1:
+                # Log once per failure streak, never once per frame.
+                traceback.print_exc()
+                print(
+                    "tetris-coach: frame processing failed; skipping frames.",
+                    file=sys.stderr,
+                )
+            if self.consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES:
+                print(
+                    f"tetris-coach: {self.consecutive_failures} consecutive frames "
+                    "failed; exiting. Check that the selected regions still "
+                    "cover the board and restart to re-select them.",
+                    file=sys.stderr,
+                )
+                return TickResult(hint=None, ok=False, stop=True)
+            return TickResult(hint=None, ok=False, stop=False)
+        self.consecutive_failures = 0
+        return TickResult(hint=hint, ok=True, stop=False)
+
+
 def run(
     board_rect: Rect,
     next_rect: Rect | None,
     source: FrameSource | None = None,
     config: CoachConfig | None = None,
 ) -> None:  # pragma: no cover - macOS GUI loop
-    """Start the capture/overlay loop (macOS only)."""
-    from PySide6.QtCore import QTimer
+    """Start the capture/overlay loop (macOS only).
+
+    The QTimer slot on the GUI thread only schedules work: each tick's
+    blocking grab+vision+solve runs a :class:`FrameWorker` pass on a
+    one-thread QThreadPool, and the result returns through an explicitly
+    queued signal so the overlay repaints from the GUI thread. A busy flag
+    (touched only on the GUI thread) skips timer fires while the worker is
+    still on an earlier frame, so ticks never queue up behind a slow one.
+    """
+    from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
     from PySide6.QtWidgets import QApplication
 
     from .capture.screen import ScreenCapture
@@ -206,42 +282,53 @@ def run(
     config = config or CoachConfig()
     engine = CoachEngine(config)
     frame_source: FrameSource = source if source is not None else ScreenCapture()
+    worker = FrameWorker(engine, frame_source, board_rect, next_rect)
 
     app = QApplication.instance() or QApplication([])
     window = OverlayWindow(board_rect, HintStyle(color=config.hint_color))
     window.show()
 
-    consecutive_failures = 0
+    class TickSignals(QObject):
+        finished = Signal(object)  # carries a TickResult
 
-    def tick() -> None:
-        nonlocal consecutive_failures
-        try:
-            board_image = frame_source.grab(board_rect)
-            next_image = frame_source.grab(next_rect) if next_rect is not None else None
-            hint = engine.process_frame(board_image, next_image)
-        except Exception:  # noqa: BLE001 - one bad frame must not kill the loop
-            consecutive_failures += 1
-            if consecutive_failures == 1:
-                # Log once per failure streak, never once per frame.
-                traceback.print_exc()
-                print(
-                    "tetris-coach: frame processing failed; skipping frames.",
-                    file=sys.stderr,
-                )
-            if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES:
-                print(
-                    f"tetris-coach: {consecutive_failures} consecutive frames "
-                    "failed; exiting. Check that the selected regions still "
-                    "cover the board and restart to re-select them.",
-                    file=sys.stderr,
-                )
-                timer.stop()
-                app.quit()
+    class TickTask(QRunnable):
+        """One tick on the pool thread; the pool auto-deletes it after run."""
+
+        def __init__(self, signals: TickSignals) -> None:
+            super().__init__()
+            self._signals = signals
+
+        def run(self) -> None:
+            self._signals.finished.emit(worker.run_tick())
+
+    pool = QThreadPool()
+    pool.setMaxThreadCount(1)
+    busy = False
+
+    def schedule_tick() -> None:
+        nonlocal busy
+        if busy:
+            return  # the worker is still on an earlier frame: skip this tick
+        busy = True
+        pool.start(TickTask(signals))
+
+    def on_tick_finished(result: TickResult) -> None:
+        nonlocal busy
+        busy = False
+        if result.stop:
+            timer.stop()
+            app.quit()
             return
-        consecutive_failures = 0
-        window.set_hint(hint)
+        if result.ok:
+            window.set_hint(result.hint)
+
+    signals = TickSignals()
+    # Explicitly queued: the signal is emitted from the pool thread, and the
+    # slot repaints the overlay, which must only happen on the GUI thread.
+    signals.finished.connect(on_tick_finished, Qt.ConnectionType.QueuedConnection)
 
     timer = QTimer()
-    timer.timeout.connect(tick)
+    timer.timeout.connect(schedule_tick)
     timer.start(max(1, int(1000 / config.poll_rate)))
     app.exec()
+    pool.waitForDone()
