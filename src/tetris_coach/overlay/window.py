@@ -7,6 +7,7 @@ window class then raises on construction), so headless test runs are safe.
 from __future__ import annotations
 
 from ..capture.screen import Rect
+from ..core.board import DEFAULT_HEIGHT, WIDTH
 from ..solver.search import Move
 from .renderer import HintStyle, draw_hint
 
@@ -25,7 +26,12 @@ if HAVE_QT:  # pragma: no cover - macOS only
     class OverlayWindow(QWidget):
         """Frameless transparent window positioned exactly over the board."""
 
-        def __init__(self, board_rect: Rect, style: HintStyle | None = None) -> None:
+        def __init__(
+            self,
+            board_rect: Rect,
+            style: HintStyle | None = None,
+            rows: int = DEFAULT_HEIGHT,
+        ) -> None:
             super().__init__(
                 None,
                 Qt.WindowType.FramelessWindowHint
@@ -39,6 +45,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
             self._board_rect = board_rect
             self._style = style or HintStyle()
+            self._rows = rows
             self._move: Move | None = None
             self.setGeometry(board_rect.left, board_rect.top, board_rect.width, board_rect.height)
 
@@ -59,8 +66,8 @@ if HAVE_QT:  # pragma: no cover - macOS only
                 draw_hint(
                     painter,
                     self._move,
-                    cell_width=self.width() / 10,
-                    cell_height=self.height() / 20,
+                    cell_width=self.width() / WIDTH,
+                    cell_height=self.height() / self._rows,
                     style=self._style,
                 )
             finally:
@@ -71,7 +78,12 @@ else:
     class OverlayWindow:  # type: ignore[no-redef]
         """Placeholder that reports the missing GUI runtime."""
 
-        def __init__(self, board_rect: Rect, style: HintStyle | None = None) -> None:
+        def __init__(
+            self,
+            board_rect: Rect,
+            style: HintStyle | None = None,
+            rows: int = DEFAULT_HEIGHT,
+        ) -> None:
             raise RuntimeError(
                 "OverlayWindow requires PySide6, which is only installed on "
                 "macOS (the overlay is a macOS feature)."

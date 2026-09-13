@@ -343,7 +343,7 @@ def run(
     worker = FrameWorker(engine, frame_source, board_rect, next_rect)
 
     app = QApplication.instance() or QApplication([])
-    window = OverlayWindow(board_rect, HintStyle(color=config.hint_color))
+    window = OverlayWindow(board_rect, HintStyle(color=config.hint_color), rows=config.rows)
     window.show()
 
     class TickSignals(QObject):
