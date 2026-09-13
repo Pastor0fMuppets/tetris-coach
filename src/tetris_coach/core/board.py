@@ -87,14 +87,22 @@ class Board:
     def __init__(
         self,
         rows: Sequence[int] | None = None,
-        heights: tuple[int, ...] | None = None,
+        *,
+        _heights: tuple[int, ...] | None = None,
     ) -> None:
+        """Build a board from row bitmasks; heights are always derived.
+
+        ``_heights`` is private to :meth:`drop`'s no-clear fast path, which
+        already knows the exact new heights; it must equal
+        ``_compute_heights(rows)``. External callers must not pass it — a
+        board whose heights disagree with its rows breaks every drop.
+        """
         row_tuple = (0,) * HEIGHT if rows is None else tuple(rows)
         if len(row_tuple) != HEIGHT:
             raise ValueError(f"expected {HEIGHT} rows, got {len(row_tuple)}")
         object.__setattr__(self, "rows", row_tuple)
         object.__setattr__(
-            self, "heights", _compute_heights(row_tuple) if heights is None else heights
+            self, "heights", _compute_heights(row_tuple) if _heights is None else _heights
         )
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -129,12 +137,6 @@ class Board:
 
     def cell_count(self) -> int:
         return sum(row.bit_count() for row in self.rows)
-
-    def column_heights(self) -> tuple[int, ...]:
-        return self.heights
-
-    def max_height(self) -> int:
-        return max(self.heights)
 
     # ------------------------------------------------------------------
     # Piece placement
@@ -181,7 +183,7 @@ class Board:
                 # The piece's top cell in every occupied column ends up above
                 # the previous stack top, so the new height is exact.
                 new_heights[col + j] = HEIGHT - (landing + rotation.top[j])
-            board = Board(tuple(rows), tuple(new_heights))
+            board = Board(tuple(rows), _heights=tuple(new_heights))
 
         return DropResult(
             board=board,
