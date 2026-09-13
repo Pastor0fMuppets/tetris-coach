@@ -151,3 +151,10 @@ class TestCoachEngine:
         hint2 = engine.process_frame(board_image2, next_image2)
         assert hint2 is not None
         assert hint2.piece == "I"
+        # The flip used the 1-ply precompute; a quiet follow-up frame
+        # refines it to the full 2-ply answer using the known next piece.
+        assert engine._hint_is_provisional
+        hint3 = engine.process_frame(board_image2, next_image2)
+        assert hint3 is not None
+        assert hint3.piece == "I"
+        assert not engine._hint_is_provisional

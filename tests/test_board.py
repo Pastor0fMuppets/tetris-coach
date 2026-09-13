@@ -126,9 +126,12 @@ class TestDrop:
             "#.........",
             "#.........",
         )
-        # S piece: bottom row occupies cols 0-1, top row cols 1-2.
+        # S piece (bottom row cols 0-1, top row cols 1-2) rests on the col-0
+        # tower: col 1 traps 2 empty cells below it, col 2 traps 3.
         res = b.drop(rot("S", 0), 0)
         assert res is not None
+        assert res.landing_row == HEIGHT - 4
+        assert res.board.hole_count() == 5
 
     def test_drop_out_of_range(self) -> None:
         assert Board().drop(horizontal_i(), 6) is not None

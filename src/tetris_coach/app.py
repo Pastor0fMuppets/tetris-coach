@@ -19,7 +19,7 @@ from .capture.screen import FrameSource, Rect
 from .core.board import Board
 from .solver.search import Move, best_move
 from .vision.grid import classify_grid
-from .vision.pieces_vision import split_grid
+from .vision.pieces_vision import identify_next, split_grid
 from .vision.state import GameEvent, GameStateTracker
 
 
@@ -44,6 +44,9 @@ class CoachEngine:
         self.current_hint: Move | None = None
         self._predicted_board: Board | None = None
         self._precomputed: Move | None = None
+        # True while current_hint came from the 1-ply precompute and should
+        # be refined to 2-ply once the upcoming piece is known.
+        self._hint_is_provisional = False
 
     def process_frame(
         self,
@@ -51,8 +54,6 @@ class CoachEngine:
         next_image: np.ndarray | None,
     ) -> Move | None:
         """Digest one captured frame pair; return the hint to display."""
-        from .vision.pieces_vision import identify_next
-
         occupancy, confidence = classify_grid(board_image)
         if confidence < self.config.min_confidence:
             return self.current_hint  # keep showing the last good hint
@@ -74,6 +75,7 @@ class CoachEngine:
             piece = committed.falling_piece
             if piece is None:
                 self.current_hint = None
+                self._hint_is_provisional = False
             elif (
                 self._precomputed is not None
                 and self._predicted_board is not None
@@ -82,8 +84,24 @@ class CoachEngine:
             ):
                 # Prediction held: flip to the precomputed hint instantly.
                 self.current_hint = self._precomputed
+                self._hint_is_provisional = True
             else:
                 self.current_hint = best_move(board, piece, committed.next_piece)
+                self._hint_is_provisional = False
+            self._precompute_next(committed.next_piece)
+        elif (
+            self._hint_is_provisional
+            and self.current_hint is not None
+            and committed.falling_piece == self.current_hint.piece
+            and committed.next_piece is not None
+        ):
+            # Quiet frame: upgrade the instant 1-ply hint to the full 2-ply
+            # answer now that the upcoming piece is known.
+            board = Board(committed.stack_rows)
+            refined = best_move(board, self.current_hint.piece, committed.next_piece)
+            if refined is not None:
+                self.current_hint = refined
+            self._hint_is_provisional = False
             self._precompute_next(committed.next_piece)
         return self.current_hint
 

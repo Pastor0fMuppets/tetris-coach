@@ -143,15 +143,15 @@ def identify_next(image: NDArray[np.uint8]) -> str | None:
     best: tuple[float, str] | None = None
     for rots in ROTATIONS.values():
         for rot in rots:
-            occupancy = _resample_to_cells(crop, rot.height, rot.width)
-            if occupancy is None:
+            resampled = _resample_to_cells(crop, rot.height, rot.width)
+            if resampled is None:
                 continue
+            occupancy, fit = resampled
             expected = np.zeros((rot.height, rot.width), dtype=bool)
             for r, c in rot.cells:
                 expected[r, c] = True
-            if not np.array_equal(occupancy[0], expected):
+            if not np.array_equal(occupancy, expected):
                 continue
-            fit = occupancy[1]
             if best is None or fit > best[0]:
                 best = (fit, rot.piece)
     return best[1] if best else None
