@@ -340,6 +340,48 @@ class TestUnobservedPieceSemantics:
         assert tracker.committed.stack_rows == merge(stack, resting)
 
 
+class TestTwelveRowTracker:
+    """A tracker constructed for a 12-row board: the rows parameter seeds
+    the bootstrap snapshot; everything after flows from the frames."""
+
+    ROWS = 12
+    EMPTY12: tuple[int, ...] = (0,) * 12
+
+    def test_bootstrap_snapshot_matches_rows(self) -> None:
+        tracker = GameStateTracker(rows=self.ROWS)
+        assert tracker.committed == Snapshot(self.EMPTY12, None, None)
+
+    def test_rows_validation(self) -> None:
+        with pytest.raises(ValueError):
+            GameStateTracker(rows=0)
+
+    def test_spawn_lock_reveal_on_12_rows(self) -> None:
+        tracker = GameStateTracker(confirm_frames=2, rows=self.ROWS)
+        spawn = rows_of(piece_cells("T", 0, 0, 3), height=self.ROWS)
+        events = feed(tracker, spawn, "S", times=2)
+        assert events == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "T"
+        # Rest on the 12-row floor through lock delay, then the next spawn
+        # reveals the lock (exercises the len(stack_rows) support bound).
+        resting = piece_cells("T", 0, self.ROWS - 2, 3)
+        assert feed(tracker, rows_of(resting, height=self.ROWS), "S") == []
+        assert tracker.committed.stack_rows == self.EMPTY12
+        revealed = merge(rows_of(resting, height=self.ROWS), piece_cells("S", 0, 0, 5))
+        events = feed(tracker, revealed, "Z", times=2)
+        assert events == [GameEvent.PIECE_LOCKED, GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.stack_rows == rows_of(resting, height=self.ROWS)
+        assert tracker.committed.falling_piece == "S"
+
+    def test_board_reset_on_12_rows(self) -> None:
+        tracker = GameStateTracker(rows=self.ROWS)
+        stack = rows_of(bottom_lines("####..####", height=self.ROWS), height=self.ROWS)
+        attach(tracker, stack)
+        for _ in range(3):
+            assert feed(tracker, self.EMPTY12, None) == []
+        assert feed(tracker, self.EMPTY12, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed == Snapshot(self.EMPTY12, None, None)
+
+
 class TestMidGameAttach:
     def test_attach_resyncs_and_resumes_tracking(self) -> None:
         tracker = GameStateTracker()

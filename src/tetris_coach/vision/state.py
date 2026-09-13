@@ -1,7 +1,8 @@
 """Debounced game-state tracking anchored on a committed stack memory.
 
 The tracker keeps ONE authoritative piece of memory: the committed stack,
-as 20 row bitmasks — never ``None``. Every frame the falling piece is
+as one bitmask per board row (the row count is set at construction,
+default 20) — never ``None``. Every frame the falling piece is
 DERIVED by :func:`~.pieces_vision.explain_grid` as a set difference
 against that memory, never guessed geometrically from a single frame.
 
@@ -40,7 +41,7 @@ from enum import Enum, auto
 import numpy as np
 from numpy.typing import NDArray
 
-from ..core.board import HEIGHT
+from ..core.board import DEFAULT_HEIGHT
 from .pieces_vision import FallingPiece, FrameKind, explain_grid
 
 
@@ -72,18 +73,24 @@ class GameStateTracker:
         confirm_frames: int = 2,
         reset_confirm_frames: int = 4,
         max_missing_cells: int = 2,
+        rows: int = DEFAULT_HEIGHT,
     ) -> None:
         if confirm_frames < 1:
             raise ValueError("confirm_frames must be >= 1")
         if reset_confirm_frames < 1:
             raise ValueError("reset_confirm_frames must be >= 1")
+        if rows < 1:
+            raise ValueError("rows must be >= 1")
         self._confirm_frames = confirm_frames
         self._reset_confirm_frames = reset_confirm_frames
         self._max_missing_cells = max_missing_cells
         # Bootstrap IS the ordinary rule set: a fresh game diffs cleanly
         # from the empty snapshot; a mid-game attach resyncs via the reset
-        # rule. The committed snapshot is never None.
-        self._committed = Snapshot((0,) * HEIGHT, None, None)
+        # rule. The committed snapshot is never None. ``rows`` exists ONLY
+        # for this bootstrap: the empty committed stack must exist before
+        # any frame, so its length cannot be derived from data; every later
+        # commit takes its length from the observed frame.
+        self._committed = Snapshot((0,) * rows, None, None)
         self._pending: Snapshot | None = None
         self._pending_kind: FrameKind | None = None
         self._pending_count = 0
