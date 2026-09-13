@@ -33,7 +33,9 @@ if HAVE_QT:  # pragma: no cover - macOS only
         def __init__(self, prompt: str, min_size: tuple[int, int] = (1, 1)) -> None:
             super().__init__(
                 None,
-                Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint,
+                Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+                | Qt.WindowType.NoDropShadowWindowHint,
             )
             self._prompt = prompt
             self._min_size = min_size
@@ -123,7 +125,13 @@ def select_region(prompt: str, min_size: tuple[int, int] = (1, 1)) -> Rect | Non
         raise RuntimeError("Region selection requires PySide6 (macOS).")
     app = QApplication.instance() or QApplication([])  # pragma: no cover
     picker = _RegionPicker(prompt, min_size)  # pragma: no cover
-    picker.showFullScreen()  # pragma: no cover
+    # show(), not showFullScreen(): macOS fullscreen mode moves the window
+    # into its own Space with a black backdrop, hiding the screen the user
+    # needs to see through the translucent dim. The constructor already
+    # sizes the frameless window to the full screen geometry.
+    picker.show()  # pragma: no cover
+    picker.raise_()  # pragma: no cover
+    picker.activateWindow()  # pragma: no cover
     while picker.isVisible():  # pragma: no cover
         app.processEvents()
     return picker.result  # pragma: no cover
