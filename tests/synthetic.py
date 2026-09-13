@@ -21,6 +21,8 @@ class Style:
     noise: int = 0  # +/- amplitude of uniform per-pixel noise
 
 
+# WARNING: append new styles only — never insert or reorder. Tests index
+# STYLES[0..2] by position (classic-dark, gray-flat, jstris-like).
 STYLES = (
     Style(
         name="classic-dark",
@@ -75,6 +77,45 @@ STYLES = (
         gridline_width=1,
         cell_inset=2,
         noise=4,
+    ),
+    # Light themes: colored pieces on a white/near-white ground (the real
+    # target game family behind tests/fixtures/roas_stacker). The lavender
+    # + deep-blue pair is the multi-modality stressor that makes the sqrt
+    # compression in the distance score load-bearing: lavender is the
+    # near-background color, deep blue the far one.
+    Style(
+        name="paper-white",
+        background=(248, 248, 246),
+        cell_colors=(
+            (37, 37, 229),  # deep blue (far from background)
+            (210, 160, 235),  # lavender (near background)
+            (227, 91, 2),
+            (89, 177, 1),
+            (215, 15, 55),
+            (15, 155, 215),
+            (227, 159, 2),
+        ),
+        gridline=(228, 228, 232),
+        gridline_width=1,
+        noise=4,
+    ),
+    Style(
+        name="cream-mono",
+        background=(245, 240, 228),
+        cell_colors=((150, 140, 120),),  # monochrome pieces on light ground
+        gridline=None,
+        cell_inset=1,
+        noise=3,
+    ),
+    Style(
+        name="mid-gray-both",
+        background=(128, 128, 128),
+        # Pieces on BOTH sides of the background's brightness: any absolute
+        # level rule fails here; distance-from-background does not care.
+        cell_colors=((225, 225, 230), (38, 38, 44)),
+        gridline=(118, 118, 118),
+        gridline_width=1,
+        noise=3,
     ),
 )
 

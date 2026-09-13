@@ -1,11 +1,16 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
+from PIL import Image
 
 from tetris_coach.core.pieces import PIECES, ROTATIONS
 from tetris_coach.vision.grid import classify_grid
 from tetris_coach.vision.pieces_vision import identify_next, match_cells
 
-from .synthetic import STYLES, render_next_preview
+from .synthetic import STYLES, render_board, render_next_preview
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class TestMatchCells:
@@ -42,6 +47,22 @@ class TestIdentifyNext:
 
     def test_empty_preview_returns_none(self) -> None:
         image = np.full((80, 120, 3), 12, dtype=np.uint8)
+        assert identify_next(image) is None
+
+    @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+    def test_blank_rendered_preview_returns_none(self, style) -> None:  # type: ignore[no-untyped-def]
+        # A pieceless preview box rendered WITH the style's gridlines and
+        # noise must read as "no piece" — via the spread gate where the
+        # gridlines sit below the uniformity floor, or via the shape-match
+        # fallback where they poke above it (a lattice is no tetromino).
+        image = render_board(np.zeros((4, 6), dtype=bool), style, cell_size=20)
+        assert identify_next(image) is None
+
+    def test_blank_light_preview_fixture_returns_none(self) -> None:
+        # Real capture of the target game's empty preview box (white
+        # theme): the old absolute score read the whole bright box as
+        # foreground; it must read as "no piece", not garbage.
+        image = np.asarray(Image.open(FIXTURES / "roas_stacker" / "blank_light_preview.png"))
         assert identify_next(image) is None
 
     def test_preview_pipeline_matches_grid_pipeline(self) -> None:

@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
+from PIL import Image
 
 from tetris_coach.app import CoachConfig
 from tetris_coach.vision.grid import (
@@ -10,6 +13,8 @@ from tetris_coach.vision.grid import (
 )
 
 from .synthetic import STYLES, render_board
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def sample_grid() -> np.ndarray:
@@ -182,6 +187,108 @@ def test_uniform_empty_board_render_passes_gate() -> None:
     occupancy, confidence = classify_grid(image)
     assert not occupancy.any()
     assert confidence >= CoachConfig().min_confidence
+
+
+def test_start_screen_fixture_rejected() -> None:
+    # The real light-board failure this redesign fixes: a white board
+    # covered in start-screen text/graphics. The old absolute score read
+    # it as 200/200 occupied at confidence 0.00 and moments of contrast
+    # committed garbage grids. Now it must simply fail the engine's gate
+    # (the exact occupancy is irrelevant for a non-gameplay frame).
+    image = np.asarray(Image.open(FIXTURES / "roas_stacker" / "start_screen_board.png"))
+    _, confidence = classify_grid(image)
+    assert confidence < CoachConfig().min_confidence
+
+
+def near_top_out_grid() -> np.ndarray:
+    """A 160/200-filled board with buried holes; rows 0-2 empty."""
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[3:, :] = True  # 170 cells
+    for r in range(5, 15):  # 10 buried holes
+        grid[r, (3 * r + 1) % 10] = False
+    assert int(grid.sum()) == 160
+    return grid
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_near_top_out_recovered(style) -> None:  # type: ignore[no-untyped-def]
+    # Filled cells are the 80% MAJORITY here: any dominant-cluster
+    # background estimate locks onto the pieces and inverts the reading
+    # (at high confidence, on monochrome styles especially). The top-row
+    # median estimator recovers the board exactly — a stack in row 0 is
+    # game over, so the top row is background whatever the fill level.
+    grid = near_top_out_grid()
+    image = render_board(grid, style, cell_size=20)
+    occupancy, confidence = classify_grid(image)
+    np.testing.assert_array_equal(occupancy, grid)
+    assert confidence > 0.2
+
+
+@pytest.mark.parametrize("style", [STYLES[0], STYLES[4]], ids=lambda s: s.name)
+def test_spawn_in_top_row_recovered(style) -> None:  # type: ignore[no-untyped-def]
+    # An I-piece lying across row 0 contaminates 4 of the 10 top-row
+    # cells the background estimator samples; the per-channel median
+    # still lands on the 6 background cells.
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[0, 3:7] = True  # I across the top row
+    grid[19, :] = [True] * 6 + [False] * 4  # some stack far below
+    image = render_board(grid, style, cell_size=18)
+    occupancy, _ = classify_grid(image)
+    np.testing.assert_array_equal(occupancy, grid)
+
+
+def test_estimator_disagreement_reads_filled_at_zero_confidence() -> None:
+    # The uniform-far branch: a heterogeneous top row (alternating black/
+    # white cells) whose median matches nothing, over a solid field. Every
+    # cell is far from the estimate yet mutually similar — the estimator
+    # is inconsistent with the field. Must be the all-filled/0.0 sentinel
+    # (rejected at the gate), never read as an empty board.
+    image = np.zeros((400, 200, 3), dtype=np.uint8)
+    for c in range(0, 10, 2):
+        image[0:20, c * 20 : (c + 1) * 20] = 255
+    occupancy, confidence = classify_grid(image)
+    assert occupancy.all()
+    assert confidence == 0.0
+
+
+@pytest.mark.parametrize("style", [STYLES[0], STYLES[4]], ids=lambda s: s.name)
+def test_gradient_match_or_reject(style) -> None:  # type: ignore[no-untyped-def]
+    # Vertical lighting gradients: a mild ramp must classify exactly or
+    # be rejected at the gate; a steep ramp swamps the class gap and must
+    # be rejected. Either way the invariant is the same: never commit a
+    # wrong reading (availability may degrade, correctness may not).
+    grid = sample_grid()
+    base = render_board(grid, style, cell_size=24).astype(np.int16)
+    gate = CoachConfig().min_confidence
+    for amp, must_reject in ((60, False), (140, True)):
+        ramp = np.linspace(-amp, amp, base.shape[0]).astype(np.int16)
+        image = (base + ramp[:, None, None]).clip(0, 255).astype(np.uint8)
+        occupancy, confidence = classify_grid(image)
+        if must_reject:
+            assert confidence < gate
+        else:
+            assert bool(np.array_equal(occupancy, grid)) or confidence < gate
+
+
+def test_random_boards_match_or_reject() -> None:
+    # Broad-net sweep: ~50 seeded random legal boards (bottom-heavy
+    # column stacks with buried holes) across all styles. Every frame
+    # must either be read exactly or be rejected at the gate — a wrong
+    # reading above the gate is a committable-garbage violation.
+    rng = np.random.default_rng(20260913)
+    gate = CoachConfig().min_confidence
+    for i in range(50):
+        style = STYLES[i % len(STYLES)]
+        heights = rng.integers(0, 15, size=10)
+        grid = np.zeros((20, 10), dtype=bool)
+        for c in range(10):
+            for r in range(20 - int(heights[c]), 20):
+                grid[r, c] = rng.random() > 0.1  # ~10% buried holes
+        image = render_board(grid, style, cell_size=16, seed=i)
+        occupancy, confidence = classify_grid(image)
+        assert bool(np.array_equal(occupancy, grid)) or confidence < gate, (
+            f"garbage above the gate: style={style.name} seed={i} conf={confidence:.3f}"
+        )
 
 
 def test_confidence_drops_with_ambiguity() -> None:
