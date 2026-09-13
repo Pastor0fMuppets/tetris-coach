@@ -26,7 +26,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .capture.screen import FrameSource, Rect
-from .core.board import DEFAULT_HEIGHT, Board
+from .core.board import DEFAULT_HEIGHT, WIDTH, Board
 from .solver.search import Move, best_move
 from .vision.grid import GridClassifier
 from .vision.pieces_vision import FallingPiece, identify_next
@@ -81,6 +81,54 @@ def render_debug_frame(
     )
 
 
+def compute_overlap_mask(
+    board_rect: Rect,
+    next_rect: Rect | None,
+    rows: int,
+    width: int = WIDTH,
+) -> frozenset[tuple[int, int]]:
+    """Board cells whose center falls under the next-piece preview box.
+
+    Some games (e.g. ROAS Stacker) float the NEXT preview on top of the
+    top corner of the playfield, inside the region the user must select as
+    the board (pieces spawn and move through the top rows). The cells under
+    that box therefore show the NEXT piece, not the board — a second
+    tetromino's worth of added cells every frame, which turns the frame
+    UNEXPLAINED and eventually trips a spurious BOARD_RESET. This returns
+    the ``(row, col)`` cells to force empty before the tracker sees them.
+
+    Geometry is done in board-relative fractions so it is Retina-agnostic
+    (the capture may be scaled; only ratios matter): the next box is
+    projected into the board rectangle's unit square, and a cell is masked
+    when its center ``((c + 0.5) / width, (r + 0.5) / rows)`` lies inside
+    that projection. Center-in-rect tolerates a slightly loose next
+    selection without masking a cell merely grazed at its border.
+
+    When ``next_rect`` is ``None`` or does not overlap ``board_rect`` (the
+    general case: a next box drawn in a separate area outside the board),
+    the mask is empty and downstream behavior is unchanged.
+    """
+    if next_rect is None or board_rect.width <= 0 or board_rect.height <= 0:
+        return frozenset()
+    fx0 = (next_rect.left - board_rect.left) / board_rect.width
+    fx1 = (next_rect.left + next_rect.width - board_rect.left) / board_rect.width
+    fy0 = (next_rect.top - board_rect.top) / board_rect.height
+    fy1 = (next_rect.top + next_rect.height - board_rect.top) / board_rect.height
+    # No overlap with the board's unit square [0, 1] x [0, 1].
+    if fx1 <= 0.0 or fx0 >= 1.0 or fy1 <= 0.0 or fy0 >= 1.0:
+        return frozenset()
+    masked: set[tuple[int, int]] = set()
+    for r in range(rows):
+        cy = (r + 0.5) / rows
+        if not (fy0 <= cy <= fy1):
+            continue
+        for c in range(width):
+            cx = (c + 0.5) / width
+            if fx0 <= cx <= fx1:
+                masked.add((r, c))
+    return frozenset(masked)
+
+
 class CoachEngine:
     """GUI-free part of the loop: frame in, hint (Move or None) out.
 
@@ -88,8 +136,18 @@ class CoachEngine:
     the runner (macOS overlay loop or a test harness) feeds it frames.
     """
 
-    def __init__(self, config: CoachConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: CoachConfig | None = None,
+        masked_cells: frozenset[tuple[int, int]] | None = None,
+    ) -> None:
         self.config = config or CoachConfig()
+        # Board cells the next-piece preview floats over (see
+        # compute_overlap_mask): forced empty before the tracker sees them,
+        # because they show the NEXT piece, not the board. Empty by default,
+        # so a headless engine and the common non-overlapping next box are
+        # unchanged.
+        self._masked_cells: frozenset[tuple[int, int]] = masked_cells or frozenset()
         # The one place config.rows fans out to the stateful components;
         # both hold board-shaped state before the first frame exists, so
         # their row count cannot come from data.
@@ -146,6 +204,10 @@ class CoachEngine:
                 )
         if rejected:
             return self.current_hint  # keep showing the last good hint
+        # Force the preview-overlap cells empty: confidence above was judged
+        # on the full grid, but the tracker (and the debug view below) must
+        # see only true board cells there, not the NEXT preview.
+        occupancy = self._masked(occupancy)
         next_piece = self._identify_next_cached(next_image)
 
         previous = self.tracker.committed
@@ -206,6 +268,22 @@ class CoachEngine:
             self._hint_is_provisional = False
             self._precompute_next(committed.next_piece)
         return self.current_hint
+
+    def _masked(self, occupancy: NDArray[np.bool_]) -> NDArray[np.bool_]:
+        """Occupancy with the preview-overlap cells forced empty.
+
+        Returns a copy when any cell is masked so a cached classifier
+        output is never mutated in place; the array is returned unchanged
+        (no copy) when there is nothing to mask.
+        """
+        if not self._masked_cells:
+            return occupancy
+        masked = occupancy.copy()
+        rows, cols = masked.shape
+        for r, c in self._masked_cells:
+            if 0 <= r < rows and 0 <= c < cols:
+                masked[r, c] = False
+        return masked
 
     def _identify_next_cached(self, next_image: np.ndarray | None) -> str | None:
         """identify_next, skipped when the preview pixels did not change."""
@@ -346,7 +424,10 @@ def run(
     from .overlay.window import OverlayWindow
 
     config = config or CoachConfig()
-    engine = CoachEngine(config)
+    # The next preview may float over the top corner of the selected board
+    # region; mask those cells once (the rects are fixed for the session).
+    masked_cells = compute_overlap_mask(board_rect, next_rect, config.rows)
+    engine = CoachEngine(config, masked_cells=masked_cells)
     frame_source: FrameSource = source if source is not None else ScreenCapture()
     worker = FrameWorker(engine, frame_source, board_rect, next_rect)
 
