@@ -6,6 +6,7 @@ from PIL import Image
 
 from tetris_coach.app import CoachConfig
 from tetris_coach.vision.grid import (
+    GridClassifier,
     cell_scores,
     classify_grid,
     otsu_threshold,
@@ -215,8 +216,10 @@ def test_near_top_out_recovered(style) -> None:  # type: ignore[no-untyped-def]
     # Filled cells are the 80% MAJORITY here: any dominant-cluster
     # background estimate locks onto the pieces and inverts the reading
     # (at high confidence, on monochrome styles especially). The top-row
-    # median estimator recovers the board exactly — a stack in row 0 is
-    # game over, so the top row is background whatever the fill level.
+    # median estimator recovers the board exactly, because rows 0-2 are
+    # empty: the median is taken over 10 true background cells, whatever
+    # the fill level below. (A stack CAN legally reach row 0 — that case
+    # is capped, see test_top_row_stack_never_wrong_above_gate.)
     grid = near_top_out_grid()
     image = render_board(grid, style, cell_size=20)
     occupancy, confidence = classify_grid(image)
@@ -228,13 +231,109 @@ def test_near_top_out_recovered(style) -> None:  # type: ignore[no-untyped-def]
 def test_spawn_in_top_row_recovered(style) -> None:  # type: ignore[no-untyped-def]
     # An I-piece lying across row 0 contaminates 4 of the 10 top-row
     # cells the background estimator samples; the per-channel median
-    # still lands on the 6 background cells.
+    # still lands on the 6 background cells and the occupancy is exact.
+    # The confidence is nonetheless capped to 0.0: from a single frame
+    # the classifier cannot tell this benign case from a 6-column stack
+    # reaching row 0, where the same estimator inverts the whole board —
+    # so a self-estimated reading with occupied top-row cells is never
+    # vouched for. With a background hint the same frame reads at full
+    # confidence.
     grid = np.zeros((20, 10), dtype=bool)
     grid[0, 3:7] = True  # I across the top row
     grid[19, :] = [True] * 6 + [False] * 4  # some stack far below
     image = render_board(grid, style, cell_size=18)
-    occupancy, _ = classify_grid(image)
+    occupancy, confidence = classify_grid(image)
     np.testing.assert_array_equal(occupancy, grid)
+    assert confidence == 0.0
+    occupancy, confidence = classify_grid(image, background=style.background)
+    np.testing.assert_array_equal(occupancy, grid)
+    assert confidence >= CoachConfig().min_confidence
+
+
+def side_stack_grid() -> np.ndarray:
+    """Side columns stacked to visible row 0; spawn columns clear: legal."""
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[:, 0:3] = True
+    grid[:, 7:10] = True
+    return grid
+
+
+def garbage_grid(well: int = 6) -> np.ndarray:
+    """Versus-mode garbage (9/10 filled) pushed up to the top row: legal."""
+    grid = np.ones((20, 10), dtype=bool)
+    grid[:, well] = False
+    return grid
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_top_row_stack_never_wrong_above_gate(style) -> None:  # type: ignore[no-untyped-def]
+    # A stack legally reaching visible row 0 leaves the top row majority
+    # non-background, so the top-row median locks onto the piece colors
+    # and the WHOLE board inverts — before the strict cap, at confidence
+    # 0.95 on monochrome styles: committable garbage. The invariant:
+    # never a wrong reading above the gate (availability may degrade,
+    # correctness may not).
+    gate = CoachConfig().min_confidence
+    for grid in (side_stack_grid(), garbage_grid()):
+        image = render_board(grid, style, cell_size=20)
+        occupancy, confidence = classify_grid(image)
+        assert bool(np.array_equal(occupancy, grid)) or confidence < gate, (
+            f"wrong reading above the gate: {style.name} conf={confidence:.3f}"
+        )
+
+
+def test_growth_into_top_row_never_flips_polarity() -> None:
+    # The adjacent-frame failure the cap exists for (gray-flat, worst
+    # case: monochrome pieces): as side columns grow into row 0, the
+    # pre-cap pipeline read 4 filled top-row cells exactly @0.95, then 5
+    # rejected @0.0, then 6 INVERTED @0.95 — a polarity flip between
+    # adjacent frames that sails through any confidence gate. Every
+    # contaminated frame must now be exact or below the gate.
+    style = STYLES[1]
+    gate = CoachConfig().min_confidence
+    for k in range(9):
+        grid = np.zeros((20, 10), dtype=bool)
+        grid[:, 0:k] = True
+        grid[19, :] = True
+        image = render_board(grid, style, cell_size=20)
+        occupancy, confidence = classify_grid(image)
+        assert bool(np.array_equal(occupancy, grid)) or confidence < gate, (
+            f"wrong reading above the gate at k={k}: conf={confidence:.3f}"
+        )
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_background_hint_reads_top_row_stacks_exactly(style) -> None:  # type: ignore[no-untyped-def]
+    # With the true background supplied (a cross-frame memory), polarity
+    # is anchored by the hint instead of the contaminated top row: the
+    # same row-0-stacked boards read EXACTLY at solid confidence, on
+    # every style. The paper-white garbage case additionally pins the
+    # MIN_SPREAD re-split: with only 20 background cells, plain Otsu
+    # splits lavender (the near-background piece color) from the far
+    # piece colors and misreads 26 cells at gate-passing confidence.
+    gate = CoachConfig().min_confidence
+    for grid in (side_stack_grid(), garbage_grid(), near_top_out_grid()):
+        image = render_board(grid, style, cell_size=20)
+        occupancy, confidence = classify_grid(image, background=style.background)
+        np.testing.assert_array_equal(occupancy, grid)
+        assert confidence >= gate
+
+
+def test_uniform_frame_against_remembered_background() -> None:
+    # Grid-level half of the dark-theme overlay fix: with a remembered
+    # DARK background, a solid BRIGHT frame cannot be the empty board —
+    # it is uniform-far (all-occupied @0.0, gated), not empty @0.5. A
+    # solid frame AT the remembered background is a true wipe and stays
+    # readable as empty.
+    dark = (10, 10, 14)
+    flash = np.full((200, 100, 3), 245, dtype=np.uint8)
+    occupancy, confidence = classify_grid(flash, background=dark)
+    assert occupancy.all()
+    assert confidence == 0.0
+    wipe = np.full((200, 100, 3), 12, dtype=np.uint8)
+    occupancy, confidence = classify_grid(wipe, background=dark)
+    assert not occupancy.any()
+    assert confidence >= CoachConfig().min_confidence
 
 
 def test_estimator_disagreement_reads_filled_at_zero_confidence() -> None:
@@ -289,6 +388,99 @@ def test_random_boards_match_or_reject() -> None:
         assert bool(np.array_equal(occupancy, grid)) or confidence < gate, (
             f"garbage above the gate: style={style.name} seed={i} conf={confidence:.3f}"
         )
+
+
+class TestGridClassifier:
+    """The cross-frame background memory and its anchoring protocol."""
+
+    GATE = CoachConfig().min_confidence
+
+    @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+    def test_memory_reads_top_row_stacks_exactly(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The stream every real session produces: the empty board, a few
+        # normal frames, then the stack legally reaching row 0. Where the
+        # memoryless path must refuse (or, pre-cap, INVERTED the board at
+        # confidence 0.95), the anchored classifier reads every frame
+        # exactly at gate-passing confidence.
+        classifier = GridClassifier()
+        empty = np.zeros((20, 10), dtype=bool)
+        occupancy, confidence = classifier.classify(render_board(empty, style, cell_size=20))
+        assert not occupancy.any() and confidence >= self.GATE
+        low = np.zeros((20, 10), dtype=bool)
+        low[17:, 0:5] = True
+        occupancy, confidence = classifier.classify(render_board(low, style, cell_size=20))
+        np.testing.assert_array_equal(occupancy, low)
+        assert confidence >= self.GATE
+        assert classifier.confirmed
+        for grid in (side_stack_grid(), garbage_grid(), near_top_out_grid()):
+            occupancy, confidence = classifier.classify(render_board(grid, style, cell_size=20))
+            np.testing.assert_array_equal(occupancy, grid)
+            assert confidence >= self.GATE
+
+    def test_bootstrap_keeps_the_strict_cap(self) -> None:
+        # With no memory the classifier is exactly classify_grid: a
+        # row-0-contaminated first frame is never vouched for, and a
+        # rejected frame must not anchor anything.
+        classifier = GridClassifier()
+        image = render_board(side_stack_grid(), STYLES[1], cell_size=20)
+        _, confidence = classifier.classify(image)
+        assert confidence < self.GATE
+        assert classifier.background is None
+
+    def test_confirmed_memory_gates_bright_overlay_forever(self) -> None:
+        # Issue-2 core: after real dark-theme frames confirmed the
+        # memory, a solid bright frame is uniform-far (all-occupied
+        # @0.0) on every one of any number of frames — never the
+        # empty-board @0.5 that a memoryless read would produce — and
+        # the memory itself is untouched.
+        classifier = GridClassifier()
+        grid = np.zeros((20, 10), dtype=bool)
+        grid[18:, 0:4] = True
+        image = render_board(grid, STYLES[0], cell_size=20)
+        classifier.classify(image)
+        assert classifier.confirmed
+        anchored = classifier.background
+        flash = np.full((400, 200, 3), 245, dtype=np.uint8)
+        for _ in range(10):
+            occupancy, confidence = classifier.classify(flash)
+            assert occupancy.all()
+            assert confidence == 0.0
+        np.testing.assert_array_equal(classifier.background, anchored)
+        # The board frame after the overlay reads as before: no re-sync.
+        occupancy, confidence = classifier.classify(image)
+        np.testing.assert_array_equal(occupancy, grid)
+        assert confidence >= self.GATE
+
+    def test_true_wipe_still_reads_empty_under_memory(self) -> None:
+        # The reason uniform-near survives: a wipe to the board's own
+        # background color must keep reaching the tracker.
+        classifier = GridClassifier()
+        grid = np.zeros((20, 10), dtype=bool)
+        grid[18:, 0:4] = True
+        classifier.classify(render_board(grid, STYLES[0], cell_size=20))
+        empty = render_board(np.zeros((20, 10), dtype=bool), STYLES[0], cell_size=20)
+        occupancy, confidence = classifier.classify(empty)
+        assert not occupancy.any()
+        assert confidence >= self.GATE
+
+    def test_provisional_anchor_recovers_from_pause_panel(self) -> None:
+        # Session started while a solid bright panel covers a dark-theme
+        # board: the panel reads as a (light-theme) empty board and
+        # anchors only PROVISIONALLY. The first real frame rejects under
+        # that anchor, re-bootstraps, and confirms on the true
+        # background — the wrong provisional anchor cannot wedge the
+        # session.
+        classifier = GridClassifier()
+        panel = np.full((400, 200, 3), 235, dtype=np.uint8)
+        occupancy, confidence = classifier.classify(panel)
+        assert not occupancy.any() and confidence >= self.GATE
+        assert classifier.background is not None and not classifier.confirmed
+        grid = np.zeros((20, 10), dtype=bool)
+        grid[18:, 0:4] = True
+        occupancy, confidence = classifier.classify(render_board(grid, STYLES[0], cell_size=20))
+        np.testing.assert_array_equal(occupancy, grid)
+        assert confidence >= self.GATE
+        assert classifier.confirmed
 
 
 def test_confidence_drops_with_ambiguity() -> None:

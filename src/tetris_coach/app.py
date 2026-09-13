@@ -28,7 +28,7 @@ from numpy.typing import NDArray
 from .capture.screen import FrameSource, Rect
 from .core.board import Board
 from .solver.search import Move, best_move
-from .vision.grid import classify_grid
+from .vision.grid import GridClassifier
 from .vision.pieces_vision import FallingPiece, identify_next
 from .vision.state import GameEvent, GameStateTracker, Snapshot
 
@@ -87,6 +87,12 @@ class CoachEngine:
     def __init__(self, config: CoachConfig | None = None) -> None:
         self.config = config or CoachConfig()
         self.tracker = GameStateTracker(confirm_frames=2)
+        # Stateful board classifier: its background memory keeps boards
+        # readable when the stack legally reaches the visible top row
+        # (where the per-frame top-row estimate inverts) and gates solid
+        # overlays whose color is not the board's background (a bright
+        # pause panel on a dark theme must never read as a board wipe).
+        self.classifier = GridClassifier(min_confidence=self.config.min_confidence)
         self.current_hint: Move | None = None
         self._predicted_board: Board | None = None
         self._precomputed: Move | None = None
@@ -109,7 +115,7 @@ class CoachEngine:
         next_image: np.ndarray | None,
     ) -> Move | None:
         """Digest one captured frame pair; return the hint to display."""
-        occupancy, confidence = classify_grid(board_image)
+        occupancy, confidence = self.classifier.classify(board_image)
         rejected = confidence < self.config.min_confidence
         if self.config.debug:
             # Always-on compact status so a silently rejected or

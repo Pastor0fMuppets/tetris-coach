@@ -161,6 +161,12 @@ def test_engine_soak_self_play() -> None:
 
     rng = random.Random(7)
     board = Board()
+    # The pre-game empty board, as every real session sees it before the
+    # first spawn. It anchors the classifier's background memory, so the
+    # first spawn — which touches row 0, where a memoryless reading is
+    # never vouched for — is read at full confidence like every later one.
+    process(board.rows, None)
+
     current = rng.choice(PIECES)
     upcoming = rng.choice(PIECES)
     placed = 0
