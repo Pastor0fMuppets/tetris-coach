@@ -335,56 +335,6 @@ def explain_grid(
     return Explanation(FrameKind.UNEXPLAINED, stack_rows, None)
 
 
-def split_grid(
-    grid: NDArray[np.bool_],
-) -> tuple[NDArray[np.bool_], FallingPiece | None]:
-    """Separate the stack from the falling piece in a full occupancy grid.
-
-    Deprecated single-frame heuristic (superseded by :func:`explain_grid`).
-    The falling piece is a 4-cell connected component that does not touch
-    the bottom row and matches a tetromino shape; everything else (including
-    floating debris left by clear animations) is treated as stack. When
-    several components qualify, the topmost is taken as the falling piece.
-    """
-    rows = grid.shape[0]
-    occupied = [(int(r), int(c)) for r, c in zip(*np.nonzero(grid), strict=True)]
-    components = _connected_components(occupied)
-
-    candidates: list[tuple[int, set[Cell], tuple[str, int]]] = []
-    for component in components:
-        if len(component) != 4:
-            continue
-        if any(r == rows - 1 for r, _ in component):
-            continue  # touches the floor: part of the stack
-        matched = match_cells(tuple(component))
-        if matched is None:
-            continue
-        top = min(r for r, _ in component)
-        candidates.append((top, component, matched))
-
-    if not candidates:
-        return grid.copy(), None
-
-    candidates.sort(key=lambda item: item[0])
-    top, component, (piece, rotation_index) = candidates[0]
-    stack = grid.copy()
-    for r, c in component:
-        stack[r, c] = False
-    falling = FallingPiece(
-        piece=piece,
-        rotation_index=rotation_index,
-        row=top,
-        col=min(c for _, c in component),
-    )
-    return stack, falling
-
-
-def identify_falling(grid: NDArray[np.bool_]) -> FallingPiece | None:
-    """Recognize the falling piece in a full occupancy grid (or ``None``)."""
-    _, falling = split_grid(grid)
-    return falling
-
-
 def identify_next(image: NDArray[np.uint8]) -> str | None:
     """Recognize the piece shown in a next-piece preview image.
 
