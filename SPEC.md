@@ -38,13 +38,24 @@ vision/
   grid.py         # Given BGR image of board region + (rows, cols): per-cell
                   # occupancy via brightness/saturation threshold (Otsu or adaptive
                   # vs. background sample). Returns 20×10 bool array + confidence.
-  pieces_vision.py# Identify falling piece: cells in top rows not connected to the
-                  # stack; match against tetromino shapes (any rotation).
+  pieces_vision.py# explain_grid: diff the observed board against the tracker's
+                  # committed stack memory and classify the frame (QUIET, FALLING,
+                  # LOCKED, UNEXPLAINED). The falling piece is the added-cell diff
+                  # matched against tetromino shapes — never guessed from a single
+                  # frame — so lock delay, floor contact, and post-clear debris
+                  # cannot confuse it. Locks are verified structurally: revealed by
+                  # the next spawn, or a line-clear placement (tiered: last observed
+                  # position, gravity drop from it, any clearing gravity drop)
+                  # reproducing the observation exactly.
                   # Next-piece region: threshold, crop to bounding box, normalize to
                   # cell grid, match shape signature. Color is a hint, not required.
-  state.py        # GameState tracker: debounce (require 2 consistent frames after a
-                  # change, handles line-clear animations), detect piece lock,
-                  # detect new spawn, detect board reset / game over.
+  state.py        # GameState tracker: keeps the committed stack as the one
+                  # authoritative memory (never None), feeds explain_grid, and
+                  # debounces (2 consistent frames) before committing. UNEXPLAINED
+                  # frames touch nothing (line-clear animations, torn frames);
+                  # PIECE_LOCKED fires when a lock is structurally verified, not at
+                  # touchdown; BOARD_RESET only after several consecutive identical
+                  # unexplainable frames (new game, garbage, mid-game attach).
 capture/
   screen.py       # mss-based capture of a screen rect at native (Retina) scale;
                   # handles logical-vs-pixel coordinate scaling. Protocol/interface
