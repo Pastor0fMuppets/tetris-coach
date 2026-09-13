@@ -16,7 +16,7 @@ import sys
 import time
 
 from .capture.screen import Rect
-from .core.board import HEIGHT, WIDTH, Board
+from .core.board import WIDTH, Board
 from .core.pieces import PIECES
 from .region_select import MIN_BOARD_SIZE, MIN_PREVIEW_SIZE
 from .solver.search import Move, best_move
@@ -36,18 +36,15 @@ def _rect_error(rect: Rect, min_size: tuple[int, int], what: str) -> str | None:
 
 
 def _render_demo_board(board: Board, move: Move | None) -> str:
+    """Widen ``Board.__str__`` (the one grid renderer) to 2-char cells,
+    with the hinted placement overlaid as ``[]``."""
     hint_cells = set(move.cells) if move is not None else set()
     lines = []
-    for r in range(HEIGHT):
-        row = board.rows[r]
-        cells = []
-        for c in range(WIDTH):
-            if (r, c) in hint_cells:
-                cells.append("[]")
-            elif row >> c & 1:
-                cells.append("##")
-            else:
-                cells.append(" .")
+    for r, text_row in enumerate(str(board).splitlines()):
+        cells = [
+            "[]" if (r, c) in hint_cells else "##" if ch == "#" else " ."
+            for c, ch in enumerate(text_row)
+        ]
         lines.append("|" + "".join(cells) + "|")
     lines.append("+" + "-" * (2 * WIDTH) + "+")
     return "\n".join(lines)
