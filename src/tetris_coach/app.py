@@ -26,7 +26,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .capture.screen import FrameSource, Rect
-from .core.board import DEFAULT_HEIGHT, WIDTH, Board
+from .core.board import DEFAULT_HEIGHT, FULL_ROW, WIDTH, Board
 from .solver.search import Move, best_move
 from .vision.grid import GridClassifier
 from .vision.pieces_vision import FallingPiece, identify_next
@@ -94,8 +94,16 @@ def compute_overlap_mask(
     the board (pieces spawn and move through the top rows). The cells under
     that box therefore show the NEXT piece, not the board — a second
     tetromino's worth of added cells every frame, which turns the frame
-    UNEXPLAINED and eventually trips a spurious BOARD_RESET. This returns
-    the ``(row, col)`` cells to force empty before the tracker sees them.
+    UNEXPLAINED and eventually trips a spurious BOARD_RESET.
+
+    This returns the ``(row, col)`` cells the capture cannot observe. They
+    are *unknown*, NOT empty — vision has no evidence about the board
+    there, and asserting emptiness is its own bug (a piece resting across
+    the boundary reads as a broken tetromino; a stack that grows into the
+    corner reads as free space). Everything downstream treats them as
+    unknown: see :class:`~tetris_coach.vision.state.GameStateTracker` for
+    the belief the committed stack carries, and :meth:`CoachEngine._solver_board`
+    for what the solver is handed.
 
     Geometry is done in board-relative fractions so it is Retina-agnostic
     (the capture may be scaled; only ratios matter): the next box is
@@ -139,19 +147,23 @@ class CoachEngine:
     def __init__(
         self,
         config: CoachConfig | None = None,
-        masked_cells: frozenset[tuple[int, int]] | None = None,
+        unobservable_cells: frozenset[tuple[int, int]] | None = None,
     ) -> None:
         self.config = config or CoachConfig()
         # Board cells the next-piece preview floats over (see
-        # compute_overlap_mask): forced empty before the tracker sees them,
-        # because they show the NEXT piece, not the board. Empty by default,
-        # so a headless engine and the common non-overlapping next box are
-        # unchanged.
-        self._masked_cells: frozenset[tuple[int, int]] = masked_cells or frozenset()
+        # compute_overlap_mask): the capture reads the NEXT piece there, not
+        # the board, so their captured value is discarded and the tracker is
+        # told they are unknown. Empty by default, so a headless engine and
+        # the common non-overlapping next box are unchanged.
+        self._unobservable_cells: frozenset[tuple[int, int]] = unobservable_cells or frozenset()
         # The one place config.rows fans out to the stateful components;
         # both hold board-shaped state before the first frame exists, so
         # their row count cannot come from data.
-        self.tracker = GameStateTracker(confirm_frames=2, rows=self.config.rows)
+        self.tracker = GameStateTracker(
+            confirm_frames=2,
+            rows=self.config.rows,
+            unobservable_cells=self._unobservable_cells,
+        )
         # Stateful board classifier: its background memory keeps boards
         # readable when the stack legally reaches the visible top row
         # (where the per-frame top-row estimate inverts) and gates solid
@@ -204,10 +216,11 @@ class CoachEngine:
                 )
         if rejected:
             return self.current_hint  # keep showing the last good hint
-        # Force the preview-overlap cells empty: confidence above was judged
-        # on the full grid, but the tracker (and the debug view below) must
-        # see only true board cells there, not the NEXT preview.
-        occupancy = self._masked(occupancy)
+        # Drop what the capture read under the preview box: confidence above
+        # was judged on the full grid, but neither the tracker nor the debug
+        # view below may take the NEXT piece for board content. The tracker
+        # knows those cells are unknown rather than empty (unobservable_cells).
+        occupancy = self._blanked(occupancy)
         next_piece = self._identify_next_cached(next_image)
 
         previous = self.tracker.committed
@@ -224,7 +237,7 @@ class CoachEngine:
             self.current_hint = None
 
         if GameEvent.PIECE_LOCKED in events or GameEvent.PIECE_SPAWNED in events:
-            board = Board(committed.stack_rows)
+            board = self._solver_board(committed.stack_rows)
             piece = committed.falling_piece
             if piece is None:
                 # Lock gap (piece locked, next spawn not yet visible):
@@ -261,7 +274,7 @@ class CoachEngine:
         ):
             # Quiet frame: upgrade the instant 1-ply hint to the full 2-ply
             # answer now that the upcoming piece is known.
-            board = Board(committed.stack_rows)
+            board = self._solver_board(committed.stack_rows)
             refined = best_move(board, self.current_hint.piece, committed.next_piece)
             if refined is not None:
                 self.current_hint = refined
@@ -269,21 +282,53 @@ class CoachEngine:
             self._precompute_next(committed.next_piece)
         return self.current_hint
 
-    def _masked(self, occupancy: NDArray[np.bool_]) -> NDArray[np.bool_]:
-        """Occupancy with the preview-overlap cells forced empty.
+    def _blanked(self, occupancy: NDArray[np.bool_]) -> NDArray[np.bool_]:
+        """Occupancy with the unobservable cells cleared.
 
-        Returns a copy when any cell is masked so a cached classifier
+        Clearing is not a claim that those cells are empty — it discards a
+        reading that is about the game's UI, not the board. What they
+        actually hold is carried as a belief by the tracker, which is told
+        which cells they are.
+
+        Returns a copy when any cell is cleared so a cached classifier
         output is never mutated in place; the array is returned unchanged
-        (no copy) when there is nothing to mask.
+        (no copy) when there is nothing to clear.
         """
-        if not self._masked_cells:
+        if not self._unobservable_cells:
             return occupancy
-        masked = occupancy.copy()
-        rows, cols = masked.shape
-        for r, c in self._masked_cells:
+        blanked = occupancy.copy()
+        rows, cols = blanked.shape
+        for r, c in self._unobservable_cells:
             if 0 <= r < rows and 0 <= c < cols:
-                masked[r, c] = False
-        return masked
+                blanked[r, c] = False
+        return blanked
+
+    def _solver_board(self, stack_rows: tuple[int, ...]) -> Board:
+        """The committed stack as the solver should see it.
+
+        For an unobservable cell the committed stack holds a belief, and
+        the way a wrong belief hurts is a hint planned INTO a cell the
+        coach cannot see — worse than useless, since the overlay would draw
+        it under the very panel that hides the board. A covered cell
+        resting directly on the stack (or on the floor) is exactly where
+        the stack plausibly continues up into the covered region, so the
+        solver is handed those filled and keeps out.
+
+        Covered cells with air under them are handed over as believed.
+        Filling every covered cell instead would permanently fill the top
+        rows of the columns under the panel — and a column whose top row is
+        filled is one :meth:`Board.drop` rejects outright, which would cost
+        the user those columns for the entire session, in every board state,
+        to guard a case that only arises near top-out.
+        """
+        unknown = self.tracker.unknown_rows
+        if not any(unknown):
+            return Board(stack_rows)
+        rows = list(stack_rows)
+        for r in range(len(rows) - 1, -1, -1):
+            support = rows[r + 1] if r + 1 < len(rows) else FULL_ROW  # the floor supports
+            rows[r] |= unknown[r] & support
+        return Board(tuple(rows))
 
     def _identify_next_cached(self, next_image: np.ndarray | None) -> str | None:
         """identify_next, skipped when the preview pixels did not change."""
@@ -425,9 +470,10 @@ def run(
 
     config = config or CoachConfig()
     # The next preview may float over the top corner of the selected board
-    # region; mask those cells once (the rects are fixed for the session).
-    masked_cells = compute_overlap_mask(board_rect, next_rect, config.rows)
-    engine = CoachEngine(config, masked_cells=masked_cells)
+    # region; name those unobservable cells once (the rects are fixed for
+    # the session).
+    unobservable_cells = compute_overlap_mask(board_rect, next_rect, config.rows)
+    engine = CoachEngine(config, unobservable_cells=unobservable_cells)
     frame_source: FrameSource = source if source is not None else ScreenCapture()
     worker = FrameWorker(engine, frame_source, board_rect, next_rect)
 
