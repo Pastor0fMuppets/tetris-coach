@@ -13,9 +13,10 @@ import random
 import numpy as np
 import pytest
 
-from tetris_coach.core.board import FULL_ROW, HEIGHT, Board
-from tetris_coach.core.pieces import PIECES
+from tetris_coach.core.board import FULL_ROW, HEIGHT, WIDTH, Board
+from tetris_coach.core.pieces import PIECES, ROTATIONS
 from tetris_coach.solver.search import best_move
+from tetris_coach.vision.pieces_vision import FrameKind
 from tetris_coach.vision.state import GameEvent, GameStateTracker
 
 from .boards import Cell, grid_of, merge, piece_cells
@@ -139,7 +140,6 @@ def test_tracker_soak_self_play(rows: int) -> None:
 
 def test_engine_soak_self_play() -> None:
     from tetris_coach.app import CoachEngine
-    from tetris_coach.core.pieces import ROTATIONS
 
     style = STYLES[2]
     engine = CoachEngine()
@@ -212,3 +212,113 @@ def test_engine_soak_self_play() -> None:
 
     assert events_log.count(GameEvent.PIECE_LOCKED) == placed
     assert GameEvent.BOARD_RESET not in events_log
+
+
+# The ROAS Stacker geometry on a 12-row board: the NEXT preview covers the
+# top-right 2x2 corner, and draws a changing blob of its own in it.
+COVERED_CORNER = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+PREVIEW_BLOBS = (
+    [(0, 8), (0, 9)],
+    [(1, 8), (1, 9)],
+    [(0, 9), (1, 9)],
+    [(0, 8), (1, 8), (1, 9)],
+)
+
+
+def _visible(rows: tuple[int, ...], unknown: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(r & ~u for r, u in zip(rows, unknown, strict=True))
+
+
+def test_tracker_soak_under_a_covered_corner() -> None:
+    """A full self-play game whose top-right corner is unobservable and is
+    showing the NEXT piece. Every lock must still be verified, the visible
+    stack must never drift from ground truth, and — the regression that
+    started this — the board must never spuriously reset."""
+    rng = random.Random(20260913)
+    board = Board([0] * 12)
+    tracker = GameStateTracker(rows=12, unobservable_cells=COVERED_CORNER)
+    unknown = tracker.unknown_rows
+    locks = resets = unexplained = 0
+    frames = 0
+
+    def feed(rows: tuple[int, ...], nxt: str | None) -> None:
+        nonlocal locks, resets, unexplained, frames
+        # The preview draws its own, changing, blob over the corner.
+        contaminated = merge(rows, PREVIEW_BLOBS[frames % len(PREVIEW_BLOBS)])
+        frames += 1
+        events = tracker.update(grid_of(contaminated), nxt)
+        locks += events.count(GameEvent.PIECE_LOCKED)
+        resets += events.count(GameEvent.BOARD_RESET)
+        unexplained += tracker.last_kind is FrameKind.UNEXPLAINED
+
+    current, upcoming = rng.choice(PIECES), rng.choice(PIECES)
+    placed = 0
+    for _ in range(150):
+        move = best_move(board, current, upcoming)
+        assert move is not None, "solver topped out mid-soak"
+        spawn = _spawn_cells(current)
+        assert _disjoint(board.rows, spawn), "stack reached the spawn zone"
+        observed = merge(board.rows, spawn)
+        feed(observed, upcoming)
+        feed(observed, upcoming)
+        # Ground truth after every lock, on every cell anyone can see.
+        assert _visible(tracker.committed.stack_rows, unknown) == _visible(board.rows, unknown)
+        assert tracker.committed.falling_piece == current
+        for _ in range(rng.randint(1, 3)):  # lock-delay frames at rest
+            feed(merge(board.rows, list(move.cells)), upcoming)
+        board = move.board
+        current, upcoming = upcoming, rng.choice(PIECES)
+        placed += 1
+
+    assert placed == 150
+    assert locks == placed - 1  # the last lock awaits the next spawn
+    assert resets == 0
+    assert unexplained == 0
+
+
+def test_stacking_into_the_covered_corner_until_it_tops_out() -> None:
+    """The top-out boundary: every piece is stacked into the right-hand
+    columns until nothing more fits under the preview box. The covered cells
+    fill up unseen, so this is where believing them empty hurts — no frame
+    may go unexplained and no reset may fire on the way up."""
+    rng = random.Random(11)
+    board = Board([0] * 12)
+    tracker = GameStateTracker(rows=12, unobservable_cells=COVERED_CORNER)
+    unknown = tracker.unknown_rows
+    locks = resets = unexplained = 0
+
+    def feed(rows: tuple[int, ...], nxt: str | None) -> None:
+        nonlocal locks, resets, unexplained
+        events = tracker.update(grid_of(rows), nxt)
+        locks += events.count(GameEvent.PIECE_LOCKED)
+        resets += events.count(GameEvent.BOARD_RESET)
+        unexplained += tracker.last_kind is FrameKind.UNEXPLAINED
+
+    current, upcoming = "O", "L"
+    placed = 0
+    topped_out = False
+    for _ in range(12):
+        rotation = ROTATIONS[current][0]
+        col = min(8, WIDTH - rotation.width)  # always into the covered columns
+        dropped = board.drop(rotation, col)
+        if dropped is None:
+            topped_out = True  # nothing more fits under the box
+            break
+        spawn = _spawn_cells(current)
+        assert _disjoint(board.rows, spawn)
+        observed = merge(board.rows, spawn)
+        feed(observed, upcoming)
+        feed(observed, upcoming)
+        assert _visible(tracker.committed.stack_rows, unknown) == _visible(board.rows, unknown)
+        cells = [(dropped.landing_row + r, col + c) for r, c in rotation.cells]
+        for _ in range(rng.randint(1, 3)):
+            feed(merge(board.rows, cells), upcoming)
+        board = dropped.board
+        current, upcoming = upcoming, rng.choice(PIECES)
+        placed += 1
+
+    assert topped_out, "the corner never filled up: the test stopped proving anything"
+    assert placed >= 4
+    assert locks == placed - 1
+    assert resets == 0
+    assert unexplained == 0
