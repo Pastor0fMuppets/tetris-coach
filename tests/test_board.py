@@ -1,6 +1,6 @@
 import pytest
 
-from tetris_coach.core.board import FULL_ROW, HEIGHT, WIDTH, Board
+from tetris_coach.core.board import DEFAULT_HEIGHT, FULL_ROW, HEIGHT, WIDTH, Board
 from tetris_coach.core.pieces import ROTATIONS
 
 
@@ -47,9 +47,9 @@ class TestConstruction:
 
     def test_from_grid_validates_shape(self) -> None:
         with pytest.raises(ValueError):
-            Board.from_grid([[False] * WIDTH] * 19)
+            Board.from_grid([])  # no rows at all
         with pytest.raises(ValueError):
-            Board.from_grid([[False] * 9] * HEIGHT)
+            Board.from_grid([[False] * 9] * HEIGHT)  # width is fixed at 10
 
     def test_immutability(self) -> None:
         b = Board()
@@ -271,3 +271,84 @@ class TestFeatures:
         # Column 1 cells have the stack on the left but nothing on the right,
         # so they are not well cells.
         assert b.cumulative_wells() == 0
+
+
+class TestNonDefaultHeight:
+    """12-row boards: height flows from len(rows), never from a constant."""
+
+    ROWS = 12
+
+    def test_default_height_is_the_alias(self) -> None:
+        assert HEIGHT == DEFAULT_HEIGHT == 20
+        assert len(Board().rows) == DEFAULT_HEIGHT
+
+    def test_construction_and_heights(self) -> None:
+        b = Board([0] * self.ROWS)
+        assert len(b.rows) == self.ROWS
+        assert b.heights == (0,) * WIDTH
+        stacked = Board([1] + [0] * (self.ROWS - 1))  # col 0 filled at row 0
+        assert stacked.heights[0] == self.ROWS
+
+    def test_from_grid_derives_height(self) -> None:
+        grid = [[False] * WIDTH for _ in range(self.ROWS)]
+        grid[self.ROWS - 1][3] = True
+        b = Board.from_grid(grid)
+        assert len(b.rows) == self.ROWS
+        assert b.to_grid() == grid
+        assert b.heights[3] == 1
+
+    def test_drop_to_floor(self) -> None:
+        res = Board([0] * self.ROWS).drop(horizontal_i(), 0)
+        assert res is not None
+        assert res.landing_row == self.ROWS - 1
+        assert res.board.rows[self.ROWS - 1] == 0b1111
+        assert res.board.heights == (1, 1, 1, 1, 0, 0, 0, 0, 0, 0)
+
+    def test_drop_onto_stack_every_height(self) -> None:
+        # Stack a column to every height including landing at row 0; the
+        # cached heights must stay exact after each no-clear fast path.
+        b = Board([0] * self.ROWS)
+        for i in range(self.ROWS // 4):
+            res = b.drop(vertical_i(), 0)
+            assert res is not None
+            assert res.landing_row == self.ROWS - 4 * (i + 1)
+            b = res.board
+            assert b.heights[0] == 4 * (i + 1)
+            assert b.heights == Board(b.rows).heights  # cache == recompute
+        assert b.heights[0] == self.ROWS
+        assert b.drop(vertical_i(), 0) is None  # column is full: top-out
+
+    def test_top_out(self) -> None:
+        rows = [FULL_ROW ^ 1] * self.ROWS  # column 0 empty, rest full
+        b = Board(rows)
+        assert b.heights[1] == self.ROWS
+        assert b.drop(rot("O", 0), 0) is None
+        res = b.drop(vertical_i(), 0)
+        assert res is not None
+        assert res.lines_cleared == 4
+
+    def test_clear_preserves_row_count(self) -> None:
+        b = Board([0] * (self.ROWS - 1) + [FULL_ROW ^ 0b1111])
+        res = b.drop(horizontal_i(), 0)
+        assert res is not None
+        assert res.lines_cleared == 1
+        assert len(res.board.rows) == self.ROWS
+        assert res.board == Board([0] * self.ROWS)
+
+    def test_features_on_12_row_board(self) -> None:
+        b = Board([0] * self.ROWS)
+        assert b.hole_count() == 0
+        assert b.row_transitions() == 2 * self.ROWS
+        assert b.column_transitions() == WIDTH
+        assert b.cumulative_wells() == 0
+        # A depth-3 well between two towers, anchored to the 12-row floor.
+        tower = 0b101
+        wells = Board([0] * (self.ROWS - 3) + [tower] * 3)
+        assert wells.cumulative_wells() == 6  # 3 + 2 + 1
+        holes = Board([0] * (self.ROWS - 2) + [1, 0])  # covered empty cell
+        assert holes.hole_count() == 1
+        assert holes.column_transitions() == 2 + WIDTH  # col 0: in, out, floor
+
+    def test_rejects_empty_rows(self) -> None:
+        with pytest.raises(ValueError):
+            Board([])

@@ -1,8 +1,9 @@
-"""Bitboard: 20 rows x 10 columns, one int per row.
+"""Bitboard: 10 columns x a configurable number of rows (default 20), one int per row.
 
 Row 0 is the *top* of the board; bit ``c`` of a row represents column ``c``
 (column 0 on the left). The board is immutable: :meth:`Board.drop` returns a
-new board.
+new board. The height is carried by the data itself — every operation derives
+it from ``len(rows)`` — so boards of any height coexist without configuration.
 
 Feature helpers (holes, transitions, wells) follow Pierre Dellacherie's
 definitions as popularised by Colin Fahey:
@@ -26,7 +27,10 @@ from dataclasses import dataclass
 from .pieces import Rotation
 
 WIDTH = 10
-HEIGHT = 20
+DEFAULT_HEIGHT = 20
+# Back-compat alias: HEIGHT predates configurable-height boards. It is the
+# DEFAULT height, not THE height — derive from len(rows) instead.
+HEIGHT = DEFAULT_HEIGHT
 FULL_ROW = (1 << WIDTH) - 1
 
 _RIGHT_WALL = 1 << (WIDTH - 1)
@@ -52,6 +56,7 @@ _ROW_TRANSITIONS: tuple[int, ...] = _build_row_transition_table()
 
 
 def _compute_heights(rows: tuple[int, ...]) -> tuple[int, ...]:
+    h = len(rows)
     heights = [0] * WIDTH
     remaining = FULL_ROW
     for r, row in enumerate(rows):
@@ -59,7 +64,7 @@ def _compute_heights(rows: tuple[int, ...]) -> tuple[int, ...]:
         while newly_topped:
             bit = newly_topped & -newly_topped
             newly_topped ^= bit
-            heights[bit.bit_length() - 1] = HEIGHT - r
+            heights[bit.bit_length() - 1] = h - r
         remaining &= ~row
         if not remaining:
             break
@@ -77,7 +82,7 @@ class DropResult:
 
 
 class Board:
-    """Immutable 20x10 bitboard."""
+    """Immutable 10-wide bitboard; the row count is set by the data (default 20)."""
 
     __slots__ = ("heights", "rows")
 
@@ -97,9 +102,9 @@ class Board:
         ``_compute_heights(rows)``. External callers must not pass it — a
         board whose heights disagree with its rows breaks every drop.
         """
-        row_tuple = (0,) * HEIGHT if rows is None else tuple(rows)
-        if len(row_tuple) != HEIGHT:
-            raise ValueError(f"expected {HEIGHT} rows, got {len(row_tuple)}")
+        row_tuple = (0,) * DEFAULT_HEIGHT if rows is None else tuple(rows)
+        if not row_tuple:
+            raise ValueError("a board needs at least one row")
         object.__setattr__(self, "rows", row_tuple)
         object.__setattr__(
             self, "heights", _compute_heights(row_tuple) if _heights is None else _heights
@@ -122,9 +127,7 @@ class Board:
 
     @classmethod
     def from_grid(cls, grid: Sequence[Sequence[object]]) -> Board:
-        """Build from a 20x10 array of truthy values (row 0 = top)."""
-        if len(grid) != HEIGHT:
-            raise ValueError(f"expected {HEIGHT} rows, got {len(grid)}")
+        """Build from a rows x 10 array of truthy values (row 0 = top)."""
         rows = []
         for grid_row in grid:
             if len(grid_row) != WIDTH:
@@ -150,13 +153,14 @@ class Board:
         """
         if col < 0 or col + rotation.width > WIDTH:
             return None
+        h = len(self.rows)
         heights = self.heights
         bottom = rotation.bottom
-        # Row index of the highest filled cell of column c is HEIGHT - heights[c];
+        # Row index of the highest filled cell of column c is h - heights[c];
         # the piece's lowest cell in each column rests directly above it.
-        landing = HEIGHT  # will be reduced by the binding column
+        landing = h  # will be reduced by the binding column
         for j in range(rotation.width):
-            candidate = HEIGHT - heights[col + j] - bottom[j] - 1
+            candidate = h - heights[col + j] - bottom[j] - 1
             landing = min(landing, candidate)
         if landing < 0:
             return None  # piece would stick out the top
@@ -182,7 +186,7 @@ class Board:
             for j in range(rotation.width):
                 # The piece's top cell in every occupied column ends up above
                 # the previous stack top, so the new height is exact.
-                new_heights[col + j] = HEIGHT - (landing + rotation.top[j])
+                new_heights[col + j] = h - (landing + rotation.top[j])
             board = Board(tuple(rows), _heights=tuple(new_heights))
 
         return DropResult(
@@ -212,7 +216,7 @@ class Board:
         rows = self.rows
         transitions = rows[0].bit_count()  # area above the board is empty
         prev = rows[0]
-        for i in range(1, HEIGHT):
+        for i in range(1, len(rows)):
             row = rows[i]
             transitions += (prev ^ row).bit_count()
             prev = row
@@ -221,8 +225,9 @@ class Board:
 
     def cumulative_wells(self) -> int:
         rows = self.rows
+        h = len(rows)
         wells = 0
-        for r in range(HEIGHT):
+        for r in range(h):
             row = rows[r]
             well_mask = ~row & ((row << 1) | 1) & ((row >> 1) | _RIGHT_WALL) & FULL_ROW
             while well_mask:
@@ -230,7 +235,7 @@ class Board:
                 well_mask ^= bit
                 depth = 1
                 rr = r + 1
-                while rr < HEIGHT and not rows[rr] & bit:
+                while rr < h and not rows[rr] & bit:
                     depth += 1
                     rr += 1
                 wells += depth
