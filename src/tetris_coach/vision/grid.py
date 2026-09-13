@@ -13,7 +13,7 @@ The background estimate comes from one of two places: a caller-supplied
 ``background`` color (cross-frame memory), or, absent one, the
 per-channel median of the TOP ROW's cell colors (see
 :func:`cell_scores` for the gravity-prior argument and its limits). The
-200 cell scores are then split by Otsu's method into empty/occupied
+rows x cols cell scores are then split by Otsu's method into empty/occupied
 classes; distance-from-background makes the polarity fixed by
 construction (high score = occupied) — provided the estimate really is
 the background, which is exactly what the top-row prior cannot guarantee
@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
+
+from ..core.board import DEFAULT_HEIGHT
 
 # Uniformity floor on the sqrt-compressed distance-score scale: below this
 # spread there are no two classes for Otsu to separate (see classify_grid).
@@ -119,7 +121,7 @@ def _distance_scores(
 
 def cell_scores(
     image: NDArray[np.uint8],
-    rows: int = 20,
+    rows: int = DEFAULT_HEIGHT,
     cols: int = 10,
     margin: float = 0.25,
 ) -> NDArray[np.float32]:
@@ -183,7 +185,8 @@ def otsu_threshold_hist(values: NDArray[np.float32], bins: int = 256) -> float:
     Same threshold as :func:`otsu_threshold` to within one bin width, in
     O(n + bins) numpy instead of a per-sample Python loop — use it when
     ``values`` are thousands of pixels. :func:`otsu_threshold` remains the
-    exact path for small value sets (e.g. the 200 cell scores of a board).
+    exact path for small value sets (e.g. the rows x cols cell scores of a
+    board).
     """
     vals = np.asarray(values, dtype=np.float64).ravel()
     n = int(vals.size)
@@ -215,7 +218,7 @@ def otsu_threshold_hist(values: NDArray[np.float32], bins: int = 256) -> float:
 
 def classify_grid(
     image: NDArray[np.uint8],
-    rows: int = 20,
+    rows: int = DEFAULT_HEIGHT,
     cols: int = 10,
     background: NDArray[np.float64] | tuple[float, ...] | None = None,
 ) -> tuple[NDArray[np.bool_], float]:
@@ -357,7 +360,7 @@ class GridClassifier:
 
     def __init__(
         self,
-        rows: int = 20,
+        rows: int = DEFAULT_HEIGHT,
         cols: int = 10,
         min_confidence: float = _DEFAULT_MIN_CONFIDENCE,
     ) -> None:

@@ -495,3 +495,48 @@ def test_confidence_drops_with_ambiguity() -> None:
     ambiguous[r * 24 : (r + 1) * 24, c * 24 : (c + 1) * 24] = 102
     _, ambiguous_conf = classify_grid(ambiguous)
     assert ambiguous_conf < clean_conf
+
+
+def twelve_row_grid() -> np.ndarray:
+    """A mid-game 12-row board: stack at the bottom, piece near the top."""
+    grid = np.zeros((12, 10), dtype=bool)
+    for r, c in ((1, 4), (1, 5), (2, 3), (2, 4)):  # falling S
+        grid[r, c] = True
+    rows = [
+        "#.........",
+        "###..##..#",
+        "##.#######",
+    ]
+    for i, line in enumerate(rows):
+        r = 12 - len(rows) + i
+        for c, ch in enumerate(line):
+            if ch == "#":
+                grid[r, c] = True
+    return grid
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_classify_grid_rows_12(style) -> None:  # type: ignore[no-untyped-def]
+    grid = twelve_row_grid()
+    image = render_board(grid, style, cell_size=24)
+    occupancy, confidence = classify_grid(image, rows=12)
+    assert occupancy.shape == (12, 10)
+    np.testing.assert_array_equal(occupancy, grid)
+    assert confidence > 0.2
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_grid_classifier_rows_12(style) -> None:  # type: ignore[no-untyped-def]
+    # The classifier slices the image by its constructed row count; its
+    # background memory is a color vector, shape-free across heights.
+    classifier = GridClassifier(rows=12)
+    gate = CoachConfig().min_confidence
+    empty = np.zeros((12, 10), dtype=bool)
+    occupancy, confidence = classifier.classify(render_board(empty, style, cell_size=24))
+    assert occupancy.shape == (12, 10)
+    assert not occupancy.any() and confidence >= gate
+    grid = twelve_row_grid()
+    occupancy, confidence = classifier.classify(render_board(grid, style, cell_size=24))
+    np.testing.assert_array_equal(occupancy, grid)
+    assert confidence >= gate
+    assert classifier.confirmed
