@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..core.board import HEIGHT, DropResult
+from ..core.board import DropResult
 from ..core.pieces import Rotation
 
 
@@ -35,8 +35,13 @@ DELLACHERIE = Weights()
 
 
 def landing_height(result: DropResult, rotation: Rotation) -> float:
-    """Altitude of the piece's vertical midpoint, pre-clear (floor row = 0)."""
-    return HEIGHT - 1 - result.landing_row - (rotation.height - 1) / 2.0
+    """Altitude of the piece's vertical midpoint, pre-clear (floor row = 0).
+
+    The board height comes from the post-drop board's own row count, which
+    is valid because :meth:`Board.drop` (line clears included) preserves the
+    row count of the board it was called on.
+    """
+    return len(result.board.rows) - 1 - result.landing_row - (rotation.height - 1) / 2.0
 
 
 def evaluate_drop(result: DropResult, rotation: Rotation, weights: Weights = DELLACHERIE) -> float:

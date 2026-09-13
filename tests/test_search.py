@@ -115,6 +115,36 @@ def test_self_play_various_seeds() -> None:
         assert placed == 200, f"seed {seed} topped out after {placed} pieces"
 
 
+def test_best_move_on_12_row_board() -> None:
+    b = Board([0] * 11 + [FULL_ROW ^ 0b1111000000])
+    move = best_move(b, "I")
+    assert move is not None
+    assert move.lines_cleared == 1
+    assert move.board == Board([0] * 12)
+    # Placement cells stay inside the 12-row board.
+    for r, c in move.cells:
+        assert 0 <= r < 12
+        assert 0 <= c < WIDTH
+
+
+def test_self_play_survives_on_12_row_board() -> None:
+    rng = random.Random(20260913)
+    board = Board([0] * 12)
+    current = rng.choice(PIECES)
+    upcoming = rng.choice(PIECES)
+    placed = 0
+    while placed < 300:
+        move = best_move(board, current, next_piece=upcoming)
+        if move is None:
+            break
+        assert len(move.board.rows) == 12
+        board = move.board
+        placed += 1
+        current = upcoming
+        upcoming = rng.choice(PIECES)
+    assert placed == 300, f"topped out after {placed} pieces on 12 rows"
+
+
 class TestBenchmark:
     @staticmethod
     def _midgame_board() -> Board:

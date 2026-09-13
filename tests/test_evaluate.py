@@ -109,3 +109,28 @@ def test_landing_row_altitude_consistency() -> None:
     # Vertical I occupies rows 16-19; midpoint altitude (0+3)/2 = 1.5.
     assert res.landing_row == HEIGHT - 4
     assert landing_height(res, vertical) == 1.5
+
+
+def test_landing_height_on_12_row_board() -> None:
+    res = Board([0] * 12).drop(horizontal_i(), 0)
+    assert res is not None
+    # Floor of a 12-row board is still altitude 0: derived from the data.
+    assert landing_height(res, horizontal_i()) == 0.0
+    vertical = next(r for r in ROTATIONS["I"] if r.width == 1)
+    res = Board([0] * 12).drop(vertical, 5)
+    assert res is not None
+    assert res.landing_row == 12 - 4
+    assert landing_height(res, vertical) == 1.5
+
+
+def test_landing_height_valid_after_clearing_drop() -> None:
+    # landing_height reads len(result.board.rows); pin the invariant it
+    # relies on — a clearing drop preserves the board's row count.
+    from tetris_coach.core.board import FULL_ROW
+
+    b = Board([0] * 11 + [FULL_ROW ^ 0b1111])
+    res = b.drop(horizontal_i(), 0)
+    assert res is not None
+    assert res.lines_cleared == 1
+    assert len(res.board.rows) == 12
+    assert landing_height(res, horizontal_i()) == 0.0
