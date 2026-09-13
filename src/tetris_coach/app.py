@@ -26,7 +26,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .capture.screen import FrameSource, Rect
-from .core.board import Board
+from .core.board import DEFAULT_HEIGHT, Board
 from .solver.search import Move, best_move
 from .vision.grid import GridClassifier
 from .vision.pieces_vision import FallingPiece, identify_next
@@ -38,6 +38,10 @@ class CoachConfig:
     poll_rate: float = 15.0  # frames per second
     hint_color: str = "#00e5ff"
     min_confidence: float = 0.15
+    # Board height in rows (width is always 10). The single source the
+    # stateful components (classifier, tracker, overlay) are seeded from;
+    # everything downstream derives the height from its data.
+    rows: int = DEFAULT_HEIGHT
     debug: bool = False
     # Directory to save the first captured frames into as PNGs (debugging
     # aid for region/scaling problems); None disables dumping.
@@ -59,7 +63,7 @@ def render_debug_frame(
 ) -> str:
     """Terminal debug view of one committed frame: what vision sees.
 
-    The 20x10 grid is the raw observed occupancy; the falling piece and
+    The rows x 10 grid is the raw observed occupancy; the falling piece and
     next piece come from the tracker's committed view of the same frame.
     (A graphical debug window is deferred to the live phase; see SPEC.md.)
     """
@@ -86,13 +90,18 @@ class CoachEngine:
 
     def __init__(self, config: CoachConfig | None = None) -> None:
         self.config = config or CoachConfig()
-        self.tracker = GameStateTracker(confirm_frames=2)
+        # The one place config.rows fans out to the stateful components;
+        # both hold board-shaped state before the first frame exists, so
+        # their row count cannot come from data.
+        self.tracker = GameStateTracker(confirm_frames=2, rows=self.config.rows)
         # Stateful board classifier: its background memory keeps boards
         # readable when the stack legally reaches the visible top row
         # (where the per-frame top-row estimate inverts) and gates solid
         # overlays whose color is not the board's background (a bright
         # pause panel on a dark theme must never read as a board wipe).
-        self.classifier = GridClassifier(min_confidence=self.config.min_confidence)
+        self.classifier = GridClassifier(
+            rows=self.config.rows, min_confidence=self.config.min_confidence
+        )
         self.current_hint: Move | None = None
         self._predicted_board: Board | None = None
         self._precomputed: Move | None = None
@@ -131,7 +140,7 @@ class CoachEngine:
                 print(
                     f"[vision] frame {self._debug_frames}: confidence {confidence:.2f} "
                     f"(gate {gate} at {self.config.min_confidence}), "
-                    f"occupied {occupied}/200, last frame kind "
+                    f"occupied {occupied}/{occupancy.size}, last frame kind "
                     f"{kind.name if kind is not None else '-'}",
                     flush=True,
                 )

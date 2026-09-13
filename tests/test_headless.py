@@ -733,3 +733,74 @@ class TestBackgroundMemoryScenarios:
             engine.process_frame(panel, None)
         assert engine.tracker.committed.stack_rows == self._rows(stack)
         assert events_log == []
+
+
+class TestTwelveRowEngine:
+    """CoachEngine end to end on a 12-row board (CoachConfig(rows=12)):
+    spawn -> hint -> lock -> clear, driven by synthetic frames on a dark
+    and a light theme. config.rows is the one fan-out point; everything
+    downstream must derive the height from the frames."""
+
+    ROWS = 12
+    CELL = 20
+    EMPTY12: tuple[int, ...] = (0,) * 12
+
+    def _engine(self, **overrides):  # type: ignore[no-untyped-def]
+        from tetris_coach.app import CoachConfig, CoachEngine
+
+        return CoachEngine(CoachConfig(rows=self.ROWS, **overrides))
+
+    def _process(self, engine, style, rows, next_piece, times=1):  # type: ignore[no-untyped-def]
+        from tetris_coach.core.pieces import ROTATIONS
+
+        board_image = render_board(grid_of(rows), style, cell_size=self.CELL)
+        if next_piece is None:
+            next_image = None
+        else:
+            next_image = render_next_preview(ROTATIONS[next_piece][0].cells, style, cell_size=16)
+        hint = None
+        for _ in range(times):
+            hint = engine.process_frame(board_image, next_image)
+        return hint
+
+    @pytest.mark.parametrize(
+        "style",
+        [STYLES[2], STYLES[4]],
+        ids=lambda s: s.name,  # type: ignore[no-untyped-def]
+    )
+    def test_spawn_hint_lock_clear(self, style) -> None:  # type: ignore[no-untyped-def]
+        engine = self._engine()
+        # Anchor the background memory on the empty pre-game board.
+        assert self._process(engine, style, self.EMPTY12, None) is None
+        # Attach a 9/10 bottom row via the reset debounce.
+        stack = rows_of(bottom_lines("#########.", height=self.ROWS), height=self.ROWS)
+        self._process(engine, style, stack, "I", times=4)
+        assert engine.tracker.committed.stack_rows == stack
+        # The I spawns: a hint appears within the 2-frame debounce.
+        spawn = merge(stack, piece_cells("I", 1, 0, 9))
+        hint = self._process(engine, style, spawn, "J", times=2)
+        assert hint is not None
+        assert hint.piece == "I"
+        for r, c in hint.cells:
+            assert 0 <= r < self.ROWS
+        # The I comes to rest on the 12-row floor, completing the row.
+        resting = merge(stack, piece_cells("I", 1, self.ROWS - 4, 9))
+        assert self._process(engine, style, resting, "J") is hint
+        # Settled post-clear board plus the J spawn: lock + spawn commit.
+        s2 = rows_of(
+            [(self.ROWS - 3, 9), (self.ROWS - 2, 9), (self.ROWS - 1, 9)],
+            height=self.ROWS,
+        )
+        settled = merge(s2, piece_cells("J", 0, 0, 4))
+        hint2 = self._process(engine, style, settled, "O", times=2)
+        assert hint2 is not None
+        assert hint2.piece == "J"
+        assert engine.tracker.committed.stack_rows == s2
+        assert engine.tracker.committed.falling_piece == "J"
+
+    def test_debug_denominator_is_data_derived(self, capsys: pytest.CaptureFixture[str]) -> None:
+        engine = self._engine(debug=True)
+        self._process(engine, STYLES[2], self.EMPTY12, None)
+        out = capsys.readouterr().out
+        assert f"/{self.ROWS * 10}," in out
+        assert "/200," not in out
