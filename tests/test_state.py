@@ -139,6 +139,20 @@ class TestEvents:
         assert GameEvent.PIECE_LOCKED in events
         assert GameEvent.PIECE_SPAWNED in events
 
+    def test_lock_detected_without_observed_falling_piece(self) -> None:
+        # The piece spawned and locked entirely between committed frames:
+        # the stack simply grew by 4 cells on top of the old stack.
+        tracker = GameStateTracker()
+        before = stack_from("####......")
+        commit(tracker, before, None, "T")
+        after = stack_from(
+            "....##....",
+            "######....",
+        )
+        events = commit(tracker, after, None, "S")
+        assert GameEvent.PIECE_LOCKED in events
+        assert GameEvent.BOARD_RESET not in events
+
     def test_no_events_when_nothing_changes(self) -> None:
         tracker = GameStateTracker()
         stack = stack_from("#.........")

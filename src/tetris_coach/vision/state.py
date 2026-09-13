@@ -129,8 +129,16 @@ class GameStateTracker:
         stack_changed = new.stack_rows != old.stack_rows
         locked = False
         if stack_changed:
-            if old.falling_piece is not None and _is_lock_consistent(
-                old.stack_cells, new.stack_cells
+            # Pure +4 growth on top of the old stack is a lock even when the
+            # falling piece was never observed (e.g. it spawned and dropped
+            # between committed frames).
+            grew_by_piece = new.stack_cells == old.stack_cells + 4 and all(
+                (n & o) == o
+                for n, o in zip(new.stack_rows, old.stack_rows, strict=True)
+            )
+            if grew_by_piece or (
+                old.falling_piece is not None
+                and _is_lock_consistent(old.stack_cells, new.stack_cells)
             ):
                 locked = True
                 events.append(GameEvent.PIECE_LOCKED)
