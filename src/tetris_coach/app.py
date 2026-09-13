@@ -19,7 +19,7 @@ from .capture.screen import FrameSource, Rect
 from .core.board import Board
 from .solver.search import Move, best_move
 from .vision.grid import classify_grid
-from .vision.pieces_vision import identify_next, split_grid
+from .vision.pieces_vision import identify_next
 from .vision.state import GameEvent, GameStateTracker
 
 
@@ -57,13 +57,10 @@ class CoachEngine:
         occupancy, confidence = classify_grid(board_image)
         if confidence < self.config.min_confidence:
             return self.current_hint  # keep showing the last good hint
-        stack_grid, falling = split_grid(occupancy)
         next_piece = identify_next(next_image) if next_image is not None else None
 
-        events = self.tracker.update(stack_grid, falling, next_piece)
+        events = self.tracker.update(occupancy, next_piece)
         committed = self.tracker.committed
-        if committed is None:
-            return self.current_hint
 
         if GameEvent.BOARD_RESET in events:
             self._predicted_board = None
@@ -74,21 +71,32 @@ class CoachEngine:
             board = Board(committed.stack_rows)
             piece = committed.falling_piece
             if piece is None:
+                # Lock gap (piece locked, next spawn not yet visible):
+                # pre-solve the upcoming piece on the settled board so the
+                # spawn flips instantly through the validation guard below.
                 self.current_hint = None
                 self._hint_is_provisional = False
-            elif (
-                self._precomputed is not None
-                and self._predicted_board is not None
-                and board == self._predicted_board
-                and self._precomputed.piece == piece
-            ):
-                # Prediction held: flip to the precomputed hint instantly.
-                self.current_hint = self._precomputed
-                self._hint_is_provisional = True
+                self._predicted_board = None
+                self._precomputed = None
+                if committed.next_piece is not None:
+                    self._predicted_board = board
+                    self._precomputed = best_move(board, committed.next_piece)
             else:
-                self.current_hint = best_move(board, piece, committed.next_piece)
-                self._hint_is_provisional = False
-            self._precompute_next(committed.next_piece)
+                if (
+                    self._precomputed is not None
+                    and self._predicted_board is not None
+                    and board == self._predicted_board
+                    and self._precomputed.piece == piece
+                ):
+                    # Prediction held: flip to the precomputed hint instantly.
+                    self.current_hint = self._precomputed
+                    self._hint_is_provisional = True
+                else:
+                    self.current_hint = best_move(board, piece, committed.next_piece)
+                    # Provisional means "computed with less than full 2-ply
+                    # information": refine once the preview becomes readable.
+                    self._hint_is_provisional = committed.next_piece is None
+                self._precompute_next(committed.next_piece)
         elif (
             self._hint_is_provisional
             and self.current_hint is not None
