@@ -126,6 +126,42 @@ def otsu_threshold(values: NDArray[np.float32]) -> float:
     return float(best_split)
 
 
+def otsu_threshold_hist(values: NDArray[np.float32], bins: int = 256) -> float:
+    """Histogram-based Otsu threshold for pixel-scale inputs.
+
+    Same threshold as :func:`otsu_threshold` to within one bin width, in
+    O(n + bins) numpy instead of a per-sample Python loop — use it when
+    ``values`` are thousands of pixels. :func:`otsu_threshold` remains the
+    exact path for small value sets (e.g. the 200 cell scores of a board).
+    """
+    vals = np.asarray(values, dtype=np.float64).ravel()
+    n = int(vals.size)
+    if n < 2:
+        return float(vals[0]) if n else 0.5
+    lo = float(vals.min())
+    hi = float(vals.max())
+    if hi <= lo:
+        return lo
+    counts, edges = np.histogram(vals, bins=bins, range=(lo, hi))
+    weights = counts.astype(np.float64)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    # Split after bin i: class 0 = bins [0..i], class 1 = bins [i+1..].
+    w0 = np.cumsum(weights)[:-1]
+    w1 = float(n) - w0
+    csum = np.cumsum(weights * centers)
+    total = csum[-1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mu0 = csum[:-1] / w0
+        mu1 = (total - csum[:-1]) / w1
+        var = w0 * w1 * (mu0 - mu1) ** 2
+    var = np.where((w0 > 0) & (w1 > 0), var, -1.0)
+    # Well-separated classes leave a plateau of empty bins where the
+    # criterion is bit-identical; split in its middle, mirroring the exact
+    # variant's midpoint-of-the-gap threshold.
+    near = np.flatnonzero(var >= var.max())
+    return float(edges[int(near[0] + near[-1]) // 2 + 1])
+
+
 def classify_grid(
     image: NDArray[np.uint8],
     rows: int = 20,

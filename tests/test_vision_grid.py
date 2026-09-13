@@ -1,7 +1,12 @@
 import numpy as np
 import pytest
 
-from tetris_coach.vision.grid import cell_scores, classify_grid, otsu_threshold
+from tetris_coach.vision.grid import (
+    cell_scores,
+    classify_grid,
+    otsu_threshold,
+    otsu_threshold_hist,
+)
 
 from .synthetic import STYLES, render_board
 
@@ -109,6 +114,31 @@ def test_otsu_threshold_degenerate() -> None:
     assert otsu_threshold(np.array([0.3], dtype=np.float32)) == pytest.approx(0.3)
     # All-identical values must not crash.
     t = otsu_threshold(np.full(10, 0.4, dtype=np.float32))
+    assert t == pytest.approx(0.4)
+
+
+def test_otsu_threshold_hist_matches_exact_within_bin_width() -> None:
+    # Pixel-scale bimodal data: the histogram variant lands within one bin
+    # width of the exact per-sample split.
+    rng = np.random.default_rng(7)
+    values = np.concatenate(
+        [
+            rng.normal(0.08, 0.02, 4000).clip(0.0, 1.0),
+            rng.normal(0.85, 0.05, 1000).clip(0.0, 1.0),
+        ]
+    ).astype(np.float32)
+    exact = otsu_threshold(values)
+    hist = otsu_threshold_hist(values)
+    bin_width = (float(values.max()) - float(values.min())) / 256
+    assert abs(hist - exact) <= bin_width
+    assert 0.2 < hist < 0.8
+
+
+def test_otsu_threshold_hist_degenerate() -> None:
+    assert otsu_threshold_hist(np.array([], dtype=np.float32)) == 0.5
+    assert otsu_threshold_hist(np.array([0.3], dtype=np.float32)) == pytest.approx(0.3)
+    # All-identical values must not crash.
+    t = otsu_threshold_hist(np.full(500, 0.4, dtype=np.float32))
     assert t == pytest.approx(0.4)
 
 

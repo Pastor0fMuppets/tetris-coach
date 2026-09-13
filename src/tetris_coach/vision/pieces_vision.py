@@ -25,7 +25,7 @@ from numpy.typing import NDArray
 
 from ..core.board import FULL_ROW, HEIGHT, WIDTH, Board
 from ..core.pieces import PIECES, ROTATIONS
-from .grid import otsu_threshold, score_map
+from .grid import otsu_threshold_hist, score_map
 
 Cell = tuple[int, int]
 
@@ -346,7 +346,9 @@ def identify_next(image: NDArray[np.uint8]) -> str | None:
     flat = scores.ravel()
     if float(flat.max()) - float(flat.min()) < 0.15:
         return None  # empty preview box
-    mask = scores > otsu_threshold(flat.astype(np.float32))
+    # Histogram Otsu: the input is every pixel of the preview image, far
+    # too many for the exact small-N variant's per-sample loop.
+    mask = scores > otsu_threshold_hist(flat)
 
     ys, xs = np.nonzero(mask)
     if ys.size == 0:
