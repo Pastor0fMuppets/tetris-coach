@@ -178,9 +178,10 @@ class TestCoachEngine:
     def test_debug_view_prints_per_committed_frame(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # S2: --debug prints what vision sees, once per committed frame
-        # (never per raw frame): observed grid, falling piece id/pos, next
-        # piece, confidence, and the emitted events.
+        # S2: --debug prints the full "what vision sees" block once per
+        # committed frame (never per raw frame), plus a throttled one-line
+        # [vision] status on every frame whose gate/occupancy state changes
+        # so a never-committing stream is still diagnosable.
         from tetris_coach.app import CoachConfig, CoachEngine, render_debug_frame
         from tetris_coach.core.pieces import ROTATIONS
 
@@ -193,7 +194,10 @@ class TestCoachEngine:
         next_image = render_next_preview(ROTATIONS["I"][0].cells, style, cell_size=16)
 
         engine.process_frame(board_image, next_image)  # debounce: no commit
-        assert capsys.readouterr().out == ""
+        out = capsys.readouterr().out
+        assert "events:" not in out  # no committed-frame block yet
+        assert "[vision]" in out  # but the status line always reports
+        assert "gate ok" in out
         engine.process_frame(board_image, next_image)  # commit: one block
         out = capsys.readouterr().out
         assert out.count("events:") == 1
@@ -203,7 +207,8 @@ class TestCoachEngine:
         assert "confidence:" in out
         assert "....#....." in out  # observed grid, row 1
         assert "...###...." in out  # observed grid, row 2
-        # An identical quiet frame commits nothing and prints nothing.
+        # An identical quiet frame commits nothing, and its unchanged
+        # status is throttled away: no output at all.
         engine.process_frame(board_image, next_image)
         assert capsys.readouterr().out == ""
         # Absent falling piece / events render as placeholders.
