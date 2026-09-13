@@ -11,6 +11,8 @@ inside :func:`run`.
 
 from __future__ import annotations
 
+import sys
+import traceback
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,6 +31,12 @@ class CoachConfig:
     hint_color: str = "#00e5ff"
     min_confidence: float = 0.15
     debug: bool = False
+
+
+# The overlay loop exits after this many CONSECUTIVE failed ticks (~3 s at
+# the default poll rate): a persistently failing capture/vision path (e.g.
+# a bad region, a disconnected display) must not spin forever.
+MAX_CONSECUTIVE_TICK_FAILURES = 45
 
 
 class CoachEngine:
@@ -167,10 +175,34 @@ def run(
     window = OverlayWindow(board_rect, HintStyle(color=config.hint_color))
     window.show()
 
+    consecutive_failures = 0
+
     def tick() -> None:
-        board_image = frame_source.grab(board_rect)
-        next_image = frame_source.grab(next_rect) if next_rect is not None else None
-        hint = engine.process_frame(board_image, next_image)
+        nonlocal consecutive_failures
+        try:
+            board_image = frame_source.grab(board_rect)
+            next_image = frame_source.grab(next_rect) if next_rect is not None else None
+            hint = engine.process_frame(board_image, next_image)
+        except Exception:  # noqa: BLE001 - one bad frame must not kill the loop
+            consecutive_failures += 1
+            if consecutive_failures == 1:
+                # Log once per failure streak, never once per frame.
+                traceback.print_exc()
+                print(
+                    "tetris-coach: frame processing failed; skipping frames.",
+                    file=sys.stderr,
+                )
+            if consecutive_failures >= MAX_CONSECUTIVE_TICK_FAILURES:
+                print(
+                    f"tetris-coach: {consecutive_failures} consecutive frames "
+                    "failed; exiting. Check that the selected regions still "
+                    "cover the board and restart to re-select them.",
+                    file=sys.stderr,
+                )
+                timer.stop()
+                app.quit()
+            return
+        consecutive_failures = 0
         window.set_hint(hint)
 
     timer = QTimer()

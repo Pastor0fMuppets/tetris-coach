@@ -51,6 +51,19 @@ def test_run_demo_reports_top_out(capsys: pytest.CaptureFixture[str]) -> None:
     assert run_demo(pieces=0, seed=1, delay=0.0) == 0
 
 
+def test_region_size_validation_messages() -> None:
+    # F6: a click-without-drag (or any too-small selection) must be
+    # rejected with an explanation, not fed to the capture loop.
+    from tetris_coach.cli import _rect_error
+    from tetris_coach.region_select import MIN_BOARD_SIZE, MIN_PREVIEW_SIZE
+
+    assert _rect_error(Rect(0, 0, 120, 240), MIN_BOARD_SIZE, "Board") is None
+    message = _rect_error(Rect(10, 10, 1, 1), MIN_BOARD_SIZE, "Board")
+    assert message is not None
+    assert "1x1" in message and "40x80" in message
+    assert _rect_error(Rect(0, 0, 15, 40), MIN_PREVIEW_SIZE, "Next-piece") is not None
+
+
 def test_placement_cell_rects_geometry() -> None:
     from tetris_coach.core.board import Board
 

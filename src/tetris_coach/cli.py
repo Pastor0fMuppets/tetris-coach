@@ -15,9 +15,24 @@ import random
 import sys
 import time
 
+from .capture.screen import Rect
 from .core.board import HEIGHT, WIDTH, Board
 from .core.pieces import PIECES
+from .region_select import MIN_BOARD_SIZE, MIN_PREVIEW_SIZE
 from .solver.search import Move, best_move
+
+
+def _rect_error(rect: Rect, min_size: tuple[int, int], what: str) -> str | None:
+    """Explain why ``rect`` is unusable for ``what``, or ``None`` if fine."""
+    min_w, min_h = min_size
+    if rect.width < min_w or rect.height < min_h:
+        return (
+            f"{what} selection is {rect.width}x{rect.height} logical px; at "
+            f"least {min_w}x{min_h} is needed for vision to resolve it. "
+            "Run again and drag a rectangle over the full region "
+            "(a plain click selects nothing)."
+        )
+    return None
 
 
 def _render_demo_board(board: Board, move: Move | None) -> str:
@@ -95,11 +110,26 @@ def _run_overlay(args: argparse.Namespace) -> int:  # pragma: no cover - macOS o
         print(f"Failed to start GUI mode: {exc}", file=sys.stderr)
         return 1
     try:
-        board_rect = select_region("Drag a rectangle over the Tetris board (Esc to cancel)")
+        board_rect = select_region(
+            "Drag a rectangle over the Tetris board (Esc to cancel)",
+            min_size=MIN_BOARD_SIZE,
+        )
         if board_rect is None:
             print("Cancelled.", file=sys.stderr)
             return 1
-        next_rect = select_region("Drag a rectangle over the next-piece box (Esc to skip)")
+        error = _rect_error(board_rect, MIN_BOARD_SIZE, "Board")
+        if error is not None:
+            print(error, file=sys.stderr)
+            return 1
+        next_rect = select_region(
+            "Drag a rectangle over the next-piece box (Esc to skip)",
+            min_size=MIN_PREVIEW_SIZE,
+        )
+        if next_rect is not None:
+            error = _rect_error(next_rect, MIN_PREVIEW_SIZE, "Next-piece")
+            if error is not None:
+                print(error, file=sys.stderr)
+                return 1
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         print("On non-macOS hosts, try: python -m tetris_coach.cli --demo", file=sys.stderr)
