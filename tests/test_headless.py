@@ -175,6 +175,45 @@ class TestCoachEngine:
         engine.process_frame(board_image, None)
         assert calls == 2
 
+    def test_debug_view_prints_per_committed_frame(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # S2: --debug prints what vision sees, once per committed frame
+        # (never per raw frame): observed grid, falling piece id/pos, next
+        # piece, confidence, and the emitted events.
+        from tetris_coach.app import CoachConfig, CoachEngine, render_debug_frame
+        from tetris_coach.core.pieces import ROTATIONS
+
+        engine = CoachEngine(CoachConfig(debug=True))
+        grid = np.zeros((20, 10), dtype=bool)
+        for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):
+            grid[r, c] = True
+        style = STYLES[0]
+        board_image = render_board(grid, style, cell_size=16)
+        next_image = render_next_preview(ROTATIONS["I"][0].cells, style, cell_size=16)
+
+        engine.process_frame(board_image, next_image)  # debounce: no commit
+        assert capsys.readouterr().out == ""
+        engine.process_frame(board_image, next_image)  # commit: one block
+        out = capsys.readouterr().out
+        assert out.count("events:") == 1
+        assert "PIECE_SPAWNED" in out
+        assert "falling: T rot0 @ (row 1, col 3)" in out
+        assert "next: I" in out
+        assert "confidence:" in out
+        assert "....#....." in out  # observed grid, row 1
+        assert "...###...." in out  # observed grid, row 2
+        # An identical quiet frame commits nothing and prints nothing.
+        engine.process_frame(board_image, next_image)
+        assert capsys.readouterr().out == ""
+        # Absent falling piece / events render as placeholders.
+        text = render_debug_frame(
+            np.zeros((20, 10), dtype=bool), 0.42, engine.tracker.committed, None, []
+        )
+        assert "falling: -" in text
+        assert "events: -" in text
+        assert "confidence: 0.42" in text
+
     def test_engine_flips_to_precomputed_hint_on_lock(self) -> None:
         from tetris_coach.app import CoachEngine
         from tetris_coach.core.pieces import ROTATIONS

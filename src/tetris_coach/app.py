@@ -16,13 +16,14 @@ import traceback
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import NDArray
 
 from .capture.screen import FrameSource, Rect
 from .core.board import Board
 from .solver.search import Move, best_move
 from .vision.grid import classify_grid
-from .vision.pieces_vision import identify_next
-from .vision.state import GameEvent, GameStateTracker
+from .vision.pieces_vision import FallingPiece, identify_next
+from .vision.state import GameEvent, GameStateTracker, Snapshot
 
 
 @dataclass
@@ -37,6 +38,34 @@ class CoachConfig:
 # the default poll rate): a persistently failing capture/vision path (e.g.
 # a bad region, a disconnected display) must not spin forever.
 MAX_CONSECUTIVE_TICK_FAILURES = 45
+
+
+def render_debug_frame(
+    occupancy: NDArray[np.bool_],
+    confidence: float,
+    committed: Snapshot,
+    falling: FallingPiece | None,
+    events: list[GameEvent],
+) -> str:
+    """Terminal debug view of one committed frame: what vision sees.
+
+    The 20x10 grid is the raw observed occupancy; the falling piece and
+    next piece come from the tracker's committed view of the same frame.
+    (A graphical debug window is deferred to the live phase; see SPEC.md.)
+    """
+    grid = str(Board.from_grid(occupancy))
+    falling_txt = "-"
+    if falling is not None:
+        falling_txt = (
+            f"{falling.piece} rot{falling.rotation_index} "
+            f"@ (row {falling.row}, col {falling.col})"
+        )
+    events_txt = ", ".join(event.name for event in events) or "-"
+    return (
+        f"{grid}\n"
+        f"falling: {falling_txt}  next: {committed.next_piece or '-'}  "
+        f"confidence: {confidence:.2f}  events: {events_txt}"
+    )
 
 
 class CoachEngine:
@@ -72,8 +101,15 @@ class CoachEngine:
             return self.current_hint  # keep showing the last good hint
         next_piece = self._identify_next_cached(next_image)
 
+        previous = self.tracker.committed
         events = self.tracker.update(occupancy, next_piece)
         committed = self.tracker.committed
+        if self.config.debug and (events or committed != previous):
+            print(
+                render_debug_frame(
+                    occupancy, confidence, committed, self.tracker.falling, events
+                )
+            )
 
         if GameEvent.BOARD_RESET in events:
             self._predicted_board = None

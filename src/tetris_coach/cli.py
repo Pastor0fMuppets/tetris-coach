@@ -172,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="overlay: show a debug window with what vision sees",
+        help="overlay: print a terminal debug view of what vision sees "
+        "(grid, falling/next piece, confidence, events) per committed frame",
     )
     args = parser.parse_args(argv)
 

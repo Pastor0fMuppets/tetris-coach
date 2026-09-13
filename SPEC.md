@@ -74,7 +74,10 @@ app.py            # Main loop wiring: capture -> vision -> state -> solve -> ove
                   # pre-solve piece B; on lock, flip hint instantly; if observed
                   # board != predicted, re-solve from observed.
 cli.py            # `tetris-coach` entry point: select regions, start loop; flags
-                  # for poll rate, colors, debug window (shows what vision sees).
+                  # for poll rate, colors, and a terminal debug view (per
+                  # committed frame: observed grid, falling piece, next piece,
+                  # confidence, events). A *graphical* debug window is deferred
+                  # to the live phase..
 ```
 
 ## Key design decisions (already made — do not relitigate)
