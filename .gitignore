@@ -10,3 +10,4 @@ build/
 .ruff_cache/
 .benchmarks/
 .DS_Store
+.claude/worktrees/
