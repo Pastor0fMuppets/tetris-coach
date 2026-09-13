@@ -382,6 +382,30 @@ class TestCoachEngineScenarios:
         assert hint2 is precomputed
         assert engine._hint_is_provisional
 
+    def test_flash_and_occlusion_frames_never_reset(self) -> None:
+        # F4: a full-board flash (line clear, pause overlay) and a dark
+        # occlusion both make the region uniform. Vision must report them
+        # as unreliable so the gate holds the hint, rather than committing
+        # an EMPTY board that fires BOARD_RESET and wipes the caches.
+        engine, events_log = self._engine_with_spy()
+        stack = rows_of(bottom_lines("#########."))
+        self._attach(engine, stack, "I")
+        events_log.clear()
+        falling = merge(stack, piece_cells("I", 1, 4, 9))
+        hint = self._process(engine, falling, "T", times=2)
+        assert hint is not None
+        committed = engine.tracker.committed
+
+        shape = (20 * self.CELL, 10 * self.CELL, 3)
+        flash = np.full(shape, 245, dtype=np.uint8)
+        occluded = np.full(shape, 15, dtype=np.uint8)
+        for image in (flash, flash, occluded, occluded, occluded, occluded, occluded):
+            assert engine.process_frame(image, self._preview("T")) is hint
+        assert engine.tracker.committed == committed
+        assert GameEvent.BOARD_RESET not in events_log
+        # The next good frame carries on as if nothing happened.
+        assert self._process(engine, falling, "T") is hint
+
     def test_confidence_drop_mid_sequence(self) -> None:
         engine, _events_log = self._engine_with_spy()
         spawn = rows_of(piece_cells("T", 0, 1, 3))

@@ -18,8 +18,17 @@ import numpy as np
 from numpy.typing import NDArray
 
 # Minimum score spread before Otsu thresholding is considered meaningful;
-# below this the region is treated as uniform (an empty board).
-_MIN_SPREAD = 0.15
+# below this the region is treated as uniform (unreadable — see
+# classify_grid). Shared with pieces_vision.identify_next so the two
+# uniform-region tests cannot drift apart.
+MIN_SPREAD = 0.15
+
+# Absolute score level separating a uniformly DARK region (the only kind
+# consistent with an empty board, given the darker-background requirement)
+# from a uniformly BRIGHT one (occlusion, pause overlay, line-clear flash,
+# fully filled board). Every background in practice scores well below this
+# and every piece color well above it.
+_UNIFORM_BRIGHT_LEVEL = 0.6
 
 
 def _build_score_lut() -> NDArray[np.float32]:
@@ -176,11 +185,17 @@ def classify_grid(
     scores = cell_scores(image, rows, cols)
     lo = float(scores.min())
     hi = float(scores.max())
-    if hi - lo < _MIN_SPREAD:
-        # Uniform region: no pieces distinguishable from background. Given
-        # the darker-background requirement, treat it as an empty board.
-        occupancy = np.zeros((rows, cols), dtype=np.bool_)
-        return occupancy, 0.5
+    if hi - lo < MIN_SPREAD:
+        # Uniform region: no two classes to separate, so the frame is
+        # unreadable (occluded board, pause overlay, full-width clear
+        # flash, fully filled garbage — or a genuinely empty board).
+        # Report zero confidence so the caller's gate rejects the frame
+        # instead of committing a guess; the occupancy only *describes*
+        # the frame by absolute level (a bright uniform region is never
+        # classified as empty).
+        bright = float(scores.mean()) >= _UNIFORM_BRIGHT_LEVEL
+        occupancy = np.full((rows, cols), bright, dtype=np.bool_)
+        return occupancy, 0.0
 
     threshold = otsu_threshold(scores)
     occupancy = scores > threshold
