@@ -42,18 +42,42 @@ vision/
                   # split by Otsu. Returns (rows × 10) bool array + confidence.
                   # The estimate is a cross-frame memory (GridClassifier:
                   # the empty class of every accepted frame re-measures it),
-                  # bootstrapped from the top-row cell-color median — a
-                  # reading is never vouched for while its polarity rests on
-                  # an unverifiable top-row prior (a stack legally reaching
-                  # row 0 would otherwise invert the whole board).
-                  # The classifier stays pure of layout. When a game floats its
-                  # NEXT preview over the board's top corner (inside the
-                  # selected board region — ROAS Stacker does this at cols 8-9,
-                  # rows 0-1), those cells show the NEXT piece, not the board;
-                  # app.compute_overlap_mask names them from the two rects and
+                  # bootstrapped from the top-row cell-color median. That
+                  # bootstrap holds only while a MAJORITY of the sampled
+                  # top-row cells really are background; past that the median
+                  # locks onto piece colors and the whole board inverts, so a
+                  # self-estimated reading is vouched for only when its own
+                  # top row is consistent with the premise: a strict majority
+                  # of the OBSERVABLE top-row cells read empty, and every
+                  # occupied one is AIRBORNE — its column's occupied run ends
+                  # within a tetromino's reach. A piece spawning or falling
+                  # through row 0 is airborne and keeps full confidence; a
+                  # stack grounded at row 0 (legal: side columns stacked to
+                  # the top, versus garbage pushed up) does not and is capped
+                  # to 0.0, because an inverted reading is always of that
+                  # second kind — the cells it calls occupied are the true
+                  # background, which runs from row 0 down to the stack. A
+                  # count alone cannot separate the two: both benign and
+                  # inverted readings show a minority occupied, which is why
+                  # the earlier "any occupied top-row cell caps" rule was
+                  # total, and why a plain majority rule is no rule at all.
+                  # The classifier stays pure of layout, but not of what the
+                  # capture cannot see: it takes the same unobservable-cell
+                  # set the engine does. When a game floats its NEXT preview
+                  # over the board's top corner (inside the selected board
+                  # region — ROAS Stacker does this at cols 8-9, rows 0-1),
+                  # those cells show the NEXT piece, not the board;
+                  # app.compute_overlap_mask names them from the two rects,
+                  # grid.py leaves them out of the top-row median, out of the
+                  # top-row cap and out of the memory's re-measurement, and
                   # the engine discards their reading (see app.py). Read as
                   # board content they added a second tetromino of cells every
-                  # frame -> UNEXPLAINED -> spurious BOARD_RESET.
+                  # frame -> UNEXPLAINED -> spurious BOARD_RESET; counted in
+                  # the top-row prior they made the top row permanently
+                  # occupied -> every frame capped -> the memory, which
+                  # anchors only from ACCEPTED frames, could never form. That
+                  # second one is a deadlock, not a degradation: measured on
+                  # a real session, 36 of 36 frames at confidence 0.00.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the
@@ -111,11 +135,13 @@ app.py            # Main loop wiring: capture -> vision -> state -> solve -> ove
                   # relative fractions, so Retina-agnostic) and name the cells
                   # whose center falls inside. Those cells are UNOBSERVABLE,
                   # not empty: the engine drops their reading (after confidence
-                  # is judged on the full grid, before the tracker and debug
-                  # view) and declares them to the tracker, which treats them
-                  # as unknown. Computed once from the fixed session rects;
-                  # empty (a no-op) when the next box is drawn outside the
-                  # board.
+                  # is judged on the grid, before the tracker and debug view)
+                  # and declares them to BOTH stateful components — the
+                  # tracker, which treats them as unknown, and the classifier,
+                  # whose background estimate and top-row prior must not be
+                  # fed a UI panel's pixels. Computed once from the fixed
+                  # session rects; empty (a no-op) when the next box is drawn
+                  # outside the board.
                   # _solver_board: what the solver is handed for those cells. A
                   # covered cell resting directly on the stack (or the floor) is
                   # where the stack plausibly continues up out of sight, so it
