@@ -48,16 +48,18 @@ def enumerate_drops(board: Board, piece: str) -> Iterator[tuple[Rotation, int, D
 
 
 def _best_single_score(board: Board, piece: str, weights: Weights) -> float:
-    """Best 1-ply evaluation of ``piece`` on ``board`` (TOP_OUT_SCORE if none)."""
-    best = TOP_OUT_SCORE
-    for rotation in ROTATIONS[piece]:
-        for col in range(WIDTH - rotation.width + 1):
-            result = board.drop(rotation, col)
-            if result is None:
-                continue
-            score = evaluate_drop(result, rotation, weights)
-            best = max(best, score)
-    return best
+    """Best 1-ply evaluation of ``piece`` on ``board`` (TOP_OUT_SCORE if none).
+
+    Reuses :func:`enumerate_drops` so ply-1 and ply-2 can never disagree
+    about which placements are legal.
+    """
+    return max(
+        (
+            evaluate_drop(result, rotation, weights)
+            for rotation, _, result in enumerate_drops(board, piece)
+        ),
+        default=TOP_OUT_SCORE,
+    )
 
 
 def best_move(
