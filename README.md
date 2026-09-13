@@ -14,8 +14,9 @@ placement intuition.
 
 1. **Setup** — drag a rectangle over the game's board, and a second one over the
    "next piece" preview box.
-2. **Watch** — the board region is captured ~15×/sec and thresholded into a 10×20
-   occupancy grid; the falling piece and next piece are recognized by shape.
+2. **Watch** — the board region is captured ~15×/sec and thresholded into a 10-wide
+   occupancy grid (rows configurable via `--rows`, default 20); the falling piece
+   and next piece are recognized by shape.
 3. **Solve** — all placements of the current piece are searched, with lookahead over
    all placements of the next piece, scored by a Dellacherie-style evaluation
    (bitboard implementation for speed).

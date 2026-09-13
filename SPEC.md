@@ -10,10 +10,10 @@ Purpose: training human placement intuition at full game speed.
 
 ## Hard requirements
 
-- **Game-agnostic**: works on any Tetris rendering a standard 10×20 board with
-  reasonably solid cell colors distinguishable from the board's background — dark,
-  light, and colored themes alike. No per-game config beyond the user-selected
-  regions.
+- **Game-agnostic**: works on any Tetris rendering a board 10 wide × a configurable
+  number of rows (default 20, `--rows`) with reasonably solid cell colors
+  distinguishable from the board's background — dark, light, and colored themes
+  alike. No per-game config beyond the user-selected regions and the row count.
 - **Fast**: end-to-end capture→overlay under ~100 ms; hint for a newly spawned piece
   visible within ~1 frame in the common case (via precomputation, see below).
 - **Visual only**: never send input to the game.
@@ -22,7 +22,8 @@ Purpose: training human placement intuition at full game speed.
 
 ```
 core/
-  board.py        # Bitboard: 20 rows × 10 cols, one int per row (bits 0..9).
+  board.py        # Bitboard: 10 cols × configurable rows (default 20), one int
+                  # per row (bits 0..9); the height flows from len(rows).
                   # Ops: occupancy from bool array, drop piece, clear lines,
                   # column heights, hole count, transitions, wells.
   pieces.py       # 7 tetrominoes; all distinct rotations as (rotation, cells) with
@@ -38,7 +39,7 @@ solver/
 vision/
   grid.py         # Given BGR image of board region + (rows, cols): per-cell
                   # occupancy via color distance from a background estimate,
-                  # split by Otsu. Returns 20×10 bool array + confidence.
+                  # split by Otsu. Returns (rows × 10) bool array + confidence.
                   # The estimate is a cross-frame memory (GridClassifier:
                   # the empty class of every accepted frame re-measures it),
                   # bootstrapped from the top-row cell-color median — a

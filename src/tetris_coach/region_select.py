@@ -12,7 +12,7 @@ from __future__ import annotations
 from .capture.screen import Rect
 
 # Minimum selection sizes in logical px, as (width, height). Below these
-# a 10x20 board grid (or a preview box) is sub-pixel and vision cannot
+# a 10-wide board grid (or a preview box) is sub-pixel and vision cannot
 # work; in particular a click-without-drag must never produce a 1x1 rect.
 MIN_BOARD_SIZE = (40, 80)
 MIN_PREVIEW_SIZE = (16, 16)
