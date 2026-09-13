@@ -30,6 +30,13 @@ MIN_SPREAD = 0.15
 # and every piece color well above it.
 _UNIFORM_BRIGHT_LEVEL = 0.6
 
+# Confidence reported for a uniformly DARK region. An empty board offers no
+# occupied/empty split to measure, but the darker-background requirement
+# makes the empty reading itself trustworthy — so report enough confidence
+# to pass any sane frame gate (well above CoachConfig.min_confidence),
+# while staying below a cleanly separated two-class frame.
+_UNIFORM_DARK_CONFIDENCE = 0.5
+
 
 def _build_score_lut() -> NDArray[np.float32]:
     """256x256 lookup of the color score for a (channel max, channel min) pair.
@@ -186,16 +193,19 @@ def classify_grid(
     lo = float(scores.min())
     hi = float(scores.max())
     if hi - lo < MIN_SPREAD:
-        # Uniform region: no two classes to separate, so the frame is
-        # unreadable (occluded board, pause overlay, full-width clear
-        # flash, fully filled garbage — or a genuinely empty board).
-        # Report zero confidence so the caller's gate rejects the frame
-        # instead of committing a guess; the occupancy only *describes*
-        # the frame by absolute level (a bright uniform region is never
-        # classified as empty).
+        # Uniform region: no two classes to separate; the absolute level
+        # decides what it means. A uniformly BRIGHT region is truly
+        # unreadable (occlusion, pause overlay, full-width clear flash,
+        # fully filled garbage): described as all-occupied at zero
+        # confidence so the caller's gate rejects it — it is never
+        # classified as empty. A uniformly DARK region is exactly the
+        # empty board the darker-background requirement guarantees:
+        # classified empty with usable confidence, so a tracker actually
+        # observes a board wipe (game over, new game) instead of holding
+        # a stale stack and hint until the next game's pieces appear.
         bright = float(scores.mean()) >= _UNIFORM_BRIGHT_LEVEL
         occupancy = np.full((rows, cols), bright, dtype=np.bool_)
-        return occupancy, 0.0
+        return occupancy, 0.0 if bright else _UNIFORM_DARK_CONFIDENCE
 
     threshold = otsu_threshold(scores)
     occupancy = scores > threshold

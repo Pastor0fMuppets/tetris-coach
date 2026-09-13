@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from tetris_coach.app import CoachConfig
 from tetris_coach.vision.grid import (
     cell_scores,
     classify_grid,
@@ -142,33 +143,36 @@ def test_otsu_threshold_hist_degenerate() -> None:
     assert t == pytest.approx(0.4)
 
 
-def test_uniform_dark_region_is_empty_but_unreliable() -> None:
-    # F4: a uniform region is unreadable — an occluded board, pause
-    # overlay, or genuinely empty board look identical. Confidence must
-    # fall below any sane gate so trackers never commit it.
+def test_uniform_dark_region_is_empty_with_usable_confidence() -> None:
+    # A uniform DARK region is exactly the empty board the darker-
+    # background requirement guarantees: classified empty with enough
+    # confidence to pass the engine's frame gate, so the tracker actually
+    # observes a board wipe (game over, new game).
     dark = np.full((200, 100, 3), 20, dtype=np.uint8)
     occupancy, confidence = classify_grid(dark)
     assert not occupancy.any()
-    assert confidence == 0.0
+    assert confidence >= CoachConfig().min_confidence
 
 
 def test_uniform_bright_region_never_classified_empty() -> None:
     # F4: a full-width line-clear flash or fully filled (garbage) board is
-    # uniformly bright; it must never be reported as an EMPTY board.
+    # uniformly bright — truly unreadable; it must never be reported as an
+    # EMPTY board, and its zero confidence keeps it behind the gate.
     flash = np.full((200, 100, 3), 245, dtype=np.uint8)
     occupancy, confidence = classify_grid(flash)
     assert occupancy.all()
     assert confidence == 0.0
 
 
-def test_uniform_empty_board_render_rejected_by_gate() -> None:
-    # A rendered empty board is a uniform region too: still described as
-    # empty, but with zero confidence (the tracker's memory already covers
-    # the empty case; committing it from vision is never needed).
+def test_uniform_empty_board_render_passes_gate() -> None:
+    # A rendered empty board is a uniform dark region: classified empty
+    # with usable confidence, so a mid-game wipe reaches the tracker
+    # instead of being dropped at the gate (which would leave the stale
+    # stack and hint painted over an empty board indefinitely).
     image = render_board(np.zeros((20, 10), dtype=bool), STYLES[0], cell_size=20)
     occupancy, confidence = classify_grid(image)
     assert not occupancy.any()
-    assert confidence == 0.0
+    assert confidence >= CoachConfig().min_confidence
 
 
 def test_confidence_drops_with_ambiguity() -> None:

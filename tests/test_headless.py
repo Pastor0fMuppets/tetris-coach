@@ -15,7 +15,7 @@ from tetris_coach.overlay.renderer import HintStyle, placement_cell_rects
 from tetris_coach.solver.search import best_move
 from tetris_coach.vision.state import GameEvent
 
-from .boards import bottom_lines, grid_of, merge, piece_cells, rows_of
+from .boards import EMPTY, bottom_lines, grid_of, merge, piece_cells, rows_of
 from .synthetic import STYLES, render_board, render_next_preview
 
 
@@ -522,11 +522,13 @@ class TestCoachEngineScenarios:
         assert hint2 is precomputed
         assert engine._hint_is_provisional
 
-    def test_flash_and_occlusion_frames_never_reset(self) -> None:
-        # F4: a full-board flash (line clear, pause overlay) and a dark
-        # occlusion both make the region uniform. Vision must report them
-        # as unreliable so the gate holds the hint, rather than committing
-        # an EMPTY board that fires BOARD_RESET and wipes the caches.
+    def test_flash_and_transient_occlusion_never_reset(self) -> None:
+        # F4: a full-board BRIGHT flash (line clear, pause overlay) is
+        # truly unreadable — zero confidence, gated out for any duration.
+        # A uniform DARK frame reads as an empty board (that is how a real
+        # wipe is observed; see test_board_wipe_resets_and_clears_hint),
+        # so a dark occlusion holds the hint only while shorter than the
+        # reset debounce. Neither must commit anything here.
         engine, events_log = self._engine_with_spy()
         stack = rows_of(bottom_lines("#########."))
         self._attach(engine, stack, "I")
@@ -539,12 +541,36 @@ class TestCoachEngineScenarios:
         shape = (20 * self.CELL, 10 * self.CELL, 3)
         flash = np.full(shape, 245, dtype=np.uint8)
         occluded = np.full(shape, 15, dtype=np.uint8)
-        for image in (flash, flash, occluded, occluded, occluded, occluded, occluded):
+        frames = (flash,) * 5 + (occluded,) * 3  # occlusion below the debounce
+        for image in frames:
             assert engine.process_frame(image, self._preview("T")) is hint
         assert engine.tracker.committed == committed
         assert GameEvent.BOARD_RESET not in events_log
         # The next good frame carries on as if nothing happened.
         assert self._process(engine, falling, "T") is hint
+
+    def test_board_wipe_resets_and_clears_hint(self) -> None:
+        # A mid-game wipe (game over / new game) renders a uniform DARK
+        # empty board. Vision classifies it as empty with usable
+        # confidence — not gated out — so the reset debounce runs: the
+        # stale hint is cleared and the stack re-anchors on empty instead
+        # of staying painted over the empty board indefinitely.
+        engine, events_log = self._engine_with_spy()
+        stack = rows_of(bottom_lines("####..####", "#########."))
+        self._attach(engine, stack, "I")
+        events_log.clear()
+        hint = self._process(engine, merge(stack, piece_cells("T", 0, 1, 3)), "I", times=2)
+        assert hint is not None
+        for _ in range(3):
+            assert self._process(engine, EMPTY, None) is hint  # debouncing
+        assert self._process(engine, EMPTY, None) is None  # 4th frame: reset
+        assert GameEvent.BOARD_RESET in events_log
+        assert engine.tracker.committed.stack_rows == EMPTY
+        assert engine.current_hint is None
+        # The next game's first spawn is tracked and hinted normally.
+        hint2 = self._process(engine, rows_of(piece_cells("J", 0, 0, 3)), "S", times=2)
+        assert hint2 is not None
+        assert hint2.piece == "J"
 
     def test_confidence_drop_mid_sequence(self) -> None:
         engine, _events_log = self._engine_with_spy()
