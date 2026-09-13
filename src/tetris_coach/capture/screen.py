@@ -105,32 +105,3 @@ class ArraySource:
             self._index = 0
         crop = frame[rect.top : rect.top + rect.height, rect.left : rect.left + rect.width]
         return np.ascontiguousarray(crop)
-
-
-class ImageFileSource:
-    """FrameSource that reads frames from image files on demand.
-
-    Each ``grab`` consumes the next file (the last file repeats, or loops).
-    Useful for feeding recorded screenshots through the vision stack.
-    """
-
-    def __init__(self, paths: list[str], loop: bool = False) -> None:
-        if not paths:
-            raise ValueError("ImageFileSource needs at least one path")
-        self._paths = paths
-        self._loop = loop
-        self._index = 0
-
-    def grab(self, rect: Rect) -> NDArray[np.uint8]:
-        import cv2
-
-        path = self._paths[self._index]
-        if self._index + 1 < len(self._paths):
-            self._index += 1
-        elif self._loop:
-            self._index = 0
-        image = cv2.imread(path, cv2.IMREAD_COLOR)  # BGR
-        if image is None:
-            raise FileNotFoundError(f"could not read image: {path}")
-        crop = image[rect.top : rect.top + rect.height, rect.left : rect.left + rect.width]
-        return np.ascontiguousarray(crop)
