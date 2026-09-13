@@ -12,6 +12,16 @@ tracker's committed stack memory and classifies the frame:
   explains the whole frame (the next spawn revealing it, or a line-clear
   placement reproducing the observation exactly);
 - anything else is UNEXPLAINED and produces no candidate at all.
+
+Some cells of the captured board may be *unobservable* — permanently
+covered by a game's own UI (the ROAS Stacker NEXT preview floats over the
+top corner of the playfield; see :func:`~tetris_coach.app.compute_overlap_mask`).
+They are passed in as ``unknown_rows`` and mean "no evidence", never
+"empty": they are excluded from both sides of the diff, and they may stand
+in for whatever cells a hypothesis needs (the hidden half of a piece, the
+hidden half of a lock). A frame whose visible evidence is only the
+visible part of a piece is :attr:`FrameKind.OCCLUDED` — explained, but
+carrying no candidate, so it holds state instead of tripping a reset.
 """
 
 from __future__ import annotations
@@ -63,6 +73,7 @@ class FrameKind(Enum):
     QUIET = auto()  # nothing new on the board (post-lock, pre-spawn)
     FALLING = auto()  # stack intact + exactly one tetromino of new cells
     LOCKED = auto()  # a lock (with or without clears) exactly verified
+    OCCLUDED = auto()  # a piece partly hidden under an unobservable region
     UNEXPLAINED = auto()  # no structural explanation; produce no candidate
 
 
@@ -142,6 +153,44 @@ def _piece_at(cells: Iterable[Cell]) -> FallingPiece | None:
     )
 
 
+def _bit(rows: tuple[int, ...], cell: Cell) -> bool:
+    """True when ``cell`` is set in a row-bitmask tuple."""
+    r, c = cell
+    return bool(rows[r] >> c & 1)
+
+
+def _hidden_completions(
+    added: set[Cell],
+    unknown_rows: tuple[int, ...],
+    height: int,
+) -> set[frozenset[Cell]]:
+    """Tetromino placements whose *visible* new cells are exactly ``added``.
+
+    A piece straddling the boundary of an unobservable region shows only
+    part of itself. This enumerates every placement that contains all of
+    ``added`` and whose remaining cells all fall inside ``unknown_rows`` —
+    i.e. every piece the frame could be hiding. No stack test is needed:
+    ``added`` cells are new by construction and the hidden cells are
+    unobservable, where the committed stack holds a belief, not evidence,
+    and so cannot rule a placement out.
+
+    Every completion contains every added cell, so anchoring the search on
+    one of them enumerates all of them.
+    """
+    anchor_r, anchor_c = next(iter(added))
+    completions: set[frozenset[Cell]] = set()
+    for rots in ROTATIONS.values():
+        for rot in rots:
+            for cell_r, cell_c in rot.cells:
+                top, left = anchor_r - cell_r, anchor_c - cell_c
+                if top < 0 or left < 0 or top + rot.height > height or left + rot.width > WIDTH:
+                    continue
+                cells = frozenset((top + r, left + c) for r, c in rot.cells)
+                if added <= cells and all(_bit(unknown_rows, cell) for cell in cells - added):
+                    completions.add(cells)
+    return completions
+
+
 def clear_full_rows(rows: tuple[int, ...]) -> tuple[int, ...]:
     """Remove full rows and prepend that many empty rows.
 
@@ -164,17 +213,21 @@ def _supported(cells: Iterable[Cell], stack_rows: tuple[int, ...]) -> bool:
 
 
 def _explains(
-    observed_rows: tuple[int, ...], s2_rows: tuple[int, ...]
+    observed_rows: tuple[int, ...], s2_rows: tuple[int, ...], unknown_rows: tuple[int, ...]
 ) -> tuple[bool, FallingPiece | None]:
     """Verify a candidate post-lock stack ``s2_rows`` against the observation.
 
     Fails if any settled cell vanished. The residual (observed cells not in
     ``s2_rows``) must be empty, or exactly one tetromino spawning in the top
     rows — tolerating the next piece having already spawned during a clear.
+    Unobservable cells are evidence for neither side and drop out of both
+    comparisons.
     """
-    if any(s & ~o for o, s in zip(observed_rows, s2_rows, strict=True)):
+    if any(s & ~o & ~u for o, s, u in zip(observed_rows, s2_rows, unknown_rows, strict=True)):
         return False, None
-    residual = _cells_from_rows(o & ~s for o, s in zip(observed_rows, s2_rows, strict=True))
+    residual = _cells_from_rows(
+        o & ~s & ~u for o, s, u in zip(observed_rows, s2_rows, unknown_rows, strict=True)
+    )
     if not residual:
         return True, None
     piece = _piece_at(residual)
@@ -187,6 +240,7 @@ def _lock_reveal(
     added: set[Cell],
     stack_rows: tuple[int, ...],
     last_falling: FallingPiece | None,
+    unknown_rows: tuple[int, ...],
 ) -> Explanation | None:
     """A lock revealed by the next spawn, no clears (8 added cells).
 
@@ -195,12 +249,18 @@ def _lock_reveal(
     completed row while the next piece is already visible), and that row
     is about to vanish. The frame stays UNEXPLAINED; the settled
     post-clear frame is explained by :func:`_lock_with_clears` instead.
+
+    With unobservable cells in play the reveal carries fewer than 8 added
+    cells (the locked piece's hidden cells never appear): L1 matches on the
+    piece's *visible* cells and merges all of them, so the lock's hidden
+    half enters the committed stack as the hypothesis says it must.
     """
     # L1 (position-anchored): the piece locked exactly where it was last
     # observed and the spawn appeared — even 4-adjacent to it (one blob).
     if last_falling is not None:
         last_cells = set(last_falling.cells)
-        if last_cells <= added:
+        visible_last = {cell for cell in last_cells if not _bit(unknown_rows, cell)}
+        if visible_last <= added:
             spawn = _piece_at(added - last_cells)
             if spawn is not None and spawn.row < SPAWN_ROWS:
                 merged = _rows_with(stack_rows, last_cells)
@@ -245,6 +305,7 @@ def _lock_with_clears(
     observed_rows: tuple[int, ...],
     stack_rows: tuple[int, ...],
     last_falling: FallingPiece | None,
+    unknown_rows: tuple[int, ...],
 ) -> Explanation | None:
     """A lock that cleared lines (settled cells vanished).
 
@@ -258,7 +319,7 @@ def _lock_with_clears(
             merged = _rows_with(stack_rows, cells)
             if any(row == FULL_ROW for row in merged):
                 s2 = clear_full_rows(merged)
-                explained, residual = _explains(observed_rows, s2)
+                explained, residual = _explains(observed_rows, s2, unknown_rows)
                 if explained:
                     return Explanation(FrameKind.LOCKED, s2, residual)
     board = Board(stack_rows)
@@ -267,7 +328,7 @@ def _lock_with_clears(
         rotation = ROTATIONS[last_falling.piece][last_falling.rotation_index]
         dropped = board.drop(rotation, last_falling.col)
         if dropped is not None and dropped.lines_cleared > 0:
-            explained, residual = _explains(observed_rows, dropped.board.rows)
+            explained, residual = _explains(observed_rows, dropped.board.rows, unknown_rows)
             if explained:
                 return Explanation(FrameKind.LOCKED, dropped.board.rows, residual)
     # C3: any gravity drop that clears lines, the last observed piece name
@@ -284,7 +345,7 @@ def _lock_with_clears(
                 dropped = board.drop(rotation, col)
                 if dropped is None or dropped.lines_cleared == 0:
                     continue
-                explained, residual = _explains(observed_rows, dropped.board.rows)
+                explained, residual = _explains(observed_rows, dropped.board.rows, unknown_rows)
                 if explained:
                     return Explanation(FrameKind.LOCKED, dropped.board.rows, residual)
     return None
@@ -296,6 +357,7 @@ def explain_grid(
     last_falling: FallingPiece | None,
     *,
     max_missing_cells: int = 2,
+    unknown_rows: tuple[int, ...] | None = None,
 ) -> Explanation:
     """Explain one observed frame against the committed stack memory.
 
@@ -303,10 +365,24 @@ def explain_grid(
     ``last_falling`` the last coherent raw falling observation (or ``None``).
     The falling piece is *derived* as ``observed & ~stack``; a frame no rule
     explains returns :attr:`FrameKind.UNEXPLAINED` and proposes nothing.
+
+    ``unknown_rows`` marks cells the capture cannot observe (a game UI panel
+    floating over the playfield). They are evidence for nothing: excluded
+    from ``added`` and from the missing-cell count, free to stand in for a
+    hypothesis' hidden cells, and never a reason to reset. With no
+    unobservable cells (the default) every rule below is exactly the
+    fully-observed one.
     """
-    added_rows = tuple(o & ~s for o, s in zip(observed_rows, stack_rows, strict=True))
-    n_miss = sum((s & ~o).bit_count() for o, s in zip(observed_rows, stack_rows, strict=True))
+    unknown = unknown_rows if unknown_rows is not None else (0,) * len(observed_rows)
+    added_rows = tuple(
+        o & ~s & ~u for o, s, u in zip(observed_rows, stack_rows, unknown, strict=True)
+    )
+    n_miss = sum(
+        (s & ~o & ~u).bit_count()
+        for o, s, u in zip(observed_rows, stack_rows, unknown, strict=True)
+    )
     added = _cells_from_rows(added_rows)
+    hidden = any(unknown)
 
     # Step 1 — stack intact, or a small occlusion tolerated (trust memory
     # over vision for cursor/anti-aliasing dropouts; never on lock paths).
@@ -320,15 +396,30 @@ def explain_grid(
             # against a column, or touching the bottom row is FALLING.
             return Explanation(FrameKind.FALLING, stack_rows, piece)
 
-    # Step 2 — lock revealed by the next spawn, no clears.
-    if n_miss == 0 and len(added) == 8:
-        locked = _lock_reveal(added, stack_rows, last_falling)
+    # Step 1b — a piece straddling the edge of an unobservable region shows
+    # 1-3 cells. That is not a broken tetromino, it is a partly hidden one:
+    # a unique completion identifies it (and where it is), several mean the
+    # frame is coherent but the piece unnameable — OCCLUDED holds state
+    # rather than letting a stationary piece trip the reset debounce.
+    if hidden and n_miss == 0 and 1 <= len(added) <= 3:
+        completions = _hidden_completions(added, unknown, len(observed_rows))
+        if len(completions) == 1:
+            piece = _piece_at(next(iter(completions)))
+            if piece is not None:
+                return Explanation(FrameKind.FALLING, stack_rows, piece)
+        if completions:
+            return Explanation(FrameKind.OCCLUDED, stack_rows, None)
+
+    # Step 2 — lock revealed by the next spawn, no clears. A reveal whose
+    # locked piece is partly hidden carries fewer than 4 + 4 added cells.
+    if n_miss == 0 and (len(added) == 8 or (hidden and 5 <= len(added) < 8)):
+        locked = _lock_reveal(added, stack_rows, last_falling, unknown)
         if locked is not None:
             return locked
 
     # Step 3 — lock with line clears.
     if n_miss > 0:
-        locked = _lock_with_clears(observed_rows, stack_rows, last_falling)
+        locked = _lock_with_clears(observed_rows, stack_rows, last_falling, unknown)
         if locked is not None:
             return locked
 

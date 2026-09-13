@@ -448,6 +448,100 @@ class TestTwelveRowBoards:
         assert exp.falling is None
 
 
+class TestUnobservableCells:
+    """``unknown_rows``: cells a game UI panel covers are evidence for
+    nothing. They never add cells, never count as missing, may stand in for
+    a hypothesis' hidden cells — and never make a frame UNEXPLAINED, which
+    is what would eventually wipe the board through the reset debounce."""
+
+    ROWS = 12
+    EMPTY12: tuple[int, ...] = (0,) * 12
+    # The ROAS Stacker corner: the NEXT preview covers rows 0-1, cols 8-9.
+    CORNER = rows_of([(0, 8), (0, 9), (1, 8), (1, 9)], height=12)
+    STACK = rows_of(bottom_lines("....######", "..########", height=12), height=12)
+
+    def test_preview_pixels_in_the_corner_are_not_added_cells(self) -> None:
+        # The NEXT piece drawn over the corner is not a second tetromino.
+        observed = merge(self.STACK, [(0, 8), (1, 9)])
+        exp = explain_grid(observed, self.STACK, None, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.QUIET
+        assert exp.stack_rows == self.STACK
+
+    def test_believed_stack_under_the_corner_is_not_missing(self) -> None:
+        # The committed stack believes (1,8)/(1,9) are filled; the frame
+        # cannot show them. That is not a vanished stack.
+        believed = merge(self.STACK, [(1, 8), (1, 9)])
+        exp = explain_grid(self.STACK, believed, None, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.QUIET
+        assert exp.stack_rows == believed
+
+    def test_piece_straddling_the_corner_is_occluded_not_unexplained(self) -> None:
+        # A real O resting at rows 1-2 / cols 8-9 shows only its bottom
+        # half. Forcing the covered cells empty made this a 2-cell fragment
+        # -> UNEXPLAINED -> (4 identical frames) a spurious BOARD_RESET.
+        observed = merge(self.STACK, piece_cells("O", 0, 1, 8))
+        exp = explain_grid(observed, self.STACK, None, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.OCCLUDED
+        assert exp.stack_rows == self.STACK  # memory held, nothing committed
+        assert exp.falling is None  # O, J and L all fit: name nothing
+
+    def test_unique_completion_identifies_the_piece(self) -> None:
+        # One covered cell at (0,9): three cells of a flat I are visible and
+        # only the I completes them, so the piece is named and positioned.
+        unknown = rows_of([(0, 9)], height=self.ROWS)
+        observed = merge(self.EMPTY12, [(0, 6), (0, 7), (0, 8)])
+        exp = explain_grid(observed, self.EMPTY12, None, unknown_rows=unknown)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert (exp.falling.piece, exp.falling.row, exp.falling.col) == ("I", 0, 6)
+
+    def test_lock_reveal_commits_the_hidden_half_of_the_piece(self) -> None:
+        # The O above locks and the next piece spawns: only 2 of the locked
+        # cells are visible (6 added cells, not 8). The committed stack must
+        # carry the hidden half, or the corner reads empty forever.
+        last = fp("O", 0, 1, 8)
+        observed = merge(self.STACK, [(2, 8), (2, 9)], piece_cells("T", 0, 0, 3))
+        exp = explain_grid(observed, self.STACK, last, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == merge(self.STACK, piece_cells("O", 0, 1, 8))
+        assert exp.falling is not None
+        assert exp.falling.piece == "T"
+
+    def test_clearing_lock_verifies_around_the_covered_cells(self) -> None:
+        # A clear shifts rows through the covered corner: the verification
+        # must ignore those cells on both sides instead of failing on them.
+        stack = rows_of(bottom_lines("#########.", height=self.ROWS), height=self.ROWS)
+        last = fp("I", 1, self.ROWS - 4, 9)
+        s2 = rows_of([(self.ROWS - 3, 9), (self.ROWS - 2, 9), (self.ROWS - 1, 9)], height=self.ROWS)
+        observed = merge(s2, [(0, 8)])  # preview pixels in the corner
+        exp = explain_grid(observed, stack, last, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == s2
+
+    def test_a_new_world_is_still_unexplained(self) -> None:
+        # The reset path must survive: an unrelated board shares no
+        # explanation, covered corner or not.
+        new_world = rows_of(bottom_lines("#.#.#.#.#.", "##.##.##.#", height=12), height=12)
+        exp = explain_grid(new_world, self.STACK, None, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.UNEXPLAINED
+
+    def test_fragment_far_from_the_corner_is_still_unexplained(self) -> None:
+        # Occlusion tolerance is local: 2 stray cells that no piece could be
+        # hiding behind the corner stay unexplained (and can still reset).
+        observed = merge(self.STACK, [(5, 1), (5, 2)])
+        exp = explain_grid(observed, self.STACK, None, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.UNEXPLAINED
+
+    def test_without_unknown_rows_nothing_changes(self) -> None:
+        # The default path is the fully-observed one: the same frame reads
+        # as a plain falling O.
+        observed = merge(self.STACK, piece_cells("O", 0, 1, 8))
+        exp = explain_grid(observed, self.STACK, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert exp.falling.piece == "O"
+
+
 class TestClearFullRowsMatchesCore:
     @pytest.mark.parametrize("piece", PIECES)
     def test_parity_with_board_drop(self, piece: str) -> None:
