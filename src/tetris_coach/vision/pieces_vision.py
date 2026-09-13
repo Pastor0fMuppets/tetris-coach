@@ -272,20 +272,31 @@ def _lock_reveal(
     components = _connected_components(added)
     if len(components) != 2:
         return None
-    matched = [_piece_at(component) for component in components]
-    if matched[0] is None or matched[1] is None:
-        return None
     valid: list[tuple[set[Cell], FallingPiece]] = []
-    for (lock_cells, lock_piece), (_, spawn_piece) in (
-        ((components[0], matched[0]), (components[1], matched[1])),
-        ((components[1], matched[1]), (components[0], matched[0])),
+    for lock_cells, spawn_cells in (
+        (components[0], components[1]),
+        (components[1], components[0]),
     ):
-        if not _supported(lock_cells, stack_rows):
-            continue  # a locked piece is at rest by definition
-        if last_falling is not None and lock_piece.piece != last_falling.piece:
-            continue  # a piece cannot change identity between flight and lock
+        spawn_piece = _piece_at(spawn_cells)
+        if spawn_piece is None:
+            continue
         if spawn_piece.row >= SPAWN_ROWS:
             continue  # ghost-piece defense: spawns appear in the top rows
+        lock_piece = _piece_at(lock_cells)
+        if lock_piece is None:
+            # A locked piece the covered region cut in half: its visible
+            # cells are not a tetromino, but some piece completes them
+            # under that region. Only those visible cells are merged below
+            # — several pieces may fit, so the hidden ones stay a belief
+            # rather than a guess dressed up as an observation.
+            if not any(unknown_rows):
+                continue
+            if not _hidden_completions(lock_cells, unknown_rows, len(stack_rows)):
+                continue
+        elif last_falling is not None and lock_piece.piece != last_falling.piece:
+            continue  # a piece cannot change identity between flight and lock
+        if not _supported(lock_cells, stack_rows):
+            continue  # a locked piece is at rest by definition
         valid.append((lock_cells, spawn_piece))
     if len(valid) == 2 and last_falling is not None:
         last_cells = set(last_falling.cells)

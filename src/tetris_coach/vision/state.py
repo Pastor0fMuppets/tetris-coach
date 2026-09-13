@@ -31,6 +31,15 @@ Events:
   observed board. Clear animations never trip it (their frames morph, and
   the settled board is explained as a lock); a one-frame glitch never
   does (the counter resets on the next coherent frame).
+
+``unobservable_cells`` names board cells the capture can never read (a
+game UI panel floating over the playfield). The observed value there is
+meaningless and is discarded; what the committed stack holds for those
+cells is a BELIEF, seeded empty at bootstrap/resync and thereafter moved
+only by an explained transition (a lock merging its hidden half in, a
+clear shifting rows through). An OCCLUDED frame — a piece the covered
+region is hiding — is coherent: it holds the committed state and, unlike
+an unexplainable frame, never counts toward a board reset.
 """
 
 from __future__ import annotations
@@ -41,7 +50,7 @@ from enum import Enum, auto
 import numpy as np
 from numpy.typing import NDArray
 
-from ..core.board import DEFAULT_HEIGHT
+from ..core.board import DEFAULT_HEIGHT, WIDTH
 from .pieces_vision import FallingPiece, FrameKind, explain_grid
 
 
@@ -65,6 +74,15 @@ def _rows_from_grid(grid: NDArray[np.bool_]) -> tuple[int, ...]:
     return tuple(int(sum(1 << c for c in range(cols) if grid[r, c])) for r in range(rows))
 
 
+def _rows_from_cells(cells: frozenset[tuple[int, int]] | None, rows: int) -> tuple[int, ...]:
+    """``(row, col)`` cells as one bitmask per row; cells off the board drop."""
+    out = [0] * rows
+    for r, c in cells or ():
+        if 0 <= r < rows and 0 <= c < WIDTH:
+            out[r] |= 1 << c
+    return tuple(out)
+
+
 class GameStateTracker:
     """Tracks committed game state across debounced frames."""
 
@@ -74,6 +92,7 @@ class GameStateTracker:
         reset_confirm_frames: int = 4,
         max_missing_cells: int = 2,
         rows: int = DEFAULT_HEIGHT,
+        unobservable_cells: frozenset[tuple[int, int]] | None = None,
     ) -> None:
         if confirm_frames < 1:
             raise ValueError("confirm_frames must be >= 1")
@@ -82,6 +101,10 @@ class GameStateTracker:
         if rows < 1:
             raise ValueError("rows must be >= 1")
         self._confirm_frames = confirm_frames
+        # Board cells the capture can never read, as one bitmask per row.
+        # Public so the consumer that hands a board to the solver can apply
+        # its own policy to the same cells (see CoachEngine._solver_board).
+        self.unknown_rows: tuple[int, ...] = _rows_from_cells(unobservable_cells, rows)
         self._reset_confirm_frames = reset_confirm_frames
         self._max_missing_cells = max_missing_cells
         # Bootstrap IS the ordinary rule set: a fresh game diffs cleanly
@@ -116,14 +139,30 @@ class GameStateTracker:
 
     def update(self, occupancy: NDArray[np.bool_], next_piece: str | None) -> list[GameEvent]:
         """Feed one frame's full occupancy grid; returns committed events."""
-        rows = _rows_from_grid(occupancy)
+        # Whatever the capture read in an unobservable cell is not board
+        # content: discard it here so no rule can mistake it for one. The
+        # frame is then all-zero there, which explain_grid reads as "no
+        # evidence" (not "empty") because it is told which cells those are.
+        rows = tuple(
+            o & ~u for o, u in zip(_rows_from_grid(occupancy), self.unknown_rows, strict=True)
+        )
         explanation = explain_grid(
             rows,
             self._committed.stack_rows,
             self._last_falling,
             max_missing_cells=self._max_missing_cells,
+            unknown_rows=self.unknown_rows,
         )
         self.last_kind = explanation.kind
+
+        if explanation.kind is FrameKind.OCCLUDED:
+            # Coherent: the covered region is hiding a piece. Hold the
+            # committed state (and any pending transition), and — the whole
+            # point — do NOT let a stationary hidden piece reach the reset
+            # debounce, which would wipe the board it is resting on.
+            self._unexplained_rows = None
+            self._unexplained_count = 0
+            return []
 
         if explanation.kind is FrameKind.UNEXPLAINED:
             if rows == self._unexplained_rows:
@@ -132,6 +171,12 @@ class GameStateTracker:
                 self._unexplained_rows = rows
                 self._unexplained_count = 1
             if self._unexplained_count >= self._reset_confirm_frames:
+                # Re-anchor on the observed board. Unobservable cells were
+                # blanked above, so the belief is seeded EMPTY: a resync is
+                # usually a fresh game, and there is no evidence for
+                # anything else. (Seeding them filled instead would be a
+                # different lie, and a permanent one — a board whose top
+                # rows are filled has columns nothing can be dropped into.)
                 self._committed = Snapshot(rows, None, next_piece)
                 self._pending = None
                 self._pending_kind = None

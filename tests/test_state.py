@@ -399,3 +399,90 @@ class TestMidGameAttach:
         events = feed(tracker, merge(resting, piece_cells("T", 0, 0, 3)), "S", times=2)
         assert events == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "T"
+
+
+class TestUnobservableCells:
+    """A tracker told which cells a game UI panel covers: the reset debounce
+    must not fire on a piece hiding under it, and the committed stack must
+    not claim those cells are empty."""
+
+    ROWS = 12
+    # The ROAS Stacker corner: the NEXT preview covers rows 0-1, cols 8-9.
+    CORNER = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+    # Near top-out on the right, so a piece can come to rest at rows 1-2 of
+    # cols 8-9 — half under the preview box.
+    STACK = rows_of(
+        bottom_lines(
+            "........##",
+            "........##",
+            "......####",
+            "....######",
+            "..########",
+            ".#########",
+            "..########",
+            "...#######",
+            "....######",
+            height=12,
+        ),
+        height=12,
+    )
+
+    def _tracker(self) -> GameStateTracker:
+        tracker = GameStateTracker(confirm_frames=2, rows=self.ROWS, unobservable_cells=self.CORNER)
+        attach(tracker, self.STACK)
+        return tracker
+
+    def test_covered_cells_become_row_bitmasks(self) -> None:
+        tracker = GameStateTracker(rows=self.ROWS, unobservable_cells=self.CORNER)
+        assert tracker.unknown_rows == (0b1100000000, 0b1100000000) + (0,) * 10
+        assert GameStateTracker(rows=self.ROWS).unknown_rows == (0,) * self.ROWS
+
+    def test_preview_pixels_never_reach_the_committed_stack(self) -> None:
+        # Whatever the NEXT preview draws in the corner is discarded.
+        tracker = self._tracker()
+        assert feed(tracker, merge(self.STACK, [(0, 8), (1, 9)]), "T", times=6) == []
+        assert tracker.committed.stack_rows == self.STACK
+
+    def test_resting_piece_in_the_corner_never_resets_the_board(self) -> None:
+        # The regression: an O resting at rows 1-2 / cols 8-9 shows only 2
+        # cells. Forced empty that was a broken tetromino, and 4 identical
+        # frames of it wiped the board.
+        tracker = self._tracker()
+        observed = merge(self.STACK, piece_cells("O", 0, 1, 8))
+        for _ in range(10):
+            assert feed(tracker, observed, "T") == []
+        assert tracker.committed.stack_rows == self.STACK
+
+    def test_lock_half_under_the_corner_is_still_a_verified_lock(self) -> None:
+        # The same O locks and a T spawns. The reveal carries 6 added cells,
+        # not 8, and the locked piece's visible half is not a tetromino:
+        # without the partial-lock rule the frame would be UNEXPLAINED and
+        # the next resting piece would reset the board all over again.
+        tracker = self._tracker()
+        resting = merge(self.STACK, piece_cells("O", 0, 1, 8))
+        feed(tracker, resting, "T", times=4)
+        revealed = merge(resting, piece_cells("T", 0, 0, 3))
+        events = feed(tracker, revealed, "S", times=2)
+        assert events == [GameEvent.PIECE_LOCKED, GameEvent.PIECE_SPAWNED]
+        # Committed: the cells actually seen. O, J and L all fit the visible
+        # half, so the covered cells stay a belief rather than a guess —
+        # the solver-side policy (CoachEngine._solver_board) is what keeps
+        # a hint out of them.
+        assert tracker.committed.stack_rows == merge(self.STACK, [(2, 8), (2, 9)])
+        assert tracker.committed.falling_piece == "T"
+
+    def test_a_genuinely_new_board_still_resets(self) -> None:
+        tracker = self._tracker()
+        new_world = rows_of(bottom_lines("#.#.#.#.#.", "##.##.##.#", height=12), height=12)
+        for _ in range(3):
+            assert feed(tracker, new_world, None) == []
+        assert feed(tracker, new_world, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == new_world
+
+    def test_reset_seeds_the_hidden_belief_empty(self) -> None:
+        # The observed value in a covered cell is meaningless, so a resync
+        # commits nothing there whatever the preview happened to be drawing.
+        tracker = self._tracker()
+        board = rows_of(bottom_lines("#.#.#.#.#.", "##.##.##.#", height=12), height=12)
+        feed(tracker, merge(board, list(self.CORNER)), None, times=4)
+        assert tracker.committed.stack_rows == board
