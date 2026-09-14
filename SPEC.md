@@ -162,6 +162,40 @@ vision/
                   # (coherent, no candidate) when several do; a lock reveal
                   # matches on the locked piece's visible cells. Without
                   # unknown_rows every rule is the fully-observed one.
+                  # The TOP EDGE of the board region is an unobservable
+                  # region no mask can name: pieces enter the playfield
+                  # from above row 0, so the frame a piece appears in shows
+                  # only its bottom 1-3 cells, and in a game with no
+                  # gravity (drag to move, drag to drop) that fragment SITS
+                  # there for seconds. It is read the same way as a panel's
+                  # edge: a 1-3 cell added fragment that TOUCHES row 0 and
+                  # is AIRBORNE is a piece entering from above, named when
+                  # exactly one tetromino completes it above the board and
+                  # OCCLUDED when several do (measured over the shape
+                  # space: 3 of 28 clipped rotations are nameable, the rest
+                  # hold — two cells side by side fit O, S, Z, J and L, and
+                  # a guessed name is a guessed hint). Its cells are NEVER
+                  # merged into the stack; only a verified lock's are, and
+                  # a lock revealed by a clipped spawn (4 + 1..3 added
+                  # cells, the hard-drop-plus-spawn frame) commits the lock
+                  # alone. Both guards carry their own failure: without the
+                  # row-0 touch a stray blob mid-board would be read as a
+                  # piece, and without the airborne test a column stacked
+                  # to the top (legal, and load-bearing) would be deleted
+                  # as one. Panel completions are tried FIRST, so a session
+                  # with a NEXT panel reads exactly as it did before the
+                  # rule existed. A clipped piece's bounding box starts
+                  # off-grid (row < 0), which the two position-anchored
+                  # lock rules skip rather than index the board with.
+                  # Measured on 96 consecutive frames of the failing
+                  # session (tests/fixtures/live_session): before, 34
+                  # frames UNEXPLAINED, 7 spurious BOARD_RESETs, 0 verified
+                  # locks, and the reset absorbed the fragment as phantom
+                  # row-0 stack cells — the board handed to the solver had
+                  # blocks in it that do not exist, which is why the first
+                  # hint was right and every later one was random. After: 0
+                  # unexplained, 0 resets, 4 locks, and a committed stack
+                  # equal to the board in the image.
                   # Next-piece region: threshold, crop to bounding box, normalize to
                   # cell grid, match shape signature. Color is a hint, not required.
   state.py        # GameState tracker: keeps the committed stack as the one
@@ -171,6 +205,15 @@ vision/
                   # PIECE_LOCKED fires when a lock is structurally verified, not at
                   # touchdown; BOARD_RESET only after several consecutive identical
                   # unexplainable frames (new game, garbage, mid-game attach).
+                  # A resync adopts the observed board as the stack MINUS
+                  # the visible part of a piece the top edge cut in half
+                  # (strip_entering_piece): a single component reaching row
+                  # 0 that satisfies the entering-piece rule against the
+                  # rest of the board. It is the one path that commits a
+                  # board it cannot diff, and a mid-game attach in a game
+                  # that parks spawns at the top edge is the ordinary case.
+                  # A fully visible piece is still absorbed (nothing in one
+                  # memoryless board says it is in flight).
                   # unobservable_cells: the tracker discards the capture's
                   # reading there and carries a BELIEF for those cells instead —
                   # seeded empty at bootstrap/resync, moved only by an explained
