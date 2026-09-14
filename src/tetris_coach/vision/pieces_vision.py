@@ -684,6 +684,30 @@ def _lock_with_clears(
     return None
 
 
+def _descended_from(found: FallingPiece, top: int, left: int, width: int) -> bool:
+    """Could ``found`` be the piece that vacated the box at ``(top, left)``?
+
+    A piece leaves cells behind by MOVING, and between two ticks 67 ms
+    apart it moves down and sideways, never UP — so the found piece must
+    start at or below the vacated box's top row. That is the half that
+    refuses the demonstrated false positives, all three of which vouch for
+    a deletion with a piece somewhere above it.
+
+    Sideways it must still be NEXT TO where it was: the two column spans
+    touch or overlap. Measured over 364 consecutive same-piece
+    observations across the four session replays, one tick moves a piece
+    at most two columns and the two spans never part company — though
+    they do merely touch (a vertical I stepping one column, an O stepping
+    two), which is why "touch" and not "overlap" is the test. This game
+    drags rather than drops, so a piece can cross its own width in a tick;
+    it cannot cross the board.
+    """
+    if found.row < top:
+        return False
+    found_width = ROTATIONS[found.piece][found.rotation_index].width
+    return found.col <= left + width and left <= found.col + found_width
+
+
 def _carried_piece(
     observed_rows: tuple[int, ...],
     stack_rows: tuple[int, ...],
@@ -707,9 +731,36 @@ def _carried_piece(
     - that piece is airborne in the stack without it (a piece resting on
       the stack is stack: it landed, and the memory is right);
     - and with it removed the frame reads as an ordinary FALLING frame
-      whose piece has the SAME NAME. That is the "it reappeared elsewhere"
-      test, and it is what separates a piece in flight from vision losing
-      a block: a dropout leaves nothing to find.
+      whose piece has the SAME NAME *and could have got there from where
+      the cells were*: at or below the rows they vacated, in columns that
+      still touch theirs (:func:`_descended_from`).
+
+    That last clause is the "it reappeared elsewhere" test, and the
+    position half of it is what carries it. The name half alone vouches
+    for nothing: any same-named tetromino ANYWHERE on the board answers
+    for the deletion, so a real island at rows 8-9 of cols 0-1 was vouched
+    for by an O at rows 0-1 of cols 8-9 — a piece that moved eight rows UP
+    and eight columns across in one tick. Pieces fall; the memory being
+    wrong means the piece moved DOWN out of cells the stack was holding,
+    which is exactly what the absorbed-piece frames do (00309-00310 move
+    straight down).
+
+    The position test is also the only thing standing between this rule
+    and a line clear's fade animation, which is the case ordering cannot
+    reach: :func:`_lock_with_clears` explains the SETTLED post-clear
+    frame, not a half-faded row, so a clearing row with its middle cells
+    blanked arrives here as a <= 4-cell missing set that is airborne over
+    the cavity beneath it and tetromino-shaped. Vouched for by the very
+    piece whose lock caused the clear, it deleted the clearing row's cells
+    and handed the solver a phantom gap to aim at; the piece is above the
+    row it completed, so the position test refuses it.
+
+    And it is what stops a subset from authorising four deletions: only
+    the vanished cells need be part of the candidate (the real absorbed
+    frames depend on that — a piece read in part is still the piece), so
+    without it one dropped cell of a settled vertical I deletes all four
+    while the other three are still lit on screen, read back as a piece
+    that moved UP a row. Equality is not the fix; continuity is.
 
     Errs toward doing nothing: any ambiguity, any leftover, any resting
     candidate, and the frame stays unexplainable and the tracker holds.
@@ -750,6 +801,7 @@ def _carried_piece(
                     explanation.kind is FrameKind.FALLING
                     and explanation.falling is not None
                     and explanation.falling.piece == rot.piece
+                    and _descended_from(explanation.falling, top, left, rot.width)
                 ):
                     return Explanation(
                         FrameKind.FALLING,

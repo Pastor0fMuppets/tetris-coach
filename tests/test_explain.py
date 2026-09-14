@@ -2,7 +2,7 @@
 
 import pytest
 
-from tetris_coach.core.board import HEIGHT, Board
+from tetris_coach.core.board import HEIGHT, WIDTH, Board
 from tetris_coach.core.pieces import PIECES, ROTATIONS
 from tetris_coach.vision.pieces_vision import (
     FrameKind,
@@ -888,6 +888,67 @@ class TestTheStackCarryingAPiece:
         exp = explain_grid(settled, stack, fp("I", 1, HEIGHT - 4, 9))
         assert exp.kind is FrameKind.LOCKED
         assert exp.stack_rows == settled
+
+    def test_a_piece_that_reappears_ABOVE_the_missing_cells_is_not_healed(self) -> None:
+        # The position half of "it reappeared elsewhere". Pieces fall; a
+        # tetromino of the same name eight rows UP and eight columns across
+        # is somebody else, and vouching for the deletion with it costs
+        # four real locked cells. Here the committed stack holds a genuine
+        # post-clear island at rows 8-9 of cols 0-1, the frame loses it,
+        # and an O is on the board near the top.
+        island = merge(self.STACK, piece_cells("O", 0, 8, 0))
+        exp = explain_grid(merge(self.STACK, piece_cells("O", 0, 0, 8)), island, None)
+        assert exp.kind is FrameKind.UNEXPLAINED
+        assert exp.stack_rows == island, "a real island was deleted"
+
+    def test_one_dropped_cell_does_not_authorise_deleting_four(self) -> None:
+        # Only the VANISHED cells need be part of the candidate — the real
+        # absorbed frames depend on that, a piece read in part is still the
+        # piece — so one dropped cell of a settled vertical I used to
+        # delete all four while the other three were still lit on screen,
+        # and read them back as a piece that had moved UP a row. Equality
+        # is not the fix (it would refuse the real frames); continuity is.
+        # Col 1 has a covered hole at row 17, so the I above it is airborne
+        # in the stack without it — as any column over a hole is.
+        column = [(r, 1) for r in range(HEIGHT - 7, HEIGHT - 3)]
+        stack = merge(self.STACK, column)
+        observed = merge(self.STACK, column[:-1], [(HEIGHT - 8, 1)])
+        exp = explain_grid(observed, stack, None)
+        assert exp.kind is FrameKind.UNEXPLAINED
+        assert exp.stack_rows == stack
+
+    def test_a_fade_frame_of_a_line_clear_is_not_a_carried_piece(self) -> None:
+        # The case ordering cannot reach. _lock_with_clears explains the
+        # SETTLED post-clear frame, not a half-faded row, so a clearing row
+        # with its middle four cells blanked arrives here as four missing
+        # cells that are tetromino-shaped and airborne over the cavity
+        # beneath them — vouched for by the very I whose lock caused the
+        # clear. Deleting them hands the solver a phantom four-wide gap to
+        # aim at, on the frames where the real board is about to collapse.
+        stack = rows_of(
+            [(HEIGHT - 2, c) for c in range(WIDTH - 1)],
+            [(HEIGHT - 1, c) for c in (0, 1, 6, 7, 8, 9)],
+        )
+        lit = merge(stack, piece_cells("I", 1, HEIGHT - 5, 9))
+        fade = tuple(row & ~0b0000111100 if r == HEIGHT - 2 else row for r, row in enumerate(lit))
+        exp = explain_grid(fade, stack, fp("I", 1, HEIGHT - 5, 9))
+        assert exp.kind is FrameKind.UNEXPLAINED
+        assert exp.stack_rows == stack, "the clearing row was deleted from the stack"
+
+    def test_a_piece_dragged_to_the_next_column_is_still_healed(self) -> None:
+        # ...and the measurement that keeps the position test honest: one
+        # tick moves a piece at most two columns, but a vertical I stepping
+        # one column and an O stepping two leave column spans that merely
+        # TOUCH. Measured over 364 consecutive same-piece observations
+        # across the four session replays, all three such steps are real.
+        carried = self.carrying("I", 1, 0, 3)
+        exp = explain_grid(merge(self.STACK, piece_cells("I", 1, 0, 2)), carried, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.stack_rows == self.STACK
+        carried_o = self.carrying("O", 0, 0, 6)
+        exp = explain_grid(merge(self.STACK, piece_cells("O", 0, 0, 4)), carried_o, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.stack_rows == self.STACK
 
     def test_covered_cells_are_never_evidence_that_a_piece_moved(self) -> None:
         # Unobservable cells read as empty, and "covered" must never be
