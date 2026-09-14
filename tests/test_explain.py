@@ -674,6 +674,68 @@ class TestEnteringFromAbove:
         assert (exp.falling.piece, exp.falling.row) == ("I", 0)
 
 
+class TestTheEnteringPieceHint:
+    """Naming a clipped fragment from the piece that LEFT the NEXT preview.
+
+    A game deals the previewed piece and shows the one after it, so a
+    preview that changes from X to Y is the game saying "X is the piece
+    now entering". That is evidence, not a guess, and it is the only
+    evidence there is about a fragment two cells wide: an O, an S, a Z, a
+    J and an L all fit it. The hint may only SELECT among the completions
+    the structural rule already accepts.
+    """
+
+    STACK_CELLS = bottom_lines("###....###")
+    STACK = rows_of(STACK_CELLS)
+    FRAGMENT = ((0, 4), (0, 5))
+
+    @pytest.mark.parametrize("piece", ["O", "S", "Z", "J", "L"])
+    def test_the_departing_preview_names_the_fragment(self, piece: str) -> None:
+        observed = merge(self.STACK, self.FRAGMENT)
+        exp = explain_grid(observed, self.STACK, None, entering_hint=piece)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert exp.falling.piece == piece
+        # A real completion of THIS fragment, still in flight above row 0.
+        assert exp.falling.row < 0
+        assert {cell for cell in exp.falling.cells if cell[0] >= 0} == set(self.FRAGMENT)
+        assert exp.stack_rows == self.STACK  # never stack content
+
+    @pytest.mark.parametrize("piece", ["I", "T"])
+    def test_a_name_no_completion_carries_changes_nothing(self, piece: str) -> None:
+        # No I and no T can be cut into two cells side by side, so the
+        # hint selects nothing and the frame is ambiguous exactly as before.
+        observed = merge(self.STACK, self.FRAGMENT)
+        exp = explain_grid(observed, self.STACK, None, entering_hint=piece)
+        assert exp.kind is FrameKind.OCCLUDED
+        assert exp.falling is None
+
+    def test_a_name_that_does_not_locate_the_piece_changes_nothing(self) -> None:
+        # One cell at row 0 admits THREE T placements. The name is right
+        # and the position is still unknown, so there is no hint to give.
+        exp = explain_grid(merge(self.STACK, [(0, 4)]), self.STACK, None, entering_hint="T")
+        assert exp.kind is FrameKind.OCCLUDED
+        assert exp.falling is None
+
+    def test_structure_outranks_the_preview(self) -> None:
+        # Three cells stacked in one column are a vertical I and nothing
+        # else. A preview saying "O" does not make them one.
+        visible = clipped_cells("I", 1, 1, 6)
+        exp = explain_grid(merge(self.STACK, visible), self.STACK, None, entering_hint="O")
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert exp.falling.piece == "I"
+
+    def test_the_hint_cannot_create_an_explanation(self) -> None:
+        # Every guard still holds: a row-0 cell RESTING on the stack is
+        # board content, and no preview reading turns it into a spawn.
+        column = [(r, 3) for r in range(1, 20)]
+        stack = rows_of(self.STACK_CELLS, column)
+        exp = explain_grid(merge(stack, [(0, 3)]), stack, None, entering_hint="I")
+        assert exp.kind is FrameKind.UNEXPLAINED
+        assert exp.falling is None
+
+
 class TestClearFullRowsMatchesCore:
     @pytest.mark.parametrize("piece", PIECES)
     def test_parity_with_board_drop(self, piece: str) -> None:

@@ -28,8 +28,17 @@ every hint after it was random.
 AFTER (same frames, same gate):
 
     UNEXPLAINED 0          BOARD_RESET 0   PIECE_LOCKED 4
-    spawns named 4         frames with a hint 62
+    spawns named 4         frames with a hint 75
     committed stack, last frame:  exactly the board in the image
+
+62 of those hints came from the top-edge rule alone; the other 13 came
+from reading the preview, which used to return None on every frame of
+this session (Bug 2). The preview holds the O until frame 59 and the I
+from 59 on, so frame 59 is the game saying "the O is the piece now
+entering" — which is exactly the two-celled fragment sitting at the top
+edge that nothing else can name. It is named on frame 61 instead of 74,
+and frame 74, where the piece descends into full view and the ordinary
+shape rule names it independently, agrees: an O.
 
 32 of the 96 frames are still REJECTED by the confidence gate before the
 tracker ever sees them (this game's light theme reads at 0.08 while a
@@ -87,6 +96,7 @@ class Tick:
         events: list[GameEvent],
         stack_rows: tuple[int, ...],
         falling: str | None,
+        next_piece: str | None,
         hint: Move | None,
     ) -> None:
         self.number = number
@@ -95,6 +105,7 @@ class Tick:
         self.events = events
         self.stack_rows = stack_rows
         self.falling = falling
+        self.next_piece = next_piece
         self.hint = hint
 
     @property
@@ -135,6 +146,7 @@ def replay() -> tuple[Tick, ...]:
                 events=list(seen),
                 stack_rows=committed.stack_rows,
                 falling=committed.falling_piece,
+                next_piece=committed.next_piece,
                 hint=hint,
             )
         )
@@ -191,27 +203,55 @@ def test_frame_59_is_a_lock_plus_a_piece_entering_from_above() -> None:
     assert GameEvent.PIECE_LOCKED in tick("00060").events
 
 
-def test_the_entering_piece_holds_rather_than_being_guessed() -> None:
+def test_the_entering_piece_is_named_by_the_departing_preview() -> None:
     # Frames 59-67 are byte-identical: this game has no gravity, so the
     # spawned piece SITS at the top edge. Two cells side by side fit an O,
-    # an S, a Z, a J and an L, so the frames are coherent but nameless —
-    # held, never guessed, and never counted toward a reset.
-    held = [tick(f"000{n}") for n in range(61, 74)]
-    assert all(t.kind is FrameKind.OCCLUDED for t in held)
-    assert all(t.stack_rows == (0,) * 11 + (0b1111,) for t in held)
-    assert all(t.falling is None for t in held)
+    # an S, a Z, a J and an L, so shape alone cannot name them — but the
+    # preview flipped from O to I on frame 59, which is the game saying
+    # the O is what it just dealt. Named on 61, committed on 62.
+    sitting = [tick(f"000{n}") for n in range(61, 74)]
+    assert all(t.kind is FrameKind.FALLING for t in sitting)
+    assert all(t.stack_rows == (0,) * 11 + (0b1111,) for t in sitting)
+    assert [t.falling for t in sitting] == [None] + ["O"] * 12
+    # Never guessed: the name is the one the preview vouched for, and the
+    # fragment itself stays out of the stack (asserted above) — nothing
+    # here is committed that the piece could not later contradict.
+    assert tick("00058").kind is FrameKind.FALLING  # the I, still falling
+    assert tick("00062").events == [GameEvent.PIECE_SPAWNED]
+
+
+def test_the_preview_agrees_with_the_piece_that_descends() -> None:
+    # The check that keeps the preview honest: the name it supplied at
+    # frame 61 is the name the shape rule derives on its own at frame 74,
+    # when the piece's second row clears the top edge. Two independent
+    # readings, one answer, no extra spawn between them.
+    assert tick("00074").kind is FrameKind.FALLING
+    assert tick("00074").falling == "O"
+    between = [t for t in replay() if "00062" < t.number <= "00074"]
+    assert all(GameEvent.PIECE_SPAWNED not in t.events for t in between)
 
 
 def test_pieces_are_named_and_hinted_after_frame_59() -> None:
-    # The user-visible payoff: the coach keeps coaching. The O names itself
-    # as soon as its second row clears the top edge (frame 74), and every
-    # piece named from there on is hinted.
-    assert tick("00074").kind is FrameKind.FALLING
-    assert tick("00075").falling == "O"
+    # The user-visible payoff: the coach keeps coaching. Every piece named
+    # after the frame that used to kill the session is hinted, and the
+    # preview's 13 extra frames are 13 fewer with nothing on screen.
     named = [t for t in replay() if t.falling is not None and t.number > "00059"]
     assert {t.falling for t in named} == {"O", "I"}
     assert all(t.hint is not None and t.hint.piece == t.falling for t in named)
-    assert sum(t.hint is not None for t in replay()) == 62
+    assert sum(t.hint is not None for t in replay()) == 75
+
+
+def test_the_preview_is_read_on_every_frame_of_the_window() -> None:
+    # Bug 2 in the session it was diagnosed on: identify_next returned
+    # None on all 96 of these frames, so the tracker logged next=- all
+    # session and no hint was ever 2-ply. Every committed frame now
+    # carries the upcoming piece.
+    accepted = [t for t in replay() if t.accepted]
+    assert len(accepted) == 64
+    # The first accepted frame is still the bootstrap snapshot (nothing has
+    # been committed yet); every commit from there on carries the preview.
+    assert accepted[0].next_piece is None
+    assert all(t.next_piece in ("O", "I") for t in accepted[1:])
 
 
 def test_the_preview_corner_is_never_read_as_board_content() -> None:

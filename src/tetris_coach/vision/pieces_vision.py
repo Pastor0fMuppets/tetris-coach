@@ -263,6 +263,7 @@ def _entering_piece(
     fragment: set[Cell],
     stack_rows: tuple[int, ...],
     unknown_rows: tuple[int, ...],
+    entering_hint: str | None = None,
 ) -> tuple[bool, FallingPiece | None]:
     """``(the fragment is a piece entering from above, its name when unique)``.
 
@@ -270,12 +271,30 @@ def _entering_piece(
     piece is entering — but two horizontally adjacent cells at row 0 fit an
     O, an S, a Z, a J and an L alike, and a guessed name is a guessed hint.
     Holding beats guessing; the piece names itself as soon as it descends.
+
+    ``entering_hint`` breaks that tie when there is EVIDENCE for the name
+    rather than a guess: the piece that just left the NEXT preview is the
+    piece now entering the board (the tracker watches the preview change
+    and passes the departing name; see
+    :meth:`~tetris_coach.vision.state.GameStateTracker.update`). It only
+    ever SELECTS among completions the structural rule already accepts —
+    every guard above still holds — and only when exactly one of them
+    carries that name; otherwise the frame is ambiguous as before. A
+    mis-read preview can therefore misname an entering piece, and that is
+    the deliberate trade: the alternative is no name for as long as the
+    piece sits at the top edge (measured on the live session: 13 frames,
+    ~0.9 s, of a piece nobody could hint), and a misnamed one is corrected
+    by the ordinary rules the moment it descends into full view.
     """
     completions = _clipped_completions(fragment, stack_rows, unknown_rows)
     if not completions:
         return False, None
     if len(completions) == 1:
         return True, next(iter(completions))
+    if entering_hint is not None:
+        hinted = [piece for piece in completions if piece.piece == entering_hint]
+        if len(hinted) == 1:
+            return True, hinted[0]
     return True, None
 
 
@@ -511,6 +530,7 @@ def explain_grid(
     *,
     max_missing_cells: int = 2,
     unknown_rows: tuple[int, ...] | None = None,
+    entering_hint: str | None = None,
 ) -> Explanation:
     """Explain one observed frame against the committed stack memory.
 
@@ -525,6 +545,12 @@ def explain_grid(
     hypothesis' hidden cells, and never a reason to reset. With no
     unobservable cells (the default) every rule below is exactly the
     fully-observed one.
+
+    ``entering_hint`` names the piece the NEXT preview says is entering the
+    board. It is used for ONE thing: choosing between the tetrominoes that
+    complete a fragment the top edge has cut in half, which no structural
+    rule can separate (see :func:`_entering_piece`). It can never create,
+    suppress or relocate an explanation.
     """
     unknown = unknown_rows if unknown_rows is not None else (0,) * len(observed_rows)
     added_rows = tuple(
@@ -568,7 +594,7 @@ def explain_grid(
         # it can explain is explained there and nothing a panel selection
         # used to do changes. Only what the panel cannot explain — every
         # fragment in a session with no panel at all — reaches the top edge.
-        entering, piece = _entering_piece(added, stack_rows, unknown)
+        entering, piece = _entering_piece(added, stack_rows, unknown, entering_hint)
         if entering:
             kind = FrameKind.FALLING if piece is not None else FrameKind.OCCLUDED
             return Explanation(kind, stack_rows, piece)

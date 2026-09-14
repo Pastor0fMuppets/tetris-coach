@@ -488,6 +488,57 @@ class TestUnobservableCells:
         assert tracker.committed.stack_rows == board
 
 
+class TestTheEnteringPieceHint:
+    """The tracker watches the preview so it can name what the top edge cuts.
+
+    A game deals the previewed piece and shows the one after it, so a
+    preview that changes from X to Y says X is the piece now entering the
+    board. Until it does, a fragment two cells wide is nameless (an O, an
+    S, a Z, a J and an L all fit) — and in a game that parks spawns at the
+    top edge, nameless means no hint for as long as the piece sits there.
+    """
+
+    STACK = rows_of(bottom_lines("###....###"))
+    FRAGMENT = ((0, 4), (0, 5))
+
+    def test_the_departing_preview_names_the_entering_piece(self) -> None:
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")  # the preview holds the O
+        entering = merge(self.STACK, self.FRAGMENT)
+        assert feed(tracker, entering, "I") == []  # the O is dealt: preview -> I
+        assert feed(tracker, entering, "I") == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "O"
+        assert tracker.committed.stack_rows == self.STACK  # still not stack
+
+    def test_the_named_piece_is_the_one_that_descends(self) -> None:
+        # The proof the name was right rather than merely early: the same
+        # piece drops into full view, where the ordinary shape rule names
+        # it from four cells — and it is the O, with no second spawn.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        descended = merge(self.STACK, piece_cells("O", 0, 2, 4))
+        assert feed(tracker, descended, "I", times=2) == []
+        assert tracker.committed.falling_piece == "O"
+
+    def test_a_preview_that_was_never_known_names_nothing(self) -> None:
+        # None -> X is not a deal: the preview box is unreadable on plenty
+        # of frames, and nothing about the piece entering follows from it.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, None)
+        entering = merge(self.STACK, self.FRAGMENT)
+        assert feed(tracker, entering, "I", times=3) == []
+        assert tracker.committed.falling_piece is None
+        assert tracker.committed.stack_rows == self.STACK
+
+    def test_a_steady_preview_names_nothing(self) -> None:
+        # And neither does a preview that never changes: no deal, no name.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        assert feed(tracker, merge(self.STACK, self.FRAGMENT), "O", times=3) == []
+        assert tracker.committed.falling_piece is None
+
+
 class TestResyncAndTheTopEdge:
     """A resync must not freeze a piece that is still entering the field.
 

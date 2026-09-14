@@ -196,6 +196,29 @@ vision/
                   # hint was right and every later one was random. After: 0
                   # unexplained, 0 resets, 4 locks, and a committed stack
                   # equal to the board in the image.
+                  # That tie is broken by EVIDENCE, where there is any,
+                  # rather than by a guess: a game deals the previewed
+                  # piece and shows the one after it, so a preview
+                  # changing X -> Y says X is the piece now entering
+                  # (entering_hint, supplied by the tracker, which
+                  # watches the preview — only a change of a KNOWN preview
+                  # counts, since None -> X says nothing about what was
+                  # dealt). The hint only SELECTS among completions the
+                  # structural rule already accepts, and only when exactly
+                  # one of them carries that name: it can never create,
+                  # suppress or relocate an explanation, a name no
+                  # completion carries changes nothing, and a name that
+                  # fits several placements of the same piece still holds.
+                  # A mis-read preview can therefore misname an entering
+                  # piece — the deliberate trade against no name at all for
+                  # as long as it sits at the top edge (measured on the live
+                  # session: 13 frames, ~0.9 s) — and the ordinary rules
+                  # rename it the moment it descends into view. It only
+                  # became possible once the preview could be read at all
+                  # (see identify_next); the panel case is deliberately left
+                  # alone, because a piece that slides under a panel was
+                  # named from its own earlier frames, while a piece
+                  # entering the field has never been seen whole.
                   # Next-piece region: threshold, keep the BLOCK-LIKE
                   # connected components, derive the cell grid from those
                   # blocks, match the shape. Color is a hint, not required.
@@ -254,6 +277,15 @@ vision/
                   # that parks spawns at the top edge is the ordinary case.
                   # A fully visible piece is still absorbed (nothing in one
                   # memoryless board says it is in flight).
+                  # The tracker also remembers the preview: the last known
+                  # reading and the one it replaced. The piece that LEAVES
+                  # the preview is the piece entering the board, which is the
+                  # only evidence there is for naming a fragment the top edge
+                  # has cut in half (explain_grid's entering_hint above).
+                  # Measured on the live session: the O is named on frame 61
+                  # instead of 74 — 13 frames, ~0.9 s, that used to carry no
+                  # hint at all — and frame 74's independent structural
+                  # reading agrees it is an O.
                   # unobservable_cells: the tracker discards the capture's
                   # reading there and carries a BELIEF for those cells instead —
                   # seeded empty at bootstrap/resync, moved only by an explained

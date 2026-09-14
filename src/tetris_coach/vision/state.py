@@ -128,6 +128,10 @@ class GameStateTracker:
         self.last_kind: FrameKind | None = None
         self._unexplained_rows: tuple[int, ...] | None = None
         self._unexplained_count = 0
+        # Preview memory, for naming a piece the top edge has cut in half.
+        # The last non-None preview reading, and the one it replaced.
+        self._preview_piece: str | None = None
+        self._entering_hint: str | None = None
 
     @property
     def committed(self) -> Snapshot:
@@ -151,12 +155,25 @@ class GameStateTracker:
         rows = tuple(
             o & ~u for o, u in zip(_rows_from_grid(occupancy), self.unknown_rows, strict=True)
         )
+        # The piece that LEAVES the preview is the piece entering the board:
+        # a game deals the previewed piece and shows the one after it. That
+        # is the only evidence anything has about the name of a piece the
+        # board region's top edge has cut in half — 1-3 cells at row 0 fit
+        # several tetrominoes, and this session's game parks them there for
+        # seconds. Only a change of a KNOWN preview counts: the preview
+        # reading is None whenever the box is mid-animation or unreadable,
+        # and None -> X says nothing about what was dealt.
+        if next_piece is not None and next_piece != self._preview_piece:
+            if self._preview_piece is not None:
+                self._entering_hint = self._preview_piece
+            self._preview_piece = next_piece
         explanation = explain_grid(
             rows,
             self._committed.stack_rows,
             self._last_falling,
             max_missing_cells=self._max_missing_cells,
             unknown_rows=self.unknown_rows,
+            entering_hint=self._entering_hint,
         )
         self.last_kind = explanation.kind
 
