@@ -143,6 +143,87 @@ vision/
                   # so on stderr at startup, because that mask is what an
                   # ordinary mis-selection produces: a NEXT queue drawn as a
                   # bar across the top of the playfield.
+                  # THIRD LEVEL: almost every modern Tetris draws a GHOST —
+                  # the landing preview under the falling piece. It is
+                  # translucent, so its cells score BETWEEN the background
+                  # and a real piece, and Otsu has only two classes to give
+                  # them to. Measured on tests/fixtures/ghost_session:
+                  # background 0.00-0.02, ghost 0.32, solid 0.57-0.82, with
+                  # the split landing either side depending on what else is
+                  # on the board. Read as content a ghost is a tetromino
+                  # that TELEPORTS, which the tracker cannot explain: two
+                  # identical ghost frames are exactly its debounce, so it
+                  # committed a phantom LOCK, the next drag "moved" locked
+                  # cells, and four unexplainable frames later BOARD_RESET
+                  # adopted the observed board and swallowed the real
+                  # falling piece (measured on that window: 52 of 95 frames
+                  # UNEXPLAINED, 9 resets, 8 frames with a hint, an 85-frame
+                  # / 5.7 s stretch with none). The same intermediate
+                  # cluster also sits inside the class gap confidence is
+                  # measured from, so readable frames were reported
+                  # ambiguous and dropped at the gate.
+                  # _ghost_layer names that level instead, and it is taken
+                  # out of the split entirely, so both the threshold and the
+                  # confidence are measured on the separation that decides
+                  # occupancy: background versus a real piece color.
+                  # The score band [MIN_SPREAD/2, MIN_SPREAD) only nominates
+                  # a CANDIDATE; it can never be the answer, because this
+                  # same game has a real piece color inside it — a pale
+                  # periwinkle at 0.346 against the ghost's 0.320, four
+                  # thousandths under the floor (on the stack in
+                  # roas_stacker's live2_board_00500 and 00600 a hundred
+                  # ticks apart, and caught in mid-air, unambiguously
+                  # falling, in 00800). No threshold on this scale
+                  # separates those; only where the cells SIT can. So a
+                  # candidate is dropped unless the whole structure of a
+                  # preview is there: clear of the background cluster by
+                  # MIN_SPREAD/2 (the background's own spread is 0.02, a
+                  # ghost's clearance 0.21-0.30), exactly one tetromino,
+                  # RESTING on the floor or on a piece color, and with no
+                  # solid cell to its left, to its right, or above it.
+                  # That last test is the one the band cannot do: a preview
+                  # marks space the piece can still drop into, so it is the
+                  # topmost thing in its own cells with open air either
+                  # side, while a piece the stack has grown around got there
+                  # by being played. Support from BELOW stays legal, so a
+                  # ghost resting on a flat stack surface is still named; a
+                  # ghost in a WELL is not, since its sides touch and it is
+                  # the same picture as a piece played into the notch.
+                  # ANY solid neighbour refuses, not merely a grounded one,
+                  # because this game floats a one-cell round "1" badge
+                  # directly over the preview: the badge is furniture too
+                  # but scores 0.49, so nothing can name it, and naming the
+                  # preview under it left the badge as an unexplainable
+                  # added cell (measured: 4 UNEXPLAINED frames, a
+                  # BOARD_RESET, and the badge committed as a phantom).
+                  # Unobservable cells are left out of the band, out of the
+                  # background cluster and out of the neighbour tests, for
+                  # the same reason they are left out of everything else
+                  # (measured: the covered cell (0,8) scores 0.15 against a
+                  # background otherwise topping out at 0.02, which alone
+                  # put a real ghost 0.005 inside the clearance margin and
+                  # refused every frame of the live session).
+                  # Every test errs toward LEAVING THE CELLS ALONE, because
+                  # the costs are not symmetric: a ghost left in costs held
+                  # frames, while real content taken out deletes stack and
+                  # hands the solver room that does not exist. The two
+                  # residual errors are the opposite corners — a ghost drawn
+                  # opaque enough to leave the band, or resting in a well,
+                  # stays content and the frame is simply held (the common
+                  # one, and the preferred direction); a real band-colored
+                  # piece freshly locked on a FLAT surface with open air
+                  # beside and above it is deleted, which needs a pale-on-
+                  # pale skin and ends the moment anything lands beside it.
+                  # TWO CLUSTERS BEHAVE EXACTLY AS BEFORE: past the
+                  # uniform-near branch the ordinary split already puts
+                  # every sub-floor cell in the empty class, and no cell of
+                  # any theme in the synthetic matrix reaches the band at
+                  # all (measured: 0 band cells over 840 random boards x 3
+                  # cell sizes x 7 styles).
+                  # Measured after: ghost_session 0 UNEXPLAINED, 0 resets,
+                  # 93 of 95 frames hinted, longest gap 2 (the bootstrap);
+                  # gate rejections across both committed sessions 33 of
+                  # 191 -> 18 of 191, and live_session's own 32 -> 17.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the

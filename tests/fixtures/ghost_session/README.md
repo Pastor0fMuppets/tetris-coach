@@ -39,3 +39,26 @@ the ghost is read as real board content intermittently:
 The ghost is also what collapses the confidence measure on this game: the
 intermediate cluster sits between the two classes, narrowing the gap the
 confidence is computed from, which is why frames are rejected at the gate.
+
+## After
+
+`vision.grid._ghost_layer` names the third level and takes it out of the
+split. Replayed through `CoachEngine` (tests/test_ghost_session.py):
+
+- 0 UNEXPLAINED frames, 0 BOARD_RESETs, 3 verified locks.
+- 93 of 95 frames carry a hint; the only gap is the two frames before
+  anything has been committed at all.
+- The O is tracked from frame 57 to 105 as the player drags it down and
+  left, hinted at cols 0-1 on the floor throughout, and that is where it
+  actually locks on frame 106.
+- Frame 150 is still refused, on purpose: the preview there carries the
+  game's one-cell round "1" badge, which scores 0.49 - a full piece
+  color - so nothing can name it, and the rule refuses the whole widget
+  rather than leave an unexplainable cell behind. That frame reads as it
+  always did: below the gate, last hint held.
+
+Note for anyone reading these frames by eye: the pale CYAN fill
+(RGB 206, 248, 253) is the preview. The white outlines are a second,
+fainter preview the classifier never sees at all - they score 0.02,
+because each cell is sampled at its center and the outline is at its
+edge.
