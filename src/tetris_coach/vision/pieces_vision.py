@@ -266,9 +266,9 @@ def _entering_piece(
     """``(the fragment is a piece entering from above, its name when unique)``.
 
     Ambiguity is reported as ``(True, None)``: the frame is coherent — some
-    piece is entering — but two horizontally adjacent cells fit an O, an S,
-    a Z, a J, an L and a T alike, and a guessed name means a guessed hint.
-    Holding beats guessing; the piece names itself one row later.
+    piece is entering — but two horizontally adjacent cells at row 0 fit an
+    O, an S, a Z, a J and an L alike, and a guessed name is a guessed hint.
+    Holding beats guessing; the piece names itself as soon as it descends.
     """
     completions = _clipped_completions(fragment, stack_rows, unknown_rows)
     if not completions:
