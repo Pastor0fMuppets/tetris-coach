@@ -182,9 +182,21 @@ vision/
                   # row-0 touch a stray blob mid-board would be read as a
                   # piece, and without the airborne test a column stacked
                   # to the top (legal, and load-bearing) would be deleted
-                  # as one. Panel completions are tried FIRST, so a session
-                  # with a NEXT panel reads exactly as it did before the
-                  # rule existed. A clipped piece's bounding box starts
+                  # as one. A panel completion and a clipped one are
+                  # hypotheses about the SAME cells, so they are ONE
+                  # candidate set, counted together, on every path that
+                  # reads a fragment (the frame itself, a lock reveal's
+                  # spawn, a clearing lock's residual). Asking the panel
+                  # first and answering from it alone is a wrong answer
+                  # dressed as a unique completion: in this session's own
+                  # geometry the fragment (0,5),(0,6),(0,7) has exactly one
+                  # panel completion (a flat I hiding its fourth cell under
+                  # the panel) and three clipped ones (T, J, L entering from
+                  # above), and the panel's I came with a position too
+                  # (measured: 6 such fragments at cols 5-7, each of which
+                  # named a piece that is not there and then went
+                  # UNEXPLAINED for 4 frames -> BOARD_RESET when the real
+                  # piece dropped). A clipped piece's bounding box starts
                   # off-grid (row < 0), which the two position-anchored
                   # lock rules skip rather than index the board with.
                   # Measured on 96 consecutive frames of the failing

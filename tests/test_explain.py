@@ -488,14 +488,48 @@ class TestUnobservableCells:
         assert exp.falling is None  # O, J and L all fit: name nothing
 
     def test_unique_completion_identifies_the_piece(self) -> None:
-        # One covered cell at (0,9): three cells of a flat I are visible and
+        # One covered cell at (3,9): three cells of a flat I are visible and
         # only the I completes them, so the piece is named and positioned.
-        unknown = rows_of([(0, 9)], height=self.ROWS)
-        observed = merge(self.EMPTY12, [(0, 6), (0, 7), (0, 8)])
+        # Clear of row 0, so the panel is the only hypothesis there is.
+        unknown = rows_of([(3, 9)], height=self.ROWS)
+        observed = merge(self.EMPTY12, [(3, 6), (3, 7), (3, 8)])
         exp = explain_grid(observed, self.EMPTY12, None, unknown_rows=unknown)
         assert exp.kind is FrameKind.FALLING
         assert exp.falling is not None
-        assert (exp.falling.piece, exp.falling.row, exp.falling.col) == ("I", 0, 6)
+        assert (exp.falling.piece, exp.falling.row, exp.falling.col) == ("I", 3, 6)
+
+    def test_a_panel_completion_does_not_outrank_the_top_edge(self) -> None:
+        # The same fragment AT ROW 0 is not the panel's to answer alone: a
+        # flat I with its fourth cell under the panel fits, and so do a T, a
+        # J and an L entering from above. Four hypotheses about the same
+        # three cells is an ambiguity, and it used to read as a confident I
+        # — a wrong name AND a wrong position, in this session's own
+        # geometry (the live mask covers rows 0-1, cols 8-9).
+        observed = merge(self.EMPTY12, [(0, 5), (0, 6), (0, 7)])
+        exp = explain_grid(observed, self.EMPTY12, None, unknown_rows=self.CORNER)
+        assert exp.kind is FrameKind.OCCLUDED
+        assert exp.falling is None
+
+    def test_the_hint_selects_across_both_kinds_of_completion(self) -> None:
+        # The tie above is broken by evidence where there is any: the
+        # preview says a T is entering, exactly one candidate is a T, and
+        # it is one entering from above — which is all the hint is evidence
+        # about. The name is flagged as the hint's, not the frame's.
+        observed = merge(self.EMPTY12, [(0, 5), (0, 6), (0, 7)])
+        exp = explain_grid(
+            observed, self.EMPTY12, None, unknown_rows=self.CORNER, entering_hint="T"
+        )
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert (exp.falling.piece, exp.falling.row, exp.falling.col) == ("T", -1, 5)
+        assert exp.hinted_name
+        # "I" is the panel's candidate: a piece already on the board, which
+        # the preview says nothing about. Still ambiguous.
+        hinted_i = explain_grid(
+            observed, self.EMPTY12, None, unknown_rows=self.CORNER, entering_hint="I"
+        )
+        assert hinted_i.kind is FrameKind.OCCLUDED
+        assert hinted_i.falling is None
 
     def test_lock_reveal_commits_the_hidden_half_of_the_piece(self) -> None:
         # The O above locks and the next piece spawns: only 2 of the locked
@@ -660,18 +694,42 @@ class TestEnteringFromAbove:
         assert exp.stack_rows == s2
         assert exp.falling is None
 
-    def test_a_covered_panel_answers_before_the_top_edge(self) -> None:
-        # Priority, so that no session with a NEXT panel reads differently
-        # than it did: a fragment the panel can explain is explained there.
-        # Three cells of a flat I with (0,9) behind the panel stay a named I
-        # (a T, J or L cut by the top edge would fit those cells too).
+    def test_a_covered_panel_does_not_answer_before_the_top_edge(self) -> None:
+        # A panel hypothesis and a top-edge one are hypotheses about the
+        # SAME cells, so neither outranks the other. Three cells of a flat I
+        # with (0,9) behind the panel used to be a named I because the panel
+        # was asked first and its completion was unique THERE — while a T, a
+        # J and an L cut by the top edge fit the identical cells. Four
+        # candidates is an ambiguity, and OCCLUDED holds state.
         unknown = rows_of([(0, 9)], height=12)
         empty12: tuple[int, ...] = (0,) * 12
         observed = merge(empty12, [(0, 6), (0, 7), (0, 8)])
         exp = explain_grid(observed, empty12, None, unknown_rows=unknown)
-        assert exp.kind is FrameKind.FALLING
-        assert exp.falling is not None
-        assert (exp.falling.piece, exp.falling.row) == ("I", 0)
+        assert exp.kind is FrameKind.OCCLUDED
+        assert exp.falling is None
+        # One row down there is no top-edge hypothesis at all, and the
+        # panel's unique completion names the piece exactly as it always did.
+        lower = merge(empty12, [(1, 6), (1, 7), (1, 8)])
+        deep = explain_grid(lower, empty12, None, unknown_rows=rows_of([(1, 9)], height=12))
+        assert deep.kind is FrameKind.FALLING
+        assert deep.falling is not None
+        assert (deep.falling.piece, deep.falling.row) == ("I", 1)
+
+    def test_the_lock_reveal_reads_a_spawn_the_panel_can_explain(self) -> None:
+        # The same ordering, on the path that verifies a lock: the spawn
+        # revealing it may be cut by the top edge OR half under the panel,
+        # and asking only the top edge names a piece that is not there.
+        # Live geometry: a T spawning at (0,6) shows {(0,7), (1,6), (1,7)}
+        # (its other cell is behind the panel), which the top-edge rule
+        # alone read as a J at row -1 — a name and an off-grid position for
+        # a piece sitting squarely on the board.
+        corner = rows_of([(0, 8), (0, 9), (1, 8), (1, 9)], height=12)
+        stack = rows_of(bottom_lines("####......", height=12), height=12)
+        observed = merge(stack, piece_cells("O", 0, 10, 4), [(0, 7), (1, 6), (1, 7)])
+        exp = explain_grid(observed, stack, None, unknown_rows=corner)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == merge(stack, piece_cells("O", 0, 10, 4))
+        assert exp.falling is None  # T, S and J all fit: the lock stands, unnamed
 
 
 class TestTheEnteringPieceHint:

@@ -99,6 +99,13 @@ class Explanation:
     kind: FrameKind
     stack_rows: tuple[int, ...]  # meaningful for QUIET/FALLING/LOCKED only
     falling: FallingPiece | None  # position included (raw observation)
+    # True when ``falling``'s NAME came from the entering hint rather than
+    # from the frame's own structure: the preview said which piece is
+    # entering, and several tetrominoes fit the cells on screen. A guess
+    # backed by evidence is good enough to hint on, and not good enough to
+    # become evidence itself (see
+    # :meth:`~tetris_coach.vision.state.GameStateTracker.update`).
+    hinted_name: bool = False
 
 
 def match_cells(cells: frozenset[Cell] | set[Cell] | tuple[Cell, ...]) -> tuple[str, int] | None:
@@ -259,18 +266,48 @@ def _clipped_completions(
     return completions
 
 
-def _entering_piece(
+def _partial_completions(
+    fragment: set[Cell],
+    stack_rows: tuple[int, ...],
+    unknown_rows: tuple[int, ...],
+) -> set[FallingPiece]:
+    """Every piece whose VISIBLE new cells are exactly ``fragment``.
+
+    A fragment of 1-3 cells is a piece the capture cannot see whole, and
+    there are two ways for that to happen at once: cells hidden under a UI
+    panel (:func:`_hidden_completions`) and cells above the board region's
+    top edge (:func:`_clipped_completions`). Both are hypotheses about the
+    SAME cells, so they are one candidate set and not two.
+
+    Asking the panel first and answering from it alone is what this
+    replaces: in the live session's own geometry (a panel at rows 0-1,
+    cols 8-9) the fragment ``{(0,5), (0,6), (0,7)}`` has exactly ONE panel
+    completion — a horizontal I whose fourth cell hides under the panel —
+    and three clipped ones (a T, a J and an L entering from above). The
+    panel's answer is a guess dressed as a unique completion, and it comes
+    with a position as well as a name.
+    """
+    completions: set[FallingPiece] = {
+        piece
+        for cells in _hidden_completions(fragment, unknown_rows, len(stack_rows))
+        if (piece := _piece_at(cells)) is not None
+    }
+    return completions | _clipped_completions(fragment, stack_rows, unknown_rows)
+
+
+def _partial_piece(
     fragment: set[Cell],
     stack_rows: tuple[int, ...],
     unknown_rows: tuple[int, ...],
     entering_hint: str | None = None,
-) -> tuple[bool, FallingPiece | None]:
-    """``(the fragment is a piece entering from above, its name when unique)``.
+) -> tuple[bool, FallingPiece | None, bool]:
+    """``(the fragment is a partly seen piece, its name when unique, hinted)``.
 
-    Ambiguity is reported as ``(True, None)``: the frame is coherent — some
-    piece is entering — but two horizontally adjacent cells at row 0 fit an
-    O, an S, a Z, a J and an L alike, and a guessed name is a guessed hint.
-    Holding beats guessing; the piece names itself as soon as it descends.
+    Ambiguity is reported as ``(True, None, False)``: the frame is
+    coherent — some piece is there — but two horizontally adjacent cells at
+    row 0 fit an O, an S, a Z, a J and an L alike, and a guessed name is a
+    guessed hint. Holding beats guessing; the piece names itself as soon as
+    it is seen whole.
 
     ``entering_hint`` breaks that tie when there is EVIDENCE for the name
     rather than a guess: the piece that just left the NEXT preview is the
@@ -278,24 +315,28 @@ def _entering_piece(
     and passes the departing name; see
     :meth:`~tetris_coach.vision.state.GameStateTracker.update`). It only
     ever SELECTS among completions the structural rule already accepts —
-    every guard above still holds — and only when exactly one of them
-    carries that name; otherwise the frame is ambiguous as before. A
+    every guard still holds — and only when exactly one candidate on the
+    whole frame carries that name AND that candidate is one entering from
+    above, which is the only thing the hint is evidence about: a piece
+    sliding under a panel was named from its own earlier frames. A
     mis-read preview can therefore misname an entering piece, and that is
     the deliberate trade: the alternative is no name for as long as the
     piece sits at the top edge (measured on the live session: 13 frames,
     ~0.9 s, of a piece nobody could hint), and a misnamed one is corrected
-    by the ordinary rules the moment it descends into full view.
+    by the ordinary rules the moment it descends into full view. The third
+    element says the name came from the hint rather than from structure,
+    so the tracker can refuse to treat a guess as an observation.
     """
-    completions = _clipped_completions(fragment, stack_rows, unknown_rows)
+    completions = _partial_completions(fragment, stack_rows, unknown_rows)
     if not completions:
-        return False, None
+        return False, None, False
     if len(completions) == 1:
-        return True, next(iter(completions))
+        return True, next(iter(completions)), False
     if entering_hint is not None:
         hinted = [piece for piece in completions if piece.piece == entering_hint]
-        if len(hinted) == 1:
-            return True, hinted[0]
-    return True, None
+        if len(hinted) == 1 and hinted[0].row < 0:
+            return True, hinted[0], True
+    return True, None, False
 
 
 def strip_entering_piece(
@@ -379,9 +420,9 @@ def _explains(
     # The spawn may still be entering from above the board region, showing
     # only its bottom cells: a clearing lock must not go UNEXPLAINED (and
     # eventually reset the board) because the next piece is half off-grid.
-    entering, entering_piece = _entering_piece(residual, s2_rows, unknown_rows)
-    if entering:
-        return True, entering_piece
+    coherent, partial_piece, _ = _partial_piece(residual, s2_rows, unknown_rows)
+    if coherent:
+        return True, partial_piece
     return False, None
 
 
@@ -430,14 +471,16 @@ def _lock_reveal(
     ):
         spawn_piece = _piece_at(spawn_cells)
         if spawn_piece is None:
-            # The spawn revealing the lock may itself be cut by the top edge
-            # of the board region, showing 1-3 cells (this game spawns a
-            # piece the moment the previous one is dropped, and the fragment
-            # SITS there). The lock below is verified exactly as ever; the
-            # entering piece is named only when one tetromino fits it, and
-            # its cells are never merged — only ``lock_cells`` are.
-            entering, spawn_piece = _entering_piece(spawn_cells, stack_rows, unknown_rows)
-            if not entering:
+            # The spawn revealing the lock may be seen only in part: cut by
+            # the top edge of the board region (this game spawns a piece the
+            # moment the previous one is dropped, and the fragment SITS
+            # there), or half under a panel. The lock below is verified
+            # exactly as ever; the spawn is named only when ONE piece fits
+            # the fragment — panel and top-edge hypotheses counted together,
+            # since both are hypotheses about the same cells — and its cells
+            # are never merged, only ``lock_cells`` are.
+            coherent, spawn_piece, _ = _partial_piece(spawn_cells, stack_rows, unknown_rows)
+            if not coherent:
                 continue
         elif spawn_piece.row >= SPAWN_ROWS:
             continue  # ghost-piece defense: spawns appear in the top rows
@@ -582,22 +625,14 @@ def explain_grid(
     # frame is coherent but the piece unnameable — OCCLUDED holds state
     # rather than letting a stationary piece trip the reset debounce.
     if n_miss == 0 and 1 <= len(added) <= 3:
-        if hidden:
-            completions = _hidden_completions(added, unknown, len(observed_rows))
-            if len(completions) == 1:
-                piece = _piece_at(next(iter(completions)))
-                if piece is not None:
-                    return Explanation(FrameKind.FALLING, stack_rows, piece)
-            if completions:
-                return Explanation(FrameKind.OCCLUDED, stack_rows, None)
-        # The panel is asked first and answers conclusively, so a fragment
-        # it can explain is explained there and nothing a panel selection
-        # used to do changes. Only what the panel cannot explain — every
-        # fragment in a session with no panel at all — reaches the top edge.
-        entering, piece = _entering_piece(added, stack_rows, unknown, entering_hint)
-        if entering:
+        # A panel hypothesis and a top-edge one are hypotheses about the
+        # SAME cells, so they are counted together: asking the panel first
+        # and answering from it alone reads a fragment three pieces could
+        # be entering as a confident fourth (see :func:`_partial_piece`).
+        coherent, piece, hinted = _partial_piece(added, stack_rows, unknown, entering_hint)
+        if coherent:
             kind = FrameKind.FALLING if piece is not None else FrameKind.OCCLUDED
-            return Explanation(kind, stack_rows, piece)
+            return Explanation(kind, stack_rows, piece, hinted_name=hinted)
 
     # Step 2 — lock revealed by the next spawn, no clears. A reveal whose
     # locked piece is partly hidden — or whose SPAWN is still cut by the top
