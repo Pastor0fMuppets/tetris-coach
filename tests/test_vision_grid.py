@@ -202,18 +202,26 @@ def test_start_screen_fixture_rejected() -> None:
 
 
 def near_top_out_grid() -> np.ndarray:
-    """A 160/200-filled board with buried holes; rows 0-2 empty."""
+    """A 153/200-filled board with buried holes; rows 0-2 empty.
+
+    Every filled row carries a hole, which is what makes this a board a
+    game could actually be showing: a row occupied end to end is a
+    completed line, and a completed line clears the instant it completes.
+    The holes shift column by column, so each one is buried under the row
+    above it.
+    """
     grid = np.zeros((20, 10), dtype=bool)
     grid[3:, :] = True  # 170 cells
-    for r in range(5, 15):  # 10 buried holes
+    for r in range(3, 20):  # 17 buried holes, one per filled row
         grid[r, (3 * r + 1) % 10] = False
-    assert int(grid.sum()) == 160
+    assert int(grid.sum()) == 153
+    assert not grid.all(axis=1).any(), "a complete row would have cleared"
     return grid
 
 
 @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
 def test_near_top_out_recovered(style) -> None:  # type: ignore[no-untyped-def]
-    # Filled cells are the 80% MAJORITY here: any dominant-cluster
+    # Filled cells are the ~77% MAJORITY here: any dominant-cluster
     # background estimate locks onto the pieces and inverts the reading
     # (at high confidence, on monochrome styles especially). The top-row
     # median estimator recovers the board exactly, because rows 0-2 are
@@ -325,6 +333,29 @@ def covered_well_near_top_out_grid(rows: int = 20, cols: int = 10) -> np.ndarray
     grid[1:, 6:cols] = True
     assert not grid.all(axis=1).any(), "a complete row would have cleared"
     return grid
+
+
+def inverting_board_stream() -> list[np.ndarray]:
+    """Five DIFFERENT covered-well boards, each read inverted and vouched.
+
+    Consecutive frames of real play are not the same board — and it does
+    not help. Every member of this family inverts the top-row prior the
+    same way, so each one's inverted reading names the same wrong
+    background as the last one's and corroborates it.
+    """
+    boards = []
+    for air in ({6, 7, 8, 9}, {7, 8, 9}, {6, 7, 8}, {8, 9}, {5, 6, 7, 8}):
+        grid = np.zeros((20, 10), dtype=bool)
+        for c in range(10):
+            if c == 3:
+                grid[0, c] = True  # the overhang covering the well
+            elif c in air:
+                grid[1:, c] = True
+            else:
+                grid[:, c] = True
+        assert not grid.all(axis=1).any(), "a complete row would have cleared"
+        boards.append(grid)
+    return boards
 
 
 def near_top_out_with_air_grid() -> np.ndarray:
@@ -908,6 +939,120 @@ class TestGridClassifier:
         np.testing.assert_array_equal(occupancy, grid)
         assert confidence >= self.GATE
         assert classifier.corroborated
+
+    @pytest.mark.parametrize("style", [STYLES[1], STYLES[5]], ids=lambda s: s.name)
+    def test_a_held_inverting_board_cannot_corroborate_itself(self, style) -> None:  # type: ignore[no-untyped-def]
+        # Two frames are independent as CAPTURES but not as BOARDS. At
+        # CoachConfig.poll_rate the ticks are 67 ms apart, so the second
+        # frame of a near-top-out board is the SAME board: its own
+        # inverted reading vouches for the wrong anchor and corroboration
+        # ends the checks FOR THE SESSION. Measured before the
+        # completed-row veto: the anchor stuck on the piece color and
+        # every ordinary frame after it read every observable cell wrong
+        # above the gate, permanently.
+        classifier = GridClassifier()
+        bad = covered_well_near_top_out_grid()
+        for seed in (3, 4):
+            _occupancy, confidence = classifier.classify(
+                render_board(bad, style, cell_size=20, seed=seed)
+            )
+            assert confidence >= self.GATE
+        assert classifier.corroborated, "the wrong anchor really does get corroborated"
+        assert not np.allclose(classifier.background, style.background, atol=10.0)
+
+        # Inverted, the empty air above an ordinary stack reads as row
+        # after row occupied end to end — completed lines, which clear the
+        # instant they complete and so are never on screen. The frame is
+        # refused and the anchor that produced it goes too.
+        ordinary = np.zeros((20, 10), dtype=bool)
+        ordinary[16:, 0:7] = True
+        ordinary[19, 7] = True
+        frame = render_board(ordinary, style, cell_size=20, seed=5)
+        _occupancy, confidence = classifier.classify(frame)
+        assert confidence == 0.0
+        assert classifier.background is None
+
+        occupancy, confidence = classifier.classify(frame)
+        np.testing.assert_array_equal(occupancy, ordinary)
+        assert confidence >= self.GATE
+        np.testing.assert_allclose(classifier.background, style.background, atol=3.0)
+
+    @pytest.mark.parametrize("style", [STYLES[1], STYLES[5]], ids=lambda s: s.name)
+    def test_a_changing_inverting_board_cannot_wedge_the_session(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The same wedge with the "hold the board still" excuse removed:
+        # five distinct boards, five distinct captures, every one of them
+        # read inverted and vouched, mutually consistent because they all
+        # invert the same way. Mutual consistency is what corroboration
+        # asks for, which is why it cannot be what settles this.
+        classifier = GridClassifier()
+        boards = inverting_board_stream()
+        for seed, grid in enumerate(boards):
+            occupancy, confidence = classifier.classify(
+                render_board(grid, style, cell_size=20, seed=seed + 3)
+            )
+            assert confidence >= self.GATE and not np.array_equal(occupancy, grid)
+        assert classifier.corroborated
+
+        ordinary = np.zeros((20, 10), dtype=bool)
+        ordinary[16:, 0:7] = True
+        ordinary[19, 7] = True
+        frame = render_board(ordinary, style, cell_size=20, seed=40)
+        _occupancy, confidence = classifier.classify(frame)
+        assert confidence == 0.0
+        occupancy, confidence = classifier.classify(frame)
+        np.testing.assert_array_equal(occupancy, ordinary)
+        assert confidence >= self.GATE
+        np.testing.assert_allclose(classifier.background, style.background, atol=3.0)
+
+    @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+    def test_a_row_caught_mid_clear_is_refused_but_costs_no_memory(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The other side of the veto. A completed row IS briefly on
+        # screen — between the piece locking and the row clearing — so
+        # the frame must be refused (the board it describes cannot
+        # persist) WITHOUT costing a correct anchor, which is worth far
+        # more than the frames it holds. The from-scratch reading of such
+        # a frame backs the anchor up, so it only counts against it.
+        classifier = GridClassifier()
+        stack = np.zeros((20, 10), dtype=bool)
+        stack[17:, 0:5] = True
+        for _ in range(2):
+            classifier.classify(render_board(stack, style, cell_size=20))
+        assert classifier.corroborated
+        anchored = classifier.background
+
+        clearing = stack.copy()
+        clearing[19, :] = True
+        frame = render_board(clearing, style, cell_size=20, seed=7)
+        for _ in range(3):
+            _occupancy, confidence = classifier.classify(frame)
+            assert confidence == 0.0
+        np.testing.assert_allclose(classifier.background, anchored, atol=3.0)
+
+        occupancy, confidence = classifier.classify(render_board(stack, style, cell_size=20))
+        np.testing.assert_array_equal(occupancy, stack)
+        assert confidence >= self.GATE
+
+    def test_a_gap_behind_the_panel_is_not_a_completed_row(self) -> None:
+        # Versus-mode garbage is 9/10 filled and the one gap can sit
+        # behind the NEXT panel: the row LOOKS occupied end to end and is
+        # not. Rows the panel touches are therefore never evidence of an
+        # impossible board — otherwise the veto would refuse a legal
+        # board on every frame of such a game, which is the deadlock this
+        # whole path exists to avoid.
+        covered = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+        classifier = GridClassifier(unobservable_cells=covered)
+        stack = np.zeros((20, 10), dtype=bool)
+        stack[17:, 0:5] = True
+        for _ in range(2):
+            classifier.classify(render_board(stack, STYLES[0], cell_size=20))
+        assert classifier.corroborated
+
+        garbage = np.ones((20, 10), dtype=bool)
+        garbage[:, 9] = False  # the well, behind the panel in rows 0 and 1
+        assert garbage[0, :8].all(), "the observable part of row 0 is solid"
+        occupancy, confidence = classifier.classify(render_board(garbage, STYLES[0], cell_size=20))
+        np.testing.assert_array_equal(occupancy, garbage)
+        assert confidence >= self.GATE
 
     def test_provisional_anchor_recovers_from_pause_panel(self) -> None:
         # Session started while a solid bright panel covers a dark-theme

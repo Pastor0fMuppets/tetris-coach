@@ -76,6 +76,19 @@ _UNIFORM_EMPTY_CONFIDENCE = 0.5
 # the background estimate: a piece in flight. See :func:`_top_row_vouchable`.
 _PIECE_CELLS = 4
 
+# How many consecutive impossible frames a background memory survives
+# without a second opinion against it. A reading that claims a completed
+# row describes a board the game cannot show
+# (:func:`_claims_a_completed_row`); a run of them is a line clear or a
+# game-over fill caught mid-animation, an endless stream is the anchor
+# itself, inverted. This is only the SAFETY NET — an inverted anchor is
+# normally caught on the first ordinary frame, by the second opinion
+# GridClassifier._impossible_frame takes — so it is set long rather than
+# short: at CoachConfig.poll_rate (15 fps) this is ~1 s, comfortably past
+# any clear animation, and it costs a wedged session that long only when
+# no frame in it can be read from scratch at all.
+_IMPOSSIBLE_FRAME_LIMIT = 15
+
 
 def _cell_colors(
     image: NDArray[np.uint8],
@@ -215,6 +228,43 @@ def _over_the_void(
     reach = np.logical_or.accumulate(grounded[::-1], axis=0)[::-1]
     supported_below[:-1] = reach[1:]
     return airborne & ~supported_below
+
+
+def _claims_a_completed_row(
+    occupancy: NDArray[np.bool_],
+    unobservable: frozenset[tuple[int, int]],
+) -> bool:
+    """Does this reading describe a board the game cannot be showing?
+
+    A completed row clears the instant it completes, so no frame of a
+    running game shows one. That makes "a row is occupied end to end" a
+    CONTRADICTION rather than a prior — the only rule here that reads the
+    board without assuming anything about where the background is, which
+    is exactly what is needed to catch a background estimate that has
+    gone inverted.
+
+    It is the ordinary frames that give an inverted anchor away, and they
+    give it away loudly: the air above a normal stack is every cell of
+    every row above it, so inverted, each of those rows reads as a
+    completed line. (Measured on the wedge this exists for: a session
+    anchored on a piece color read 7 of 12 rows completed on every
+    ordinary play frame.) The near-top-out frames that CAUSE the
+    inversion show no completed row either way, which is why nothing can
+    be concluded from them and why this must be checked on the frames
+    that follow.
+
+    Only FULLY observable rows count. Where a UI panel covers part of a
+    row the cells behind it are unknown, and versus-mode garbage is 9/10
+    filled — a garbage row whose one gap happens to sit behind the panel
+    is a legal row that merely LOOKS complete, so rows the panel touches
+    are not evidence of anything.
+    """
+    rows, cols = int(occupancy.shape[0]), int(occupancy.shape[1])
+    covered = np.zeros((rows, cols), dtype=np.bool_)
+    for r, c in unobservable:
+        if 0 <= r < rows and 0 <= c < cols:
+            covered[r, c] = True
+    return bool((occupancy.all(axis=1) & ~covered.any(axis=1)).any())
 
 
 def _top_row_vouchable(
@@ -578,17 +628,36 @@ class GridClassifier:
       leave the anchor as it is, so a game whose top row is never
       vouchable still runs on a confirmed, never-corroborated memory.
 
-    That last stage is what keeps a single bad bootstrap frame from
-    wedging the session: a legal near-top-out board CAN be read inverted
-    and vouched for (see :func:`_top_row_vouchable`), and before the
-    second opinion that reading anchored a CONFIRMED memory on the piece
-    color. Measured on the ROAS Stacker geometry, cream-mono: a first
-    frame of a covered-well board anchored at (150, 140, 120) instead of
-    (245, 240, 228) and every frame after it read 120 of 120 cells wrong
-    at confidence 0.96 — for the rest of the session, since a confirmed
-    memory never falls back. Now the next ordinary frame contradicts the
-    anchor, the memory is dropped, and the session re-anchors correctly
-    two frames later.
+    - Impossible readings, at EVERY stage, corroborated included: a
+      frame the anchor reads as a board containing a completed row
+      (:func:`_claims_a_completed_row`) is refused, and the anchor is
+      asked to justify itself (:meth:`_impossible_frame`).
+
+    The last two stages both exist because a legal near-top-out board CAN
+    be read inverted and vouched for (see :func:`_top_row_vouchable`), and
+    such a reading anchors a CONFIRMED memory on the PIECE color; a
+    confirmed memory never falls back, so every frame after it is wrong.
+    Measured on the ROAS Stacker geometry, cream-mono: one covered-well
+    bootstrap frame anchored at (150, 140, 120) instead of
+    (245, 240, 228) and the whole session read 116 of 116 observable
+    cells wrong at confidence 0.60.
+
+    Corroboration alone does not close that, because two frames are
+    independent as CAPTURES but not as BOARDS. The shape that inverts is
+    a stack, and a stack persists: at 15 fps the same near-top-out board
+    is captured every 67 ms, and frame two's own inverted reading
+    corroborates frame one's wrong anchor. (Measured: holding that board
+    for two frames — or playing five different boards of the same family
+    — corroborates the piece-color anchor and wedges the session
+    permanently, which is what the impossible-reading stage was added
+    for.)
+
+    What the inversion cannot survive is an ORDINARY frame. Inverted, the
+    empty air above a normal stack reads as row after row occupied end to
+    end — completed lines, which clear the instant they complete and so
+    can never be on screen. That contradiction needs no prior and no
+    second frame, and it is loudest on exactly the frames a
+    near-top-out bootstrap lacks.
 
     ``unobservable_cells`` is the same set the engine computes from the two
     selected rectangles. It matters most HERE: a covered top-row cell is
@@ -614,6 +683,7 @@ class GridClassifier:
         self._background: NDArray[np.float64] | None = None
         self._confirmed = False
         self._corroborated = False
+        self._impossible = 0
 
     @property
     def background(self) -> NDArray[np.float64] | None:
@@ -645,6 +715,10 @@ class GridClassifier:
                         self._forget()
                         return occupancy, 0.0
                     self._corroborated = agrees is True
+                if _claims_a_completed_row(occupancy, self._unobservable):
+                    # The anchor is describing a board that cannot exist.
+                    return occupancy, self._impossible_frame(colors)
+                self._impossible = 0
                 self._remember(colors, occupancy)
                 return occupancy, confidence
             if self._confirmed:
@@ -722,11 +796,45 @@ class GridClassifier:
             return None
         return float(_distance_scores(measured, background)) < MIN_SPREAD
 
+    def _impossible_frame(self, colors: NDArray[np.float32]) -> float:
+        """Refuse a frame the anchor read as an impossible board.
+
+        Always reports confidence 0.0: whatever the split looked like, a
+        reading that claims a completed row is not a board, and
+        committing it would be worse than holding the last one.
+
+        Whether the MEMORY survives is the real question, and the frame
+        is asked the same way a bootstrap-stage frame is — by second
+        opinion (:meth:`_second_opinion`). An ordinary play frame under
+        an inverted anchor answers it immediately: its own top row is
+        clean background, so the top-row prior reads it from scratch,
+        vouches, and names a different color — the anchor is inverted and
+        goes at once, unlike the corroboration stage this runs FOR THE
+        LIFE OF THE SESSION.
+
+        A frame with no second opinion to give (the prior refuses a
+        board too full to read, or the frame is uniform) only counts
+        against the anchor: a correct one can produce a stray impossible
+        frame — a line clear caught while the row is still lit, a
+        game-over fill — and is worth far more than the frames it costs
+        to be sure, while an inverted one produces them without end. The
+        memory is dropped once the contradiction has persisted
+        (:data:`_IMPOSSIBLE_FRAME_LIMIT`).
+        """
+        if self._second_opinion(colors) is False:
+            self._forget()
+            return 0.0
+        self._impossible += 1
+        if self._impossible >= _IMPOSSIBLE_FRAME_LIMIT:
+            self._forget()
+        return 0.0
+
     def _forget(self) -> None:
         """Drop the memory back to nothing, so the next frame bootstraps."""
         self._background = None
         self._confirmed = False
         self._corroborated = False
+        self._impossible = 0
 
     @staticmethod
     def _empty_class_color(

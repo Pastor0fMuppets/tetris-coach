@@ -109,6 +109,31 @@ vision/
                   # evidence and leave the memory alone, so a game whose top
                   # row is never vouchable still runs on a confirmed,
                   # never-corroborated anchor. Cost: ~0.08 ms/frame.
+                  # Corroboration is necessary and NOT sufficient: two
+                  # frames are independent as CAPTURES but not as BOARDS,
+                  # and the shape that inverts is a stack, which persists
+                  # across ticks 67 ms apart — frame two's own inverted
+                  # reading corroborates frame one's wrong anchor
+                  # (measured: holding that board for two frames, or
+                  # playing five different boards of the same family,
+                  # wedges the session permanently at 116 of 116
+                  # observable cells wrong). So at EVERY stage,
+                  # corroborated included, a frame the anchor reads as a
+                  # board containing a COMPLETED ROW is refused: a
+                  # completed row clears the instant it completes, and
+                  # inverted, the empty air above an ordinary stack reads
+                  # as row after row of them. That contradiction needs no
+                  # prior and no second frame, and it is loudest on
+                  # exactly the ordinary frames a near-top-out bootstrap
+                  # lacks. The anchor is then asked for a second opinion,
+                  # which an ordinary frame answers at once (its own top
+                  # row is clean, so the prior reads it from scratch and
+                  # names the true background, dropping the anchor on the
+                  # spot); a frame with no opinion only counts against it,
+                  # and 15 in a row — ~1 s, past any clear animation —
+                  # drop it. Rows a UI panel touches never count, since
+                  # versus garbage is 9/10 filled and its one gap can sit
+                  # behind the panel.
                   # Masking has a limit: cover the WHOLE top row and there is
                   # no sample to bootstrap from at all, so every frame is
                   # refused (before, the "no occupied top-row cells" exit
