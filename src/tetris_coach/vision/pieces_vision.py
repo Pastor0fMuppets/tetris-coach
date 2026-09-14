@@ -339,40 +339,104 @@ def _partial_piece(
     return True, None, False
 
 
-def strip_entering_piece(
+# The most content a single frame is ever allowed to hold back as "in
+# flight": one tetromino. Nothing bigger is a piece, and past that budget
+# keeping the content beats inventing a reason to delete it.
+MAX_IN_FLIGHT_CELLS = 4
+
+
+def _rows_without(rows: tuple[int, ...], cells: Iterable[Cell]) -> tuple[int, ...]:
+    """``rows`` with ``cells`` removed."""
+    out = list(rows)
+    for r, c in cells:
+        out[r] &= ~(1 << c)
+    return tuple(out)
+
+
+def _resting(
+    component: set[Cell],
+    rest_rows: tuple[int, ...],
+    unknown_rows: tuple[int, ...],
+) -> bool:
+    """True when ``component`` may be sitting on something.
+
+    ``rest_rows`` is the board WITHOUT the component, so a cell of the
+    component itself never props it up. An unobservable cell directly
+    underneath counts as support: what the capture cannot read is evidence
+    for nothing, and treating it as air would let this rule delete content
+    on a guess. Everything here errs toward "resting", i.e. toward leaving
+    the content where it is.
+    """
+    if _supported(component, rest_rows):
+        return True
+    return any(r + 1 < len(rest_rows) and _bit(unknown_rows, (r + 1, c)) for r, c in component)
+
+
+def _floating_component(
+    rows: tuple[int, ...],
+    unknown_rows: tuple[int, ...],
+) -> set[Cell] | None:
+    """The one component of ``rows`` that rests on nothing, if there is one.
+
+    Components are MAXIMAL, so the only things that can be directly under
+    one are the floor, an unobservable cell, or air. A component with air
+    under all of it is therefore floating — and settled stack cells do not
+    float, whatever else they do (overhangs and covered holes are all part
+    of a component that reaches the floor).
+
+    ``None`` when nothing floats, or when two things do: two floating blobs
+    name no single piece, and absorbing both keeps content, which is the
+    safe direction.
+    """
+    floating = [
+        component
+        for component in _connected_components(_cells_from_rows(rows))
+        if not _resting(component, _rows_without(rows, component), unknown_rows)
+    ]
+    if len(floating) != 1:
+        return None
+    return floating[0]
+
+
+def strip_piece_in_flight(
     rows: tuple[int, ...],
     unknown_rows: tuple[int, ...],
 ) -> tuple[int, ...]:
-    """``rows`` without the visible part of a piece entering from above.
+    """``rows`` without the piece in flight, whole or clipped.
 
     For the one path that adopts a board with no memory to diff it against
     (the tracker's resync). Everything on such a frame is taken to be the
-    stack, because there is no evidence for anything else — except the 1-3
-    airborne cells of a piece the top edge has cut in half, which are
-    evidence of a piece that has NOT landed. Committing them plants blocks
-    no lock ever put there, in the row that costs the solver most: a
-    column whose top cell is filled is one nothing can be dropped into.
+    stack, because there is no evidence for anything else — except content
+    that is demonstrably NOT settled: a single component with air under all
+    of it. Stack cells do not float, so a floating component is the falling
+    piece, and freezing it into the stack is the corruption that makes the
+    piece's own descent look like stack cells vanishing — which nothing can
+    explain, so the tracker resets again and re-absorbs it one row lower,
+    the whole way down (see ``tests/fixtures/absorbed_piece``).
 
-    Conservative by construction. The cells must form a single component
-    that reaches row 0, and that component must satisfy the entering-piece
-    rule against the rest of the board (:func:`_clipped_completions`):
-    1-3 cells, airborne, completed by some tetromino above the board.
-    Anything else — a column stacked to the top, two fragments at once, a
-    blob no piece could be — is left exactly as observed.
+    Budgeted at ONE tetromino, and conservative in every direction past
+    that. Held back only when:
+
+    - exactly one component floats (two at once name no single piece);
+    - it is at most :data:`MAX_IN_FLIGHT_CELLS` cells;
+    - at exactly four cells it is a tetromino — a four-cell blob that is no
+      piece is something else and stays.
+
+    A component resting on the floor, on the rest of the board, or on an
+    unobservable cell is absorbed exactly as it always was: a column
+    stacked to the top, rising garbage and a piece in lock delay are all
+    board content, and deleting any of them costs the solver a real block.
+    Fewer than four floating cells need no shape test — a piece read in
+    part (cut by the board region's top edge, sliding under a panel, or
+    with a pale cell the threshold missed) is still a piece in flight, and
+    1-3 floating cells fit inside some tetromino whatever they are.
     """
-    cells = _cells_from_rows(rows)
-    if not any(r == 0 for r, _ in cells):
+    fragment = _floating_component(rows, unknown_rows)
+    if fragment is None or len(fragment) > MAX_IN_FLIGHT_CELLS:
         return rows
-    touching = [comp for comp in _connected_components(cells) if any(r == 0 for r, _ in comp)]
-    if len(touching) != 1:
+    if len(fragment) == MAX_IN_FLIGHT_CELLS and match_cells(fragment) is None:
         return rows
-    fragment = touching[0]
-    rest = tuple(
-        row & ~sum(1 << c for r, c in fragment if r == index) for index, row in enumerate(rows)
-    )
-    if not _clipped_completions(fragment, rest, unknown_rows):
-        return rows
-    return rest
+    return _rows_without(rows, fragment)
 
 
 def clear_full_rows(rows: tuple[int, ...]) -> tuple[int, ...]:

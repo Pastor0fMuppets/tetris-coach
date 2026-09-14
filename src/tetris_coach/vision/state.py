@@ -32,10 +32,14 @@ Events:
   the settled board is explained as a lock); a one-frame glitch never
   does (the counter resets on the next coherent frame).
 
-A resync adopts the observed board as the stack, minus the visible part
-of a piece the board region's top edge has cut in half: that fragment is
-evidence of a piece still in flight, and freezing it into the stack is
-the corruption that made every hint after the first one wrong.
+A resync adopts the observed board as the stack, minus the piece in
+flight — the one component of the frame that rests on nothing. Stack
+cells do not float, so floating content has not landed, and freezing it
+into the stack is the corruption that made every hint after the first one
+wrong: the piece's own descent then reads as stack cells vanishing, which
+nothing can explain, so the tracker resets again and re-absorbs it one row
+lower, the whole way down. A resync that lands on the stack the tracker
+already believes is a no-op and fires no event.
 
 ``unobservable_cells`` names board cells the capture can never read (a
 game UI panel floating over the playfield). The observed value there is
@@ -56,7 +60,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..core.board import DEFAULT_HEIGHT, WIDTH
-from .pieces_vision import FallingPiece, FrameKind, explain_grid, strip_entering_piece
+from .pieces_vision import FallingPiece, FrameKind, explain_grid, strip_piece_in_flight
 
 
 class GameEvent(Enum):
@@ -208,9 +212,22 @@ class GameStateTracker:
                 # is exactly when one is likely to be sitting there (an
                 # attach mid-game, in a game that parks spawns at the top
                 # edge). It is left out rather than frozen into the stack.
-                self._committed = Snapshot(
-                    strip_entering_piece(rows, self.unknown_rows), None, next_piece
-                )
+                resynced = strip_piece_in_flight(rows, self.unknown_rows)
+                if resynced == self._committed.stack_rows:
+                    # Re-anchoring on the board already believed is a no-op,
+                    # and the event is not free: the consumer drops the hint
+                    # on a reset, so firing one here blanks the overlay and
+                    # throws away the falling anchor to arrive exactly where
+                    # the tracker already was. The frame stays unexplainable
+                    # for some reason of its own — a pale piece the
+                    # threshold reads one cell of, a torn capture — and
+                    # holding is what the tracker does with those. The
+                    # counter is cleared so the same nothing is not
+                    # re-confirmed every fourth frame.
+                    self._unexplained_rows = None
+                    self._unexplained_count = 0
+                    return []
+                self._committed = Snapshot(resynced, None, next_piece)
                 self._pending = None
                 self._pending_kind = None
                 self._pending_count = 0

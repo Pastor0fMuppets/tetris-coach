@@ -452,9 +452,17 @@ class TestCoachEngineScenarios:
         # F3: a floating island in the committed stack is never mistaken
         # for the falling piece, even when the real piece is below it.
         engine, events_log = self._engine_with_spy()
-        # An O-shaped island left at rows 10-11 after the rows below cleared,
-        # above a normal bottom stack.
-        island = rows_of(piece_cells("O", 0, 10, 7), bottom_lines("#####....."))
+        # TWO O-shaped islands left at rows 10-11 after the rows below
+        # cleared, above a normal bottom stack. Two of them, because a
+        # resync holds back a piece in flight and one floating tetromino is
+        # exactly that; a second one puts the frame past that budget, so
+        # the whole board is adopted as the stack (see
+        # ``strip_piece_in_flight`` and TestResyncAndThePieceInFlight).
+        island = rows_of(
+            piece_cells("O", 0, 10, 7),
+            piece_cells("O", 0, 10, 2),
+            bottom_lines("#####....."),
+        )
         self._attach(engine, island, "I")
         events_log.clear()
 

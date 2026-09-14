@@ -614,16 +614,17 @@ class TestTheEnteringPieceHint:
         assert tracker.falling.piece == "S"
 
 
-class TestResyncAndTheTopEdge:
-    """A resync must not freeze a piece that is still entering the field.
+class TestResyncAndThePieceInFlight:
+    """A resync must not freeze a piece that has not landed.
 
     A mid-game attach adopts the observed board wholesale — there is no
-    memory to diff it against. In a game that parks a spawned piece at the
-    top edge of the board region (drag to move, drag to drop), that board
-    very often carries 1-3 cells of a piece hanging half above the
-    capture, and freezing them into the stack plants blocks no lock ever
-    put there, in the row the solver can least afford: a column whose top
-    cell is filled is one nothing can be dropped into.
+    memory to diff it against. What it must leave out is content that is
+    demonstrably not settled: stack cells rest on something, so a component
+    with air under all of it is the falling piece. Freezing it in plants
+    blocks no lock ever put there, and worse, makes the piece's own descent
+    read as stack cells vanishing — which nothing can explain, so the
+    tracker resets again and re-absorbs it one row lower, all the way down
+    (``tests/fixtures/absorbed_piece``).
     """
 
     STACK = rows_of(bottom_lines("#.########", "##.#######", "#########."))
@@ -657,13 +658,85 @@ class TestResyncAndTheTopEdge:
         assert feed(tracker, topped_out, None) == [GameEvent.BOARD_RESET]
         assert tracker.committed.stack_rows == topped_out
 
-    def test_a_resync_still_absorbs_a_fully_visible_piece(self) -> None:
-        # Unchanged: a piece wholly inside the board region is absorbed by
-        # the resync exactly as before (there is no evidence, in a single
-        # board with no memory, that it is in flight rather than settled).
+    def test_a_resync_leaves_out_a_fully_visible_piece_in_flight(self) -> None:
+        # The absorbed-piece bug, at its root. A whole tetromino floating
+        # clear of the stack is the falling piece — stack cells do not
+        # float — so the resync adopts the board WITHOUT it.
         tracker = GameStateTracker()
         in_flight = merge(self.STACK, piece_cells("O", 0, 0, 4))
         for _ in range(3):
             assert feed(tracker, in_flight, None) == []
         assert feed(tracker, in_flight, None) == [GameEvent.BOARD_RESET]
-        assert tracker.committed.stack_rows == in_flight
+        assert tracker.committed.stack_rows == self.STACK
+
+    def test_the_piece_the_resync_left_out_is_then_tracked_falling(self) -> None:
+        # ...and the proof it was the right call: the next frame names it
+        # against the stack it was left out of, and it keeps its name all
+        # the way down instead of resetting the board once a row.
+        tracker = GameStateTracker(confirm_frames=2)
+        feed(tracker, merge(self.STACK, piece_cells("O", 0, 0, 4)), None, times=4)
+        for row in range(1, 5):
+            feed(tracker, merge(self.STACK, piece_cells("O", 0, row, 4)), None, times=2)
+            assert tracker.committed.falling_piece == "O"
+            assert tracker.committed.stack_rows == self.STACK
+
+    def test_a_resync_absorbs_a_piece_shaped_component_at_rest(self) -> None:
+        # The guard rail, and the direction this errs in: an O sitting ON
+        # the stack is board content — a piece in lock delay, or one that
+        # locked while nothing was watching — and deleting it would cost
+        # the solver a real block. Resting beats piece-shaped.
+        tracker = GameStateTracker()
+        resting = merge(self.STACK, piece_cells("O", 0, HEIGHT - 5, 4))
+        for _ in range(3):
+            assert feed(tracker, resting, None) == []
+        assert feed(tracker, resting, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == resting
+
+    def test_a_resync_absorbs_more_than_one_tetrominos_worth_in_the_air(self) -> None:
+        # The budget. One floating component of at most four cells is a
+        # piece; two floating components name no single piece, and a
+        # five-cell blob is no piece at all. Both are kept as observed.
+        tracker = GameStateTracker()
+        two = merge(self.STACK, piece_cells("O", 0, 0, 0), piece_cells("O", 0, 0, 6))
+        for _ in range(3):
+            assert feed(tracker, two, None) == []
+        assert feed(tracker, two, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == two
+
+        blob = merge(self.STACK, piece_cells("O", 0, 0, 4), [(0, 6)])
+        tracker = GameStateTracker()
+        for _ in range(3):
+            assert feed(tracker, blob, None) == []
+        assert feed(tracker, blob, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == blob
+
+    def test_a_resync_onto_the_stack_already_believed_fires_no_event(self) -> None:
+        # Re-anchoring on the board the tracker already holds changes
+        # nothing, and the event is not free: the consumer drops the hint on
+        # a reset. The frame stays unexplainable (a pale piece read in part,
+        # a torn capture) and the tracker holds, hint and all, instead of
+        # blanking the overlay every fourth frame for nothing.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "T")
+        feed(tracker, merge(self.STACK, piece_cells("O", 0, 5, 4)), "T", times=2)
+        assert tracker.committed.falling_piece == "O"
+        # Three cells of the O read, mid-board: no panel and no top edge
+        # explains the missing one, so the frame really is unexplainable.
+        broken = merge(self.STACK, [(5, 4), (6, 4), (6, 5)])
+        for _ in range(8):
+            assert feed(tracker, broken, "T") == []
+        assert tracker.committed.stack_rows == self.STACK
+        assert tracker.committed.falling_piece == "O"
+
+    def test_garbage_rising_still_resets(self) -> None:
+        # The other guard rail: a world that really did change must still
+        # re-anchor. Garbage pushes the stack up a row and adds a holed row
+        # at the floor — nothing floats, so nothing is held back, and the
+        # whole observed board is adopted.
+        tracker = GameStateTracker()
+        attach(tracker, self.STACK, None)
+        risen = tuple(self.STACK[1:]) + (0b1111111011,)
+        for _ in range(3):
+            assert feed(tracker, risen, None) == []
+        assert feed(tracker, risen, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == risen
