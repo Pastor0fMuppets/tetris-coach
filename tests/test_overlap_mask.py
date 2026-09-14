@@ -20,7 +20,12 @@ from pathlib import Path
 
 import numpy as np
 
-from tetris_coach.app import CoachConfig, CoachEngine, compute_overlap_mask
+from tetris_coach.app import (
+    CoachConfig,
+    CoachEngine,
+    compute_overlap_mask,
+    selection_warning,
+)
 from tetris_coach.capture.screen import Rect
 from tetris_coach.core.board import Board
 from tetris_coach.solver.search import enumerate_drops
@@ -87,6 +92,44 @@ class TestComputeOverlapMask:
     def test_degenerate_board_rect_returns_empty(self) -> None:
         assert compute_overlap_mask(Rect(0, 0, 0, 120), ROAS_NEXT, rows=12) == frozenset()
         assert compute_overlap_mask(Rect(0, 0, 100, 0), ROAS_NEXT, rows=12) == frozenset()
+
+
+class TestWholeTopRowCovered:
+    """The one selection that leaves nothing to read the board with."""
+
+    # A NEXT queue drawn as a horizontal bar across the top of the
+    # playfield, with the board rectangle drawn around it: an ordinary
+    # mis-selection, and it masks the entire top row.
+    BOARD = Rect(228, 314, 480, 576)
+    BAR = Rect(220, 310, 500, 50)
+
+    def test_a_next_bar_masks_the_whole_top_row(self) -> None:
+        mask = compute_overlap_mask(self.BOARD, self.BAR, rows=12)
+        assert mask == frozenset((0, c) for c in range(10))
+
+    def test_the_user_is_told_instead_of_watching_nothing(self) -> None:
+        # grid.py refuses every such frame (there is no top-row sample to
+        # estimate the background from), so without a word from the app the
+        # coach would just sit there silent. The engine still runs: the
+        # selection may be re-drawn, and nothing here may raise.
+        mask = compute_overlap_mask(self.BOARD, self.BAR, rows=12)
+        warning = selection_warning(mask)
+        assert warning is not None
+        assert "next-piece box covers the whole top row" in warning
+        engine = CoachEngine(CoachConfig(rows=12), unobservable_cells=mask)
+        image = np.zeros((240, 200, 3), dtype=np.uint8)
+        image[:, :] = (245, 240, 228)
+        image[80:, :] = (150, 140, 120)
+        image[0:20, :] = (90, 95, 110)  # the bar's own pixels
+        assert engine.process_frame(image, None) is None
+
+    def test_the_usual_geometries_say_nothing(self) -> None:
+        # The corner preview the mask exists for, and a preview drawn
+        # outside the board: both fine, both silent.
+        assert selection_warning(compute_overlap_mask(ROAS_BOARD, ROAS_NEXT, rows=12)) is None
+        assert selection_warning(frozenset()) is None
+        # Nine of ten covered is lossy, not fatal: one cell is still a sample.
+        assert selection_warning(frozenset((0, c) for c in range(9))) is None
 
 
 class TestEngineTreatsPreviewCellsAsUnknown:

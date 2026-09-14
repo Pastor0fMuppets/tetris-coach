@@ -109,6 +109,15 @@ vision/
                   # evidence and leave the memory alone, so a game whose top
                   # row is never vouchable still runs on a confirmed,
                   # never-corroborated anchor. Cost: ~0.08 ms/frame.
+                  # Masking has a limit: cover the WHOLE top row and there is
+                  # no sample to bootstrap from at all, so every frame is
+                  # refused (before, the "no occupied top-row cells" exit
+                  # vouched for a background read off the covering panel —
+                  # measured: a board filled from row 8 down read as rows
+                  # 1-11 fully occupied at 0.72). app.selection_warning says
+                  # so on stderr at startup, because that mask is what an
+                  # ordinary mis-selection produces: a NEXT queue drawn as a
+                  # bar across the top of the playfield.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the

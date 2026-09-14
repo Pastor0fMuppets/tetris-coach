@@ -614,6 +614,31 @@ class TestUnobservableCells:
             assert confidence == 0.0
         np.testing.assert_array_equal(classifier.background, anchored)
 
+    def test_a_fully_covered_top_row_is_refused(self) -> None:
+        # The estimator's whole premise is the top row; cover every one of
+        # its cells and there is no sample left, only the panel's own
+        # pixels. _top_row_background falls back to them, the split lands
+        # wherever that color puts it, and the "no occupied top-row cells"
+        # exit used to vouch for the result: measured, a board filled from
+        # row 8 down read as rows 1-11 FULLY OCCUPIED — 74 observable cells
+        # wrong — at confidence 0.72, five times the gate. There is nothing
+        # to salvage here; the frame must be refused.
+        grid = np.zeros((self.ROWS, 10), dtype=bool)
+        grid[8:, :] = True
+        for r, c in ((8, 3), (9, 6), (10, 1), (11, 8)):
+            grid[r, c] = False
+        painted = self._paint(self._board(grid), [(0, c) for c in range(10)])
+        mask = self._mask(range(1), range(10))
+        _occupancy, confidence = classify_grid(painted, rows=self.ROWS, unobservable_cells=mask)
+        assert confidence == 0.0
+        # Same board with the panel one cell narrower: the remaining
+        # top-row cells are a sample again, and the board is read.
+        painted = self._paint(self._board(grid), [(0, c) for c in range(1, 10)])
+        mask = self._mask(range(1), range(1, 10))
+        occupancy, confidence = classify_grid(painted, rows=self.ROWS, unobservable_cells=mask)
+        assert confidence >= CoachConfig().min_confidence
+        np.testing.assert_array_equal(occupancy[1:], grid[1:])
+
     def test_a_grounded_column_still_caps_with_cells_declared(self) -> None:
         # And the top-row cap keeps its teeth on the observable cells: a
         # column stacked from row 0 to the floor is grounded whether or

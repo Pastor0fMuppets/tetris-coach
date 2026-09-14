@@ -137,6 +137,36 @@ def compute_overlap_mask(
     return frozenset(masked)
 
 
+def selection_warning(
+    unobservable_cells: frozenset[tuple[int, int]],
+    width: int = WIDTH,
+) -> str | None:
+    """A note for the user when the two rectangles hide what vision needs.
+
+    Only one selection is fatal rather than merely lossy: a next-piece box
+    that covers the board's ENTIRE top row. The board's background color
+    is bootstrapped from the top row's cells (see
+    :mod:`~tetris_coach.vision.grid`), so with all of them behind a panel
+    there is no sample to bootstrap from and every frame is refused —
+    correctly, but silently, and the user is left watching a coach that
+    never says anything. It is an ordinary mis-selection, not an exotic
+    one: any game whose NEXT queue is a horizontal bar across the top of
+    the playfield lands here if the board rectangle is drawn around it.
+
+    Returns None when the selection is fine (the common case, including
+    the corner-preview geometry the mask exists for).
+    """
+    if all((0, c) in unobservable_cells for c in range(width)):
+        return (
+            "tetris-coach: the next-piece box covers the whole top row of the "
+            "board region, which is where the board's background color is read "
+            "from; no frame can be classified. Restart and draw the board "
+            "rectangle below the next-piece bar, or the next-piece rectangle "
+            "outside the board."
+        )
+    return None
+
+
 class CoachEngine:
     """GUI-free part of the loop: frame in, hint (Move or None) out.
 
@@ -481,6 +511,9 @@ def run(
     # region; name those unobservable cells once (the rects are fixed for
     # the session).
     unobservable_cells = compute_overlap_mask(board_rect, next_rect, config.rows)
+    warning = selection_warning(unobservable_cells)
+    if warning is not None:
+        print(warning, file=sys.stderr)
     engine = CoachEngine(config, unobservable_cells=unobservable_cells)
     frame_source: FrameSource = source if source is not None else ScreenCapture()
     worker = FrameWorker(engine, frame_source, board_rect, next_rect)

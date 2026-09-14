@@ -144,9 +144,10 @@ def _top_row_background(
     including it biases the median toward a color that is not on the board
     at all — and a panel is opaque and permanent, so the bias is on every
     frame of the session. Falls back to the whole top row if every one of
-    its cells is declared unobservable (nothing better is available, and a
-    board whose entire top row is covered is not a board this estimator
-    can vouch for anyway — the cap below refuses it).
+    its cells is declared unobservable: nothing better is available, and
+    the value is only ever used to keep the arithmetic total — a board
+    whose entire top row is covered has no top-row sample at all, and
+    :func:`_top_row_vouchable` refuses every such frame outright.
     """
     top = colors[0]
     if unobservable:
@@ -229,6 +230,19 @@ def _top_row_vouchable(
     available, so it is asked to show what a board carrying ONE PIECE IN
     FLIGHT would show, and nothing else:
 
+    0. The top row must have been SAMPLED at all. With every one of its
+       cells declared unobservable there is no sample:
+       :func:`_top_row_background` has nothing to take a median of and
+       falls back to the covering panel's own pixels, so the "background"
+       is a color the board never shows and the split can land anywhere.
+       This is not a corner case of a corner case — it is what
+       ``compute_overlap_mask`` returns for any game whose NEXT queue is a
+       horizontal bar across the top of the playfield, e.g.
+       ``Rect(228, 314, 480, 576)`` with ``Rect(220, 310, 500, 50)`` at
+       rows=12, which masks (0,0)..(0,9). Measured on such a frame: a
+       12x10 light-theme board filled from row 8 down, its top row painted
+       a UI-panel color, read as rows 1-11 FULLY OCCUPIED — 74 observable
+       cells wrong — at confidence 0.72, five times the frame gate.
     1. A strict majority of the OBSERVABLE top-row cells must read empty.
        More cells occupied than not contradicts the estimator's own
        premise outright — and no single falling piece can put that many
@@ -281,6 +295,8 @@ def _top_row_vouchable(
     """
     cols = int(occupancy.shape[1])
     observable = [c for c in range(cols) if (0, c) not in unobservable]
+    if not observable:
+        return False
     occupied = [c for c in observable if bool(occupancy[0, c])]
     if not occupied:
         return True
