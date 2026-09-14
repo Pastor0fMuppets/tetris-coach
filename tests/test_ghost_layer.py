@@ -35,6 +35,7 @@ from PIL import Image
 
 from tetris_coach.vision.grid import (
     _GHOST_SEPARATION,
+    _LAYER_CONFIDENCE_CEILING,
     MIN_SPREAD,
     _cell_colors,
     _distance_scores,
@@ -144,7 +145,7 @@ def named_layer(
 @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
 @pytest.mark.parametrize("scene", sorted(SCENES), ids=str)
 @pytest.mark.parametrize("score", NAMED, ids=lambda v: f"score{v}")
-def test_a_preview_in_the_open_is_named_and_costs_no_confidence(
+def test_a_preview_in_the_open_is_named_and_does_not_collapse_confidence(
     style: Style, scene: str, score: float
 ) -> None:
     solid, ghost = SCENES[scene]
@@ -155,10 +156,16 @@ def test_a_preview_in_the_open_is_named_and_costs_no_confidence(
     )
     # Direction of the whole fix: a frame with a preview on it is not an
     # ambiguous frame. Measured without the preview, the same board reads
-    # 0.52-0.96 depending on the theme; with it, the same, to within noise.
+    # 0.52-0.96 depending on the theme; with it, the same — up to the
+    # ceiling every rule-dependent reading is held to, which is what stops
+    # a frame with THREE levels on it from reporting like a frame with
+    # two (see _LAYER_CONFIDENCE_CEILING).
     _bare, baseline = read(style, solid, None)
-    assert confidence >= baseline - 0.01, (
+    assert confidence >= min(baseline, _LAYER_CONFIDENCE_CEILING) - 0.01, (
         f"{style.name}/{scene}: the preview cost confidence ({confidence:.2f} vs {baseline:.2f})"
+    )
+    assert confidence <= _LAYER_CONFIDENCE_CEILING, (
+        f"{style.name}/{scene}: a named layer reported {confidence:.2f}, above the ceiling"
     )
 
 

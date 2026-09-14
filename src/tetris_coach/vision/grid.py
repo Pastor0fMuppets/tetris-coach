@@ -83,6 +83,30 @@ MIN_SPREAD = 0.35
 # empty board is.
 _UNIFORM_EMPTY_CONFIDENCE = 0.5
 
+# Ceiling on what a frame carrying a named landing preview may report, and
+# deliberately the same value as above, for the same reason: such a frame's
+# occupancy does not follow from the gap the confidence measures. The gap
+# is taken with the layer's cells out of both classes, so a frame that
+# genuinely has THREE levels reports the separation of two of them —
+# without this, one reads like a textbook frame (measured on a synthetic
+# three-level board: 0.94). Whether those cells are a preview or a real
+# pale piece is settled by :func:`_ghost_layer`'s structure, so the
+# reading is structurally grounded exactly as a uniform-empty one is, and
+# says so with the same number.
+#
+# What this is NOT is a second chance to catch a wrongly named layer, and
+# no threshold here could be. Measured: a synthetic board where the rule
+# deletes real content reads 0.94 named and 0.58 with the rule off — both
+# far above any usable gate — while the conservative measure that WOULD
+# flag it (count the layer in the empty class, i.e. report the gap the
+# frame has without the rule) reads 0.078 on the fifteen frames of
+# live_session where the layer is a real ghost, which is the pre-rule
+# number that had them rejected. The rule itself is the defense; this
+# only keeps a rule-dependent reading from wearing a clean frame's
+# signature, and leaves a user who tightens the gate past it a way to
+# take only frames that need no rule at all.
+_LAYER_CONFIDENCE_CEILING = 0.5
+
 # Cells in a tetromino — also the most rows one can span. The size of the
 # ONLY thing that may legitimately contaminate the top row without breaking
 # the background estimate: a piece in flight. See :func:`_top_row_vouchable`.
@@ -874,6 +898,11 @@ def _classify_scored(
     # dropping the layer changes the gap, never the scale it is read on.
     gap = float(occupied_scores.min() - empty_scores.max())
     confidence = float(np.clip(gap / (hi - lo), 0.0, 1.0))
+    if ghost is not None:
+        # Three levels were seen and two are being reported on; the third
+        # is accounted for by structure, not by this number (see
+        # :data:`_LAYER_CONFIDENCE_CEILING`).
+        confidence = min(confidence, _LAYER_CONFIDENCE_CEILING)
     return _Reading(occupancy, confidence, ghost)
 
 
