@@ -529,6 +529,22 @@ def test_growth_into_top_row_never_flips_polarity(style) -> None:  # type: ignor
         )
 
 
+def paint_cells(
+    image: np.ndarray,
+    cells,  # type: ignore[no-untyped-def]
+    cell_size: int,
+    color: tuple[int, int, int] = (9, 200, 40),
+) -> np.ndarray:
+    """Stamp an opaque panel color over whole board cells, as a UI box does."""
+    out = image.copy()
+    for r, c in cells:
+        out[
+            r * cell_size : (r + 1) * cell_size,
+            c * cell_size : (c + 1) * cell_size,
+        ] = color
+    return out
+
+
 class TestUnobservableCells:
     """Cells a game UI panel covers: out of the background sample, out of
     the top-row cap.
@@ -550,14 +566,7 @@ class TestUnobservableCells:
         return render_board(grid, self.STYLE, cell_size=self.CELL)
 
     def _paint(self, image: np.ndarray, cells) -> np.ndarray:  # type: ignore[no-untyped-def]
-        """Stamp the panel color over whole cells, as an opaque box does."""
-        out = image.copy()
-        for r, c in cells:
-            out[
-                r * self.CELL : (r + 1) * self.CELL,
-                c * self.CELL : (c + 1) * self.CELL,
-            ] = self.PANEL
-        return out
+        return paint_cells(image, cells, self.CELL, self.PANEL)
 
     @staticmethod
     def _mask(rows: range, cols: range) -> frozenset[tuple[int, int]]:
@@ -1031,6 +1040,48 @@ class TestGridClassifier:
         occupancy, confidence = classifier.classify(render_board(stack, style, cell_size=20))
         np.testing.assert_array_equal(occupancy, stack)
         assert confidence >= self.GATE
+
+    @pytest.mark.parametrize("style", [STYLES[1], STYLES[5]], ids=lambda s: s.name)
+    def test_garbage_hiding_its_well_behind_the_panel_cannot_wedge(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The same permanent wedge by a different road, on a board with no
+        # covered well and no overhang in it. Versus garbage pushed to the
+        # top is 9/10 filled; park the NEXT panel over the one gap and
+        # every OBSERVABLE top-row cell reads occupied, so the median
+        # locks onto the piece color and the whole board inverts — and
+        # inverted, its top row is entirely "empty", the one shape
+        # _top_row_vouchable has nothing to object to. Held for two ticks
+        # it corroborates itself: measured at 116 of 116 observable cells
+        # wrong on every ordinary frame after it, for the rest of the
+        # session.
+        covered = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+        observable = np.ones((12, 10), dtype=bool)
+        for r, c in covered:
+            observable[r, c] = False
+        classifier = GridClassifier(rows=12, unobservable_cells=covered)
+
+        garbage = np.ones((12, 10), dtype=bool)
+        garbage[:, 9] = False  # the well, behind the panel in rows 0 and 1
+        for seed in (3, 4):
+            frame = paint_cells(render_board(garbage, style, cell_size=20, seed=seed), covered, 20)
+            _occupancy, confidence = classifier.classify(frame)
+            assert confidence >= self.GATE
+        assert classifier.corroborated
+        assert not np.allclose(classifier.background, style.background, atol=10.0), (
+            "the anchor is supposed to have landed on the piece color"
+        )
+
+        ordinary = np.zeros((12, 10), dtype=bool)
+        ordinary[9:, 0:7] = True
+        ordinary[11, 7] = True
+        frame = paint_cells(render_board(ordinary, style, cell_size=20, seed=5), covered, 20)
+        _occupancy, confidence = classifier.classify(frame)
+        assert confidence == 0.0
+        assert classifier.background is None
+
+        occupancy, confidence = classifier.classify(frame)
+        np.testing.assert_array_equal(occupancy[observable], ordinary[observable])
+        assert confidence >= self.GATE
+        np.testing.assert_allclose(classifier.background, style.background, atol=3.0)
 
     def test_a_gap_behind_the_panel_is_not_a_completed_row(self) -> None:
         # Versus-mode garbage is 9/10 filled and the one gap can sit
