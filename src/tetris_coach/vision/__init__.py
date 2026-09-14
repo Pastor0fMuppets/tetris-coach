@@ -1,6 +1,6 @@
 """Vision: occupancy classification, shape recognition, state tracking."""
 
-from .grid import GridClassifier, cell_scores, classify_grid
+from .grid import GridClassifier, OwnPaint, cell_scores, classify_grid
 from .pieces_vision import (
     Explanation,
     FallingPiece,
@@ -17,6 +17,7 @@ __all__ = [
     "GameEvent",
     "GameStateTracker",
     "GridClassifier",
+    "OwnPaint",
     "Snapshot",
     "cell_scores",
     "classify_grid",
