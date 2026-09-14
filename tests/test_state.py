@@ -562,6 +562,47 @@ class TestTheEnteringPieceHint:
         # The mechanism: the hinted name was shown, never remembered.
         assert tracker.falling is None or tracker.falling.piece != "O"
 
+    def test_a_hint_does_not_outlive_the_deal_it_names(self) -> None:
+        # The preview is unreadable in bursts, and it only ever reports a
+        # deal by CHANGING: if a burst covers one previewed piece's whole
+        # tenure, the next change is read a deal late and names the piece
+        # dealt one turn earlier. Left standing, that hint goes on naming
+        # every fragment the top edge cuts for the rest of the session, so
+        # it is evidence about ONE deal and expires with it: a lock is the
+        # game dealing again, and a hint that reaches a second one without
+        # the preview having changed is stale.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        fragment = merge(self.STACK, self.FRAGMENT)
+        feed(tracker, fragment, "I", times=2)  # the O is dealt: preview -> I
+        assert tracker.committed.falling_piece == "O"
+        # The O locks and the next piece enters. The preview never changes
+        # again (unreadable, so the tracker is told nothing).
+        first = merge(self.STACK, piece_cells("O", 0, 18, 4), self.FRAGMENT)
+        assert feed(tracker, first, "I", times=2) == [GameEvent.PIECE_LOCKED]
+        # That piece locks too: the second deal since the last thing the
+        # preview said, and the hint does not survive it.
+        second = merge(self.STACK, piece_cells("O", 0, 18, 4), piece_cells("O", 0, 16, 4))
+        assert feed(tracker, merge(second, self.FRAGMENT), "I", times=2) == [GameEvent.PIECE_LOCKED]
+        assert tracker.committed.stack_rows == second
+        # ...so the fragment sitting at the top edge is nameless again,
+        # instead of being called an O for the rest of the session.
+        assert feed(tracker, merge(second, self.FRAGMENT), "I", times=3) == []
+        assert tracker.committed.falling_piece is None
+
+    def test_a_resync_drops_the_hint(self) -> None:
+        # A board reset is a new world (a new game, garbage, a mid-game
+        # attach). What the preview shows still holds; which piece was
+        # dealt into THIS board does not.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        assert tracker.committed.falling_piece == "O"
+        new_world = rows_of(bottom_lines("#.#.#.#.#.", "##.##.##.#"))
+        assert feed(tracker, new_world, "I", times=4) == [GameEvent.BOARD_RESET]
+        assert feed(tracker, merge(new_world, self.FRAGMENT), "I", times=3) == []
+        assert tracker.committed.falling_piece is None
+
     def test_a_piece_seen_whole_is_still_an_observation(self) -> None:
         # The other half of the rule: a name the frame's own structure
         # produced is evidence exactly as it always was.

@@ -323,7 +323,23 @@ vision/
                   # Measured on the live session: the O is named on frame 61
                   # instead of 74 — 13 frames, ~0.9 s, that used to carry no
                   # hint at all — and frame 74's independent structural
-                  # reading agrees it is an O.
+                  # reading agrees it is an O. That evidence is about ONE
+                  # deal, so it expires with it: the preview reports a deal
+                  # only by CHANGING, and it is unreadable in bursts, so a
+                  # burst covering one previewed piece's whole tenure makes
+                  # the next change arrive a deal late (X -> [Y never read]
+                  # -> Z names the entering piece X). A lock is the game
+                  # dealing again — and the flip that reports that deal is
+                  # the same event, one frame ahead of the debounced commit
+                  # — so the hint set for the deal a lock BEGINS survives
+                  # that lock, and one that reaches a SECOND lock has
+                  # outlived its deal and is dropped. Without the expiry a
+                  # single unreadable burst (or one flickered frame:
+                  # X -> W -> X leaves the hint naming W, a piece never
+                  # dealt) names every later top-edge fragment for the rest
+                  # of the session. A resync drops it outright: what the
+                  # preview shows still holds, what was dealt into THIS
+                  # board does not.
                   # unobservable_cells: the tracker discards the capture's
                   # reading there and carries a BELIEF for those cells instead —
                   # seeded empty at bootstrap/resync, moved only by an explained

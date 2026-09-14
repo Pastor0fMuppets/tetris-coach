@@ -132,6 +132,9 @@ class GameStateTracker:
         # The last non-None preview reading, and the one it replaced.
         self._preview_piece: str | None = None
         self._entering_hint: str | None = None
+        # Verified locks the hint has outlived. A hint is evidence about ONE
+        # deal, so it must not outlive it (see update()).
+        self._hint_locks = 0
 
     @property
     def committed(self) -> Snapshot:
@@ -166,6 +169,7 @@ class GameStateTracker:
         if next_piece is not None and next_piece != self._preview_piece:
             if self._preview_piece is not None:
                 self._entering_hint = self._preview_piece
+                self._hint_locks = 0
             self._preview_piece = next_piece
         explanation = explain_grid(
             rows,
@@ -213,6 +217,11 @@ class GameStateTracker:
                 self._unexplained_rows = None
                 self._unexplained_count = 0
                 self._last_falling = None
+                # A resync is a new world (a new game, garbage, a mid-game
+                # attach). What the preview shows still holds, but which
+                # piece was dealt into THIS board does not.
+                self._entering_hint = None
+                self._hint_locks = 0
                 return [GameEvent.BOARD_RESET]
             # Pending is untouched: a torn frame between the confirmations
             # of a real transition must not restart its count.
@@ -270,6 +279,21 @@ class GameStateTracker:
             # The pre-lock piece is absorbed into the stack; from now on
             # the anchor is the residual spawn (or nothing).
             self._last_falling = explanation.falling
+            # ...and the deal the hint describes is over. A lock is the
+            # game dealing again, and the preview reports that deal by
+            # changing — one frame BEFORE this commit, since the flip and
+            # the spawn are the same event and the commit is debounced. So
+            # the hint of the deal now beginning has already been set (and
+            # the count reset with it); a hint that reaches a SECOND lock
+            # is one whose deal came and went without the preview ever
+            # being read, and it names a piece from a deal ago. Left
+            # standing it names every later fragment: the preview is
+            # unreadable in bursts (mid-animation, mid-flash), and one
+            # burst spanning a whole tenure would poison every top-edge
+            # naming after it.
+            self._hint_locks += 1
+            if self._hint_locks > 1:
+                self._entering_hint = None
         return self._events(previous, candidate, kind)
 
     @staticmethod
