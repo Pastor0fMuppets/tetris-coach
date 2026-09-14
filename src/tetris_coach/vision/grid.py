@@ -637,10 +637,10 @@ class GridClassifier:
     be read inverted and vouched for (see :func:`_top_row_vouchable`), and
     such a reading anchors a CONFIRMED memory on the PIECE color; a
     confirmed memory never falls back, so every frame after it is wrong.
-    Measured on the ROAS Stacker geometry, cream-mono: one covered-well
-    bootstrap frame anchored at (150, 140, 120) instead of
-    (245, 240, 228) and the whole session read 116 of 116 observable
-    cells wrong at confidence 0.60.
+    Measured on the ROAS Stacker geometry, cream-mono, with neither stage
+    in place: one covered-well bootstrap frame anchored at
+    (150, 140, 120) instead of (245, 240, 228) and the whole session read
+    116 of 116 observable cells wrong at confidence 0.60.
 
     Corroboration alone does not close that, because two frames are
     independent as CAPTURES but not as BOARDS. The shape that inverts is
@@ -718,7 +718,6 @@ class GridClassifier:
                 if _claims_a_completed_row(occupancy, self._unobservable):
                     # The anchor is describing a board that cannot exist.
                     return occupancy, self._impossible_frame(colors)
-                self._impossible = 0
                 self._remember(colors, occupancy)
                 return occupancy, confidence
             if self._confirmed:
@@ -741,7 +740,13 @@ class GridClassifier:
         Unobservable cells are left out of every sample: their pixels are
         the covering panel's, and a memory measured partly from the panel
         would drift toward a color the board never shows.
+
+        Reaching here is also what ends a run of impossible frames: this
+        is called exactly when a frame was accepted AND describes a board
+        that can exist, on the bootstrap path as well as the remembered
+        one, so no count survives into the next anchor.
         """
+        self._impossible = 0
         observable = self._observable_mask(occupancy.shape)
         if bool((occupancy & observable).any()):
             # Two-class frame: the empty class IS the background, freshly
