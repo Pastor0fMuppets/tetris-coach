@@ -136,6 +136,7 @@ def _run_overlay(args: argparse.Namespace) -> int:  # pragma: no cover - macOS o
         rows=args.rows,
         debug=args.debug,
         dump_dir=args.dump_frames,
+        dump_limit=args.dump_limit,
     )
     run(board_rect, next_rect, config=config)
     return 0
@@ -182,8 +183,15 @@ def main(argv: list[str] | None = None) -> int:
         "--dump-frames",
         metavar="DIR",
         default=None,
-        help="overlay: save the first captured board/next frames as PNGs "
-        "into DIR (debugging aid for region/scaling problems)",
+        help="overlay: save captured board/next frames as PNGs into DIR "
+        "(debugging aid for region/scaling/tracking problems)",
+    )
+    parser.add_argument(
+        "--dump-limit",
+        type=int,
+        default=700,
+        help="overlay: how many consecutive frames --dump-frames saves "
+        "before thinning to every 100th (default 700, ~47s at 15 fps)",
     )
     args = parser.parse_args(argv)
 

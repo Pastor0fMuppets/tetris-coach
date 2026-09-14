@@ -43,9 +43,14 @@ class CoachConfig:
     # everything downstream derives the height from its data.
     rows: int = DEFAULT_HEIGHT
     debug: bool = False
-    # Directory to save the first captured frames into as PNGs (debugging
-    # aid for region/scaling problems); None disables dumping.
+    # Directory to save captured frames into as PNGs (debugging aid for
+    # region/scaling/tracking problems); None disables dumping.
     dump_dir: str | None = None
+    # How many CONSECUTIVE frames from the start of the session to dump.
+    # Consecutive matters: the tracker diffs each frame against the last
+    # committed one, so only a contiguous run can replay live tracking
+    # offline. ~700 frames is ~47 s at the default 15 fps.
+    dump_limit: int = 700
 
 
 # The overlay loop exits after this many CONSECUTIVE failed ticks (~3 s at
@@ -429,15 +434,19 @@ class FrameWorker:
     def _dump_frames(self, board_image: np.ndarray, next_image: np.ndarray | None) -> None:
         """Save captured frames as PNGs for offline inspection (debug aid).
 
-        The first 12 ticks are all saved (setup/alignment problems show up
-        immediately); after that every 100th tick is, so a long session
-        leaves periodic mid-game evidence without unbounded disk growth.
+        Every tick is saved, up to ``config.dump_limit`` frames. CONSECUTIVE
+        frames are the point: the tracker explains each frame as a diff
+        against the previous committed one, so a sampled dump (every Nth
+        tick) can only ever replay as UNEXPLAINED and says nothing about
+        live tracking. A contiguous run replays the real session offline.
+        After the limit, every 100th tick is kept so a long session still
+        leaves late evidence without unbounded disk growth.
         """
         dump_dir = self.engine.config.dump_dir
         self._ticks += 1
         if dump_dir is None or self._dump_disabled:
             return
-        if self._ticks > 12 and self._ticks % 100 != 0:
+        if self._ticks > self.engine.config.dump_limit and self._ticks % 100 != 0:
             return
         try:  # pragma: no cover - debug-only, Pillow is a dev dependency
             from pathlib import Path
