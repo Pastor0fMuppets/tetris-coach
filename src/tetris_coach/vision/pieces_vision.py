@@ -672,6 +672,26 @@ _MAX_EMPTY_FILL = 0.45
 # it — and it refuses tall solid blobs in a row (fake "letters" at 1.23).
 _MAX_CELL_ASPECT = 1.25
 
+# ...and cells are all the SAME size, so when the bands along an axis ARE the
+# cells, they must agree with each other too — the same slack, for the same
+# antialiasing reason. Taking the median instead (what this did before) hides
+# exactly the shape that breaks the premise: one band holding something that
+# is not one cell. A solid caption bar is that shape — it is block-like
+# enough to survive :func:`_preview_blocks` (solid, and not small), and where
+# it bridges the gap between two cells it merges them into one band three
+# times the width of its neighbours, which the median reads as an ordinary
+# cell and the aspect gate then waves through (measured: a 40x9 bar over a
+# 4x1 I of 15 px cells is read as a confident J, on 120 of 495 bar
+# geometries).
+_MAX_BAND_SPREAD = 1.25
+
+# The same premise about what separates them: the gap between two bands is
+# the skin's inset or its gridline, so it is a FRACTION of a cell (measured
+# over the style matrix and the live crops, at most 0.67 of one, and 0.05 on
+# the live crops). A gap with room for a whole cell in it means the two bands
+# are not adjacent cells of one piece — which is how a caption bar standing
+# clear of the piece passes for a cell of its own.
+
 
 def identify_next(image: NDArray[np.uint8]) -> str | None:
     """Recognize the piece shown in a next-piece preview image.
@@ -832,8 +852,14 @@ def _axis_grid(profile: NDArray[np.bool_], count: int) -> _AxisGrid | None:
     """
     bands = _bands(profile)
     if len(bands) == count:
+        sizes = [stop - start for start, stop in bands]
+        if min(sizes) * _MAX_BAND_SPREAD < max(sizes):
+            return None  # a band that is not one cell: not this hypothesis
+        gaps = [bands[index + 1][0] - bands[index][1] for index in range(len(bands) - 1)]
+        if gaps and max(gaps) >= min(sizes):
+            return None  # a gap wide enough to hold a cell is not a skin's gap
         centers = tuple((start + stop - 1) / 2.0 for start, stop in bands)
-        size = float(np.median([stop - start for start, stop in bands]))
+        size = float(np.median(sizes))
         return _AxisGrid(centers, max(size * 0.4, 0.5), size)
     if len(bands) == 1:
         pitch = len(profile) / count

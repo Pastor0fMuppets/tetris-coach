@@ -13,7 +13,7 @@ from tetris_coach.vision.grid import (
 )
 from tetris_coach.vision.pieces_vision import _preview_blocks, identify_next, match_cells
 
-from .synthetic import STYLES, render_board, render_next_preview, with_label
+from .synthetic import STYLES, label_color, render_board, render_next_preview, with_label
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LIVE = FIXTURES / "live_session"
@@ -203,3 +203,60 @@ class TestIdentifyNextFurniture:
             draw.rectangle([left, 20, left + 18, 50], fill=(120, 120, 125))
             draw.rectangle([left + 5, 26, left + 13, 44], fill=(250, 250, 250))
         assert identify_next(np.asarray(image)) is None
+
+
+class TestIdentifyNextCaptionBar:
+    """A caption/divider drawn as a SOLID bar, not as glyph strokes.
+
+    The block filter drops furniture that is thin (a letter's stroke, a
+    hollow border, a gridline lattice) or small. A solid label bar is
+    neither, so it reaches the grid derivation as if it were a cell — and
+    a bar wide enough to BRIDGE the gap between two of the piece's cells
+    merges them into one band, which the median band size used to hide.
+    Measured before this was refused: a 40x9 bar over a horizontal I of
+    15 px cells reads as a confident J (and 'NEXT' captions are exactly
+    what the live game draws over its preview).
+    """
+
+    @staticmethod
+    def box(bar: tuple[int, int] | None, cell: int = 15, inset: int = 1) -> np.ndarray:
+        """A white preview box with a horizontal I and an optional grey bar."""
+        image = np.full((73, 106, 3), 252, dtype=np.uint8)
+        for index in range(4):
+            top, left = 21 + inset, 20 + index * cell + inset
+            image[top : 21 + cell - inset, left : 20 + (index + 1) * cell - inset] = (60, 110, 200)
+        if bar is not None:
+            width, height = bar
+            image[2 : 2 + height, 2 : 2 + width] = 170
+        return image
+
+    def test_the_piece_alone_is_read(self) -> None:
+        assert identify_next(self.box(None)) == "I"
+
+    def test_a_solid_bar_never_renames_the_piece(self) -> None:
+        # The whole bar geometry space around the reported failure: every
+        # one of these used to answer J on a contiguous window of it.
+        wrong = {
+            (width, height): identify_next(self.box((width, height)))
+            for width in range(20, 65)
+            for height in range(5, 16)
+        }
+        assert {answer for answer in wrong.values()} <= {None, "I"}
+        assert identify_next(self.box((40, 9))) is None  # the reported crop
+
+    @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+    @pytest.mark.parametrize("piece", PIECES)
+    def test_no_style_reads_a_bar_as_another_piece(self, piece: str, style) -> None:  # type: ignore[no-untyped-def]
+        # Same thing over the style matrix, with the bar in the corner a
+        # caption occupies — clear of the piece, which is where a game
+        # draws it. The answer may be None (the box is no longer legible),
+        # never a different piece.
+        for rot in ROTATIONS[piece]:
+            image = render_next_preview(
+                rot.cells, style, cell_size=16, box_cells=(6, 8), offset=(2, 3)
+            )
+            assert identify_next(image) == piece
+            for bar in ((30, 7), (48, 11), (60, 9)):
+                barred = image.copy()
+                barred[1 : 1 + bar[1], 1 : 1 + bar[0]] = label_color(style)
+                assert identify_next(barred) in (piece, None)
