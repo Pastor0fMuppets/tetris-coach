@@ -281,6 +281,36 @@ vision/
                   # placement (tiered: last observed position, gravity drop from
                   # it, any clearing gravity drop) reproducing the observation
                   # exactly.
+                  # Settled cells cannot vanish, so a frame saying they did
+                  # is either a new world or a WRONG MEMORY. _carried_piece
+                  # is the second hypothesis: when at most a tetromino's
+                  # worth of committed stack goes missing, those cells are
+                  # part of one tetromino the stack holds, that piece is
+                  # airborne without it, and the frame then reads as an
+                  # ordinary FALLING frame of the same piece, the stack was
+                  # carrying a piece in flight and it is taken back out.
+                  # Ordered AFTER the clear rules so a real clear reads as
+                  # a clear. It is the self-healing half of the
+                  # absorbed-piece fix and works however the piece got in,
+                  # which is what lets the resync above stop at row 0.
+                  # The piece that vouches for the removal must be where
+                  # the cells could have MOVED to — at or below the rows
+                  # they vacated, columns still touching — because the name
+                  # alone vouches for nothing: any same-named tetromino
+                  # anywhere on the board answered for four deletions, so a
+                  # real post-clear island was vouched for by a piece eight
+                  # rows up and eight columns across, one dropped cell of a
+                  # settled I authorised deleting all four (only the
+                  # VANISHED cells need be part of the candidate, which the
+                  # real absorbed frames depend on), and a line clear's
+                  # fade frames — which the clear rules cannot explain, so
+                  # ordering does not reach them — deleted the clearing
+                  # row's own cells and handed the solver a phantom gap.
+                  # Touching columns, not overlapping: measured over 364
+                  # consecutive same-piece observations on the session
+                  # replays, one tick moves a piece at most two columns,
+                  # and a vertical I stepping one or an O stepping two
+                  # leaves spans that merely touch.
                   # unknown_rows marks cells the capture cannot observe (a game
                   # panel over the playfield). They are evidence for NOTHING —
                   # never an added cell, never a missing one — and free to stand
@@ -435,14 +465,41 @@ vision/
                   # touchdown; BOARD_RESET only after several consecutive identical
                   # unexplainable frames (new game, garbage, mid-game attach).
                   # A resync adopts the observed board as the stack MINUS
-                  # the visible part of a piece the top edge cut in half
-                  # (strip_entering_piece): a single component reaching row
-                  # 0 that satisfies the entering-piece rule against the
-                  # rest of the board. It is the one path that commits a
-                  # board it cannot diff, and a mid-game attach in a game
-                  # that parks spawns at the top edge is the ordinary case.
-                  # A fully visible piece is still absorbed (nothing in one
-                  # memoryless board says it is in flight).
+                  # the piece in flight (strip_piece_in_flight): the one
+                  # component that rests on nothing AND touches row 0,
+                  # budgeted at a tetromino (and at four cells it must BE
+                  # one). It is the one path that commits a board it
+                  # cannot diff, and a mid-game attach in a game that
+                  # parks spawns at the top edge is the ordinary case. A
+                  # whole piece is held back too, not just a clipped one:
+                  # freezing the falling piece in is what made its own
+                  # descent read as stack cells vanishing, so the tracker
+                  # reset and re-absorbed it one row lower, the whole way
+                  # down (58 frames, ~3.9 s with no hint;
+                  # tests/fixtures/absorbed_piece).
+                  # Row 0 is where the rule STOPS, because floating does
+                  # not imply in flight: naive gravity makes settled cells
+                  # float, since clearing a row drops everything above it
+                  # onto a row with holes in it, and the repo's own
+                  # Board.drop turns an ordinary position into a board
+                  # with four real locked cells hanging at rows 9-10.
+                  # Deleting those hands the solver a phantom hole and
+                  # then announces a piece the player does not have, as
+                  # the same cells read back as added (measured over
+                  # solver self-play: 666 of 47874 settled boards, 2.16%
+                  # of post-clear ones, 1014 cells). Settled content
+                  # cannot be at row 0 with air under it — the same
+                  # picture grid.py vouches for as one piece in flight —
+                  # and anything lower is adopted, floating or not. A
+                  # piece absorbed lower down is not stranded: its next
+                  # descending frame takes it back out (_carried_piece),
+                  # which is the loop-breaker that works however the piece
+                  # got in. "Maximal component" also holds only on the
+                  # board the capture can SEE, so a component adjacent to
+                  # an unobservable cell is never held back: the panel
+                  # over cols 8-9 of rows 0-1 splits a column stacked to
+                  # the top from a piece locked beside it, and the inner
+                  # half then floats.
                   # The tracker also remembers the preview: the last known
                   # reading and the one it replaced. The piece that LEAVES
                   # the preview is the piece entering the board, which is the
