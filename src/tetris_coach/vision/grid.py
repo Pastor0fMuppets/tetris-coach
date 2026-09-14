@@ -114,12 +114,17 @@ _IMPOSSIBLE_FRAME_LIMIT = 15
 # background and is never named a ghost.
 _GHOST_SEPARATION = MIN_SPREAD / 2
 
-# Every tetromino rotation as a normalized (row, col) cell tuple. A ghost
-# is a copy of ONE piece, so an intermediate layer that is not the shape
-# of a piece is not a ghost (see :func:`_ghost_layer`).
-_TETROMINO_SHAPES: frozenset[tuple[tuple[int, int], ...]] = frozenset(
-    tuple(sorted(rotation.cells)) for rotations in ROTATIONS.values() for rotation in rotations
-)
+# Every tetromino rotation as a normalized (row, col) cell tuple, mapped to
+# the piece it belongs to. No two pieces share a rotation, so a cell set
+# names at most one of them. A ghost is a copy of ONE piece, so an
+# intermediate layer that is not the shape of a piece is not a ghost, and
+# WHICH piece it is, is what ties the layer to the falling piece it
+# previews (see :func:`_ghost_layer`).
+_SHAPE_PIECES: dict[tuple[tuple[int, int], ...], str] = {
+    tuple(sorted(rotation.cells)): piece
+    for piece, rotations in ROTATIONS.items()
+    for rotation in rotations
+}
 
 
 def _cell_colors(
@@ -241,6 +246,41 @@ def _support(
             solid[r, c] = False
     grounded = _flood(solid, [(rows - 1, c) for c in range(cols)])
     return solid & ~grounded, grounded
+
+
+def _piece_named(cells: list[tuple[int, int]]) -> str | None:
+    """Which tetromino ``cells`` are, or ``None`` when they are not one."""
+    if len(cells) != _PIECE_CELLS:
+        return None
+    min_r = min(r for r, _ in cells)
+    min_c = min(c for _, c in cells)
+    return _SHAPE_PIECES.get(tuple(sorted((r - min_r, c - min_c) for r, c in cells)))
+
+
+def _pieces_in_flight(
+    solid: NDArray[np.bool_],
+    unobservable: frozenset[tuple[int, int]],
+) -> set[str]:
+    """Names of the tetrominoes standing whole and airborne on this board.
+
+    Airborne in :func:`_support`'s sense — not 4-connected to the floor
+    through occupied cells — so a piece that has joined the stack is not
+    in flight, and a fragment the top edge or a UI panel has cut in half
+    is not a whole tetromino and names nothing.
+    """
+    airborne, _grounded = _support(solid, unobservable)
+    names: set[str] = set()
+    seen = np.zeros_like(airborne)
+    for row, col in zip(*np.nonzero(airborne), strict=True):
+        if seen[row, col]:
+            continue
+        component = _flood(airborne, [(int(row), int(col))])
+        seen |= component
+        cells = [(int(r), int(c)) for r, c in zip(*np.nonzero(component), strict=True)]
+        name = _piece_named(cells)
+        if name is not None:
+            names.add(name)
+    return names
 
 
 def _over_the_void(
@@ -653,24 +693,48 @@ def _ghost_layer(
        floating cell. Refusing the whole widget instead leaves those
        frames reading exactly as they did before this rule existed —
        below the gate, hint held — which is the outcome to prefer.
-    5. There must be a solid class at all (some cell at or above
-       :data:`MIN_SPREAD`). With nothing but background and the band, the
-       frame is uniform-near and already reads empty.
+    5. It must be a preview OF SOMETHING: the piece it copies has to be
+       on the board, in flight. A whole tetromino of the SAME PIECE TYPE
+       as the layer must stand airborne somewhere — airborne in
+       :func:`_support`'s sense, not 4-connected to the floor, which is
+       what a falling piece is and what a piece that has landed is not.
+       This is the test that makes the residual error below rare instead
+       of routine, and it is the one piece of structure a landing
+       preview cannot be without: a game draws a ghost because a piece
+       is falling, so no falling piece, no ghost. It also subsumes the
+       old requirement that there be a solid class at all (a piece in
+       flight IS one; with nothing but background and the band the frame
+       is uniform-near and already reads empty).
+       On the real pixels it is exactly the test that separates the two
+       cases this function exists to tell apart, which is why it is
+       worth the frames it costs: every ghost in both committed sessions
+       has its own piece in the air above it (measured: 21 of 21 named
+       frames — ghost_session 59-64, an O layer under a falling O;
+       live_session 44-58, an I layer under a falling I), while on
+       ``live2_board_00500`` the pale periwinkle T that must NOT be
+       deleted sits under a falling J. Nothing about the periwinkle's
+       score says which it is (0.346 against the ghost's 0.320) and, as
+       the fixtures show, nothing about where it sits reliably does
+       either — test 4 happens to refuse it only because the stack runs
+       into its left edge on that frame, which one legal board
+       difference removes.
 
     What is deliberately NOT required is the tighter structural story —
-    same shape as the falling piece, in the same columns, directly below
-    it. It does not survive contact with the fixtures. This game is
+    same ROTATION as the falling piece, in the same columns, directly
+    below it. It does not survive contact with the fixtures. This game is
     drag-to-place, so on frames 59-63 the ghost sits at cols 0-1 while
     the piece it belongs to is at cols 4-5, and on frame 150 the ghost is
     a VERTICAL I at col 9 under a HORIZONTAL I at row 0; requiring it
     would have refused every ghost in the session and fixed nothing. The
-    piece TYPE alone is no better: the pale periwinkle that must be
-    refused is a T under a falling T (``live2_board_00500``), so the test
-    would have waved through the one case that deletes a stack.
+    piece TYPE, which test 5 does require, survives all of it, because a
+    preview is a copy of the piece whatever the game does with the
+    rotation or the column.
 
     Cells the capture cannot read are left out of ALL of it — the band,
-    the background cluster test 1 measures against, and the neighbours
-    tests 3 and 4 look at. Their pixels are a UI panel's, and a panel is
+    the background cluster test 1 measures against, the neighbours tests
+    3 and 4 look at, and the pieces test 5 counts as in flight (a piece
+    the panel cuts in half is not a whole tetromino and names nothing).
+    Their pixels are a UI panel's, and a panel is
     neither board content nor the board's background: measured on the
     live session, the covered cell (0, 8) scores 0.15 against a
     background cluster that otherwise tops out at 0.02, which is enough
@@ -684,14 +748,24 @@ def _ghost_layer(
       tetromino that cannot be explained, so the tracker holds and the
       last hint stays on screen. This is the direction the module
       prefers and the common one.
-    - A real piece whose color is in the band, freshly locked on a FLAT
-      stack surface with open air beside and above it, alone in the band
-      and shaped like a tetromino, is deleted. It needs a palette with a
-      piece within ~54 uint8 units of the background — a pale-on-pale
-      skin, which the periwinkle above shows is not hypothetical — and
-      it survives only until the next piece lands beside it, which puts
-      a grounded neighbour against it and ends the coincidence. Test 4
-      is what makes this narrow rather than routine.
+    - A real piece whose color is in the band, freshly landed on a FLAT
+      surface with open air beside and above it, alone in the band,
+      shaped like a tetromino AND of the same type as the piece now
+      falling, is deleted. Every clause is needed, and the last one is
+      what keeps it rare: the first four describe an ordinary landing on
+      a pale-on-pale skin (measured over every legal placement on 4000
+      random stacks — 644563 landings — 49% come to rest with nothing
+      occupied to their left, right or above, so test 4 alone does NOT
+      make this narrow: it makes it a coin flip), while
+      test 5 additionally demands that the piece in the air be the same
+      one — about one landing in seven, and none at all in the gap
+      between a lock and the next spawn.
+      While it lasts the cells read empty, which costs the frame rather
+      than the session: the tracker sees a piece vanish, cannot explain
+      it, and holds. The damage needs four such frames in a row to reach
+      a BOARD_RESET, and the exposure ends the moment anything lands
+      beside the piece, the band count leaves 4, or the piece in flight
+      is a different one.
     """
     rows, cols = int(scores.shape[0]), int(scores.shape[1])
     observable = np.ones((rows, cols), dtype=np.bool_)
@@ -711,9 +785,8 @@ def _ghost_layer(
     if below.size == 0 or layer_min - float(below.max()) < _GHOST_SEPARATION:
         return None
     # 2. Exactly one tetromino.
-    min_r = min(r for r, _ in cells)
-    min_c = min(c for _, c in cells)
-    if tuple(sorted((r - min_r, c - min_c) for r, c in cells)) not in _TETROMINO_SHAPES:
+    piece = _piece_named(cells)
+    if piece is None:
         return None
     # 3. Resting on the floor or on something at a real piece color.
     if not any(r + 1 >= rows or bool(solid[r + 1, c]) for r, c in cells):
@@ -724,6 +797,10 @@ def _ghost_layer(
         for nr, nc in ((r - 1, c), (r, c - 1), (r, c + 1)):
             if 0 <= nr < rows and 0 <= nc < cols and bool(solid[nr, nc]):
                 return None
+    # 5. A preview OF something: the piece it copies must be on the board,
+    #    in flight.
+    if piece not in _pieces_in_flight(solid, unobservable):
+        return None
     return band
 
 

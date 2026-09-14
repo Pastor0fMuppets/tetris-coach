@@ -27,8 +27,11 @@ Three regimes, and the rule is supposed to behave differently in each:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
+from PIL import Image
 
 from tetris_coach.vision.grid import (
     _GHOST_SEPARATION,
@@ -36,6 +39,9 @@ from tetris_coach.vision.grid import (
     _cell_colors,
     _distance_scores,
     _ghost_layer,
+    _piece_named,
+    _pieces_in_flight,
+    _top_row_background,
     classify_grid,
 )
 
@@ -250,3 +256,138 @@ def test_the_preview_renderer_draws_a_piece_the_game_would_hide() -> None:
     # And the caption helper still renders (shared with the preview-box
     # tests; kept exercised here so the ghost argument did not break it).
     assert with_label(render_board(grid(solid), style), style).shape[2] == 3
+
+
+# A piece of a DIFFERENT type in the air, drawn where FALLING stands. The
+# scenes above all preview an O, so an I here is the same board with the
+# one thing a landing preview cannot be without taken away: the piece it
+# is a copy of.
+FALLING_I = [(2, 4), (2, 5), (2, 6), (2, 7)]
+# Nothing in the air at all — every solid cell resting on the floor.
+GROUNDED_ONLY = [(11, c) for c in range(4)] + [(10, c) for c in range(3)]
+# An O that has already landed, sitting on top of that stack. A whole
+# tetromino of the layer's own type, and still not a piece in flight.
+LANDED_O = [(8, 0), (8, 1), (9, 0), (9, 1)]
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+@pytest.mark.parametrize("scene", sorted(SCENES), ids=str)
+@pytest.mark.parametrize("score", NAMED, ids=lambda v: f"score{v}")
+def test_a_band_layer_with_no_piece_of_its_own_in_flight_is_left_alone(
+    style: Style, scene: str, score: float
+) -> None:
+    # Test 5, which is what keeps a freshly landed pale piece on the
+    # board. The same scenes that ARE named when their own O is falling
+    # are refused the moment the piece in the air is an I instead: a
+    # preview is a copy of the piece that is falling, so with no such
+    # piece there is nothing for these cells to be a preview OF, and the
+    # rule takes no responsibility for deleting them.
+    solid, ghost = SCENES[scene]
+    stack = [cell for cell in solid if cell not in FALLING] + FALLING_I
+    assert named_layer(style, stack, ghost, score) is None, f"{style.name}/{scene}: named"
+    occupancy, _confidence = read(style, stack, ghost, score)
+    assert occupancy[grid(stack)].all(), f"{style.name}/{scene}: stack cells were lost"
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+@pytest.mark.parametrize("score", NAMED, ids=lambda v: f"score{v}")
+def test_nothing_is_named_a_preview_while_no_piece_is_falling(style: Style, score: float) -> None:
+    # The gap between a lock and the next spawn: nothing in the air, so
+    # nothing on the board can be a preview. This is the board a game
+    # draws in the frames right after a piece lands, which is precisely
+    # when a pale piece of its own is at risk.
+    _stack, ghost = SCENES["floor"]
+    assert named_layer(style, GROUNDED_ONLY, ghost, score) is None, f"{style.name}: named"
+    occupancy, _confidence = read(style, GROUNDED_ONLY, ghost, score)
+    assert occupancy[grid(GROUNDED_ONLY)].all(), f"{style.name}: stack cells were lost"
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+@pytest.mark.parametrize("score", NAMED, ids=lambda v: f"score{v}")
+def test_a_piece_already_landed_is_not_a_piece_in_flight(style: Style, score: float) -> None:
+    # "In flight" is support, not shape: an O sitting on the stack is a
+    # whole tetromino of the layer's own type and still vouches for
+    # nothing, because a game that has stopped drawing a falling piece
+    # has stopped drawing its preview too.
+    _stack, ghost = SCENES["floor"]
+    stack = GROUNDED_ONLY + LANDED_O
+    assert named_layer(style, stack, ghost, score) is None, f"{style.name}: named"
+    occupancy, _confidence = read(style, stack, ghost, score)
+    assert occupancy[grid(stack)].all(), f"{style.name}: stack cells were lost"
+
+
+# --- The real pixels the rule has to get right ------------------------------
+#
+# tests/fixtures/roas_stacker/live2_board_00500.png carries a real pale
+# periwinkle T on the floor at (10,5),(11,4),(11,5),(11,6), scoring 0.346 —
+# four thousandths under MIN_SPREAD, i.e. INSIDE the band, against the
+# ghost's 0.320. It is board content and must survive.
+#
+# On the frame as captured, test 4 refuses it: the stack cell at (11,3)
+# abuts it. That is a property of this frame, not of the piece, so the
+# test below also re-renders the frame with that ONE legal board
+# difference — the stack cell replaced by the empty floor cell next to it
+# — which is the board one tick earlier or one column over. Before test 5,
+# that frame returned the four T cells as a named preview at confidence
+# 0.26 (above the 0.15 gate): a real locked piece deleted from the board
+# handed to the solver.
+PERIWINKLE_T = ((10, 5), (11, 4), (11, 5), (11, 6))
+ROAS = Path(__file__).parent / "fixtures" / "roas_stacker"
+ROAS_COVERED = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+
+
+def swap_cell(image: np.ndarray, dst: tuple[int, int], src: tuple[int, int]) -> np.ndarray:
+    """A copy of ``image`` with the cell at ``dst`` painted from ``src``."""
+    height, width = image.shape[0], image.shape[1]
+    cell_h, cell_w = height // ROWS, width // COLS
+
+    def box(cell: tuple[int, int]) -> tuple[slice, slice]:
+        row, col = cell
+        top, left = int(row * height / ROWS), int(col * width / COLS)
+        return slice(top, top + cell_h), slice(left, left + cell_w)
+
+    out = image.copy()
+    out[box(dst)] = image[box(src)]
+    return out
+
+
+def roas_frame(name: str) -> np.ndarray:
+    return np.asarray(Image.open(ROAS / name))[:, :, ::-1]
+
+
+def roas_scores(image: np.ndarray) -> np.ndarray:
+    """Cell scores against the board's own background, as the module reads it."""
+    colors = _cell_colors(image, ROWS, COLS, 0.25)
+    return _distance_scores(colors, _top_row_background(colors, ROAS_COVERED))
+
+
+def test_a_real_band_colored_piece_is_never_deleted_from_a_real_frame() -> None:
+    frame = roas_frame("live2_board_00500.png")
+    for image, what in (
+        (frame, "as captured"),
+        (swap_cell(frame, (11, 3), (11, 7)), "with the abutting stack cell removed"),
+    ):
+        scores = roas_scores(image)
+        assert all(_GHOST_SEPARATION <= scores[cell] < MIN_SPREAD for cell in PERIWINKLE_T), (
+            "the fixture no longer puts the periwinkle inside the band"
+        )
+        assert _ghost_layer(scores, ROAS_COVERED) is None, f"{what}: a real piece was named"
+        occupancy, confidence = classify_grid(
+            image, rows=ROWS, cols=COLS, unobservable_cells=ROAS_COVERED
+        )
+        assert confidence >= 0.15, f"{what}: the frame is not even readable"
+        assert all(occupancy[cell] for cell in PERIWINKLE_T), f"{what}: the T was deleted"
+
+
+def test_the_falling_piece_on_that_frame_is_what_refuses_the_periwinkle() -> None:
+    # Why it is refused, stated so a later change to test 5 shows up here:
+    # the piece in the air on that frame is a J and the band layer is a T,
+    # so the layer is a copy of nothing. (The layer's own type is read the
+    # same way, from the cells alone.)
+    frame = swap_cell(roas_frame("live2_board_00500.png"), (11, 3), (11, 7))
+    scores = roas_scores(frame)
+    solid = scores >= MIN_SPREAD
+    for cell in ROAS_COVERED:
+        solid[cell] = False
+    assert _piece_named(list(PERIWINKLE_T)) == "T"
+    assert _pieces_in_flight(solid, ROAS_COVERED) == {"J"}
