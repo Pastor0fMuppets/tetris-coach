@@ -93,6 +93,22 @@ vision/
                   # anchors only from ACCEPTED frames, could never form. That
                   # second one is a deadlock, not a degradation: measured on
                   # a real session, 36 of 36 frames at confidence 0.00.
+                  # The memory is usable after one accepted two-class frame
+                  # (CONFIRMED: it stops falling back, which is what gates a
+                  # bright overlay) but not settled until a second frame has
+                  # CORROBORATED it — until then every accepted frame is also
+                  # read from scratch by the top-row prior, and a vouched
+                  # reading naming a different background drops the memory and
+                  # the frame both (one of the two is inverted and nothing
+                  # says which). One frame cannot settle it because a legal
+                  # near-top-out board can be read inverted AND vouched for:
+                  # attached mid-game on one, the coach anchored on a piece
+                  # color and, since confirmed memory never falls back, read
+                  # every later frame 120 of 120 cells wrong at 0.96 for the
+                  # rest of the session. Frames the prior refuses are no
+                  # evidence and leave the memory alone, so a game whose top
+                  # row is never vouchable still runs on a confirmed,
+                  # never-corroborated anchor. Cost: ~0.08 ms/frame.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the

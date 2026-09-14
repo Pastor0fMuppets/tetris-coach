@@ -310,6 +310,23 @@ def garbage_grid(well: int = 6) -> np.ndarray:
     return grid
 
 
+def covered_well_near_top_out_grid(rows: int = 20, cols: int = 10) -> np.ndarray:
+    """Legal, near-top-out, and the shape the top-row prior still reads
+    INVERTED: six columns grounded at row 0, four topping out at row 1,
+    and the well that keeps every row incomplete is COVERED by an
+    overhang at col 3 — so inverted, the four cells of air over cols 6-9
+    are a tetromino in flight and the well is a grounded column, leaving
+    nothing else hanging for the board-wide budget to catch.
+    """
+    grid = np.zeros((rows, cols), dtype=bool)
+    for c in (0, 1, 2, 4, 5):
+        grid[:, c] = True
+    grid[0, 3] = True  # the overhang covering the well
+    grid[1:, 6:cols] = True
+    assert not grid.all(axis=1).any(), "a complete row would have cleared"
+    return grid
+
+
 def near_top_out_with_air_grid() -> np.ndarray:
     """Six columns grounded at row 0 over a covered well: legal, and the
     case where an inverted reading's own columns DO run out into air.
@@ -773,6 +790,99 @@ class TestGridClassifier:
         occupancy, confidence = classifier.classify(empty)
         assert not occupancy.any()
         assert confidence >= self.GATE
+
+    def test_one_frame_confirms_but_a_second_corroborates(self) -> None:
+        # The anchor is usable after one accepted two-class frame (that is
+        # what keeps a bright overlay gated from the next frame on), but
+        # it is not settled until a second, independent reading of a later
+        # frame has named the same background.
+        classifier = GridClassifier()
+        grid = np.zeros((20, 10), dtype=bool)
+        grid[18:, 0:4] = True
+        classifier.classify(render_board(grid, STYLES[0], cell_size=20))
+        assert classifier.confirmed and not classifier.corroborated
+        grid[17, 1] = True
+        classifier.classify(render_board(grid, STYLES[0], cell_size=20))
+        assert classifier.corroborated
+
+    @pytest.mark.parametrize("style", [STYLES[1], STYLES[5]], ids=lambda s: s.name)
+    def test_a_wrong_bootstrap_anchor_cannot_wedge_the_session(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The session the coach is most wanted for: attached mid-game, on
+        # a near-top-out board. This one is read INVERTED and vouched for
+        # (the residual of _top_row_vouchable: its air is tetromino-sized,
+        # tetromino-shaped, and drains to the floor down the covered
+        # well), so it anchors the memory on a PIECE color. Before the
+        # second opinion that anchor was confirmed, and confirmed memory
+        # never falls back: every frame of the rest of the session read
+        # 120 of 120 cells wrong at confidence 0.96.
+        classifier = GridClassifier()
+        bad = render_board(covered_well_near_top_out_grid(), style, cell_size=20, seed=3)
+        occupancy, confidence = classifier.classify(bad)
+        assert confidence >= self.GATE and not np.array_equal(
+            occupancy, covered_well_near_top_out_grid()
+        ), "this board is supposed to be the inverted-but-vouched case"
+        assert classifier.confirmed and not classifier.corroborated
+        assert not np.allclose(classifier.background, style.background, atol=10.0), (
+            "the anchor is supposed to have landed on the piece color"
+        )
+
+        # The next ordinary frame reads the background differently: one of
+        # the two is inverted and nothing says which, so the frame is
+        # dropped and so is the memory.
+        ordinary = np.zeros((20, 10), dtype=bool)
+        ordinary[16:, 0:7] = True
+        ordinary[19, 7] = True
+        frame = render_board(ordinary, style, cell_size=20, seed=4)
+        _occupancy, confidence = classifier.classify(frame)
+        assert confidence == 0.0
+        assert classifier.background is None and not classifier.confirmed
+
+        # ... and the session re-anchors on the board itself, one frame later.
+        occupancy, confidence = classifier.classify(frame)
+        np.testing.assert_array_equal(occupancy, ordinary)
+        assert confidence >= self.GATE
+        np.testing.assert_allclose(classifier.background, style.background, atol=3.0)
+        occupancy, confidence = classifier.classify(frame)
+        np.testing.assert_array_equal(occupancy, ordinary)
+        assert classifier.corroborated
+
+    @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+    def test_frames_the_prior_refuses_leave_the_memory_alone(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The stream that has no second opinion to give: once the stack is
+        # grounded at row 0 the top-row prior refuses every frame, which
+        # is exactly why the memory exists. Those frames must neither
+        # corroborate the anchor nor cost it — they are read from memory,
+        # exactly, forever.
+        classifier = GridClassifier()
+        low = np.zeros((20, 10), dtype=bool)
+        low[17:, 0:5] = True
+        classifier.classify(render_board(low, style, cell_size=20))
+        assert classifier.confirmed
+        anchored = classifier.background
+        for grid in (side_stack_grid(), garbage_grid(), side_stack_grid()):
+            occupancy, confidence = classifier.classify(render_board(grid, style, cell_size=20))
+            np.testing.assert_array_equal(occupancy, grid)
+            assert confidence >= self.GATE
+        assert not classifier.corroborated
+        np.testing.assert_allclose(classifier.background, anchored, atol=3.0)
+
+    @pytest.mark.parametrize("style", [STYLES[1], STYLES[5]], ids=lambda s: s.name)
+    def test_a_corroborated_memory_outlives_an_inverted_vouch(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The second opinion is a bootstrap-stage check, not a standing
+        # veto: once two independent frames have agreed, the same
+        # inverted-but-vouched board that could have wedged the session at
+        # frame one is simply read correctly from memory.
+        classifier = GridClassifier()
+        low = np.zeros((20, 10), dtype=bool)
+        low[17:, 0:5] = True
+        for _ in range(2):
+            classifier.classify(render_board(low, style, cell_size=20))
+        assert classifier.corroborated
+        grid = covered_well_near_top_out_grid()
+        occupancy, confidence = classifier.classify(render_board(grid, style, cell_size=20, seed=3))
+        np.testing.assert_array_equal(occupancy, grid)
+        assert confidence >= self.GATE
+        assert classifier.corroborated
 
     def test_provisional_anchor_recovers_from_pause_panel(self) -> None:
         # Session started while a solid bright panel covers a dark-theme

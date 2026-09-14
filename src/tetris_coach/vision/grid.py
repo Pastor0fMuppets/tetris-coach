@@ -544,13 +544,35 @@ class GridClassifier:
       the frame re-bootstraps (a wrong provisional anchor, e.g. a pause
       panel covering the board at startup, must not blind the session).
       The first accepted two-class frame confirms the memory.
-    - Confirmed memory: never falls back and never re-anchors — a frame
-      it cannot read is rejected, holding the last committed state. This
-      is deliberate: the plausible-looking alternatives (a top-row
-      re-estimate on a garbage board, a bright overlay re-read as a
-      light-theme empty board) are exactly the wrong readings the memory
-      exists to prevent. It still tracks slow drift, re-measuring from
-      every accepted frame.
+    - Confirmed memory: never falls back — a frame it cannot read is
+      rejected, holding the last committed state. This is deliberate: the
+      plausible-looking alternatives (a top-row re-estimate on a garbage
+      board, a bright overlay re-read as a light-theme empty board) are
+      exactly the wrong readings the memory exists to prevent. It tracks
+      slow drift, re-measuring from every accepted frame.
+    - Confirmed but not yet CORROBORATED: one frame is one frame. Until a
+      second, independent one has backed the anchor up, every ACCEPTED
+      frame gets a second opinion (:meth:`_second_opinion`) — the same
+      frame classified from scratch by the top-row prior, which knows
+      nothing of the memory. Agreement corroborates the anchor and ends
+      the checks for the session; a vouched disagreement means one of the
+      two is inverted and there is no way to tell which, so the memory is
+      dropped and the frame with it, and the next frame bootstraps fresh.
+      Frames that offer no opinion (rejected by the prior, or uniform)
+      leave the anchor as it is, so a game whose top row is never
+      vouchable still runs on a confirmed, never-corroborated memory.
+
+    That last stage is what keeps a single bad bootstrap frame from
+    wedging the session: a legal near-top-out board CAN be read inverted
+    and vouched for (see :func:`_top_row_vouchable`), and before the
+    second opinion that reading anchored a CONFIRMED memory on the piece
+    color. Measured on the ROAS Stacker geometry, cream-mono: a first
+    frame of a covered-well board anchored at (150, 140, 120) instead of
+    (245, 240, 228) and every frame after it read 120 of 120 cells wrong
+    at confidence 0.96 — for the rest of the session, since a confirmed
+    memory never falls back. Now the next ordinary frame contradicts the
+    anchor, the memory is dropped, and the session re-anchors correctly
+    two frames later.
 
     ``unobservable_cells`` is the same set the engine computes from the two
     selected rectangles. It matters most HERE: a covered top-row cell is
@@ -575,6 +597,7 @@ class GridClassifier:
         self._unobservable: frozenset[tuple[int, int]] = unobservable_cells or frozenset()
         self._background: NDArray[np.float64] | None = None
         self._confirmed = False
+        self._corroborated = False
 
     @property
     def background(self) -> NDArray[np.float64] | None:
@@ -586,12 +609,26 @@ class GridClassifier:
         """True once an accepted two-class frame anchored the memory."""
         return self._confirmed
 
+    @property
+    def corroborated(self) -> bool:
+        """True once a second, independent frame backed the anchor up."""
+        return self._corroborated
+
     def classify(self, image: NDArray[np.uint8]) -> tuple[NDArray[np.bool_], float]:
         """Classify one frame; same return contract as :func:`classify_grid`."""
         colors = _cell_colors(image, self._rows, self._cols, margin=0.25)
         if self._background is not None:
             occupancy, confidence = _classify_scored(colors, self._background)
             if confidence >= self._min_confidence:
+                if self._confirmed and not self._corroborated:
+                    agrees = self._second_opinion(colors)
+                    if agrees is False:
+                        # An anchor and a from-scratch reading of the same
+                        # frame that disagree about the background cannot
+                        # both be the board: believe neither.
+                        self._forget()
+                        return occupancy, 0.0
+                    self._corroborated = agrees is True
                 self._remember(colors, occupancy)
                 return occupancy, confidence
             if self._confirmed:
@@ -616,24 +653,77 @@ class GridClassifier:
         would drift toward a color the board never shows.
         """
         observable = self._observable_mask(occupancy.shape)
-        flat = colors.reshape(-1, colors.shape[-1])
-        keep = observable.ravel()
         if bool((occupancy & observable).any()):
             # Two-class frame: the empty class IS the background, freshly
             # measured. Anchoring here is what makes polarity survive the
             # stack growing into row 0.
-            sample = flat[(~occupancy.ravel()) & keep]
-            if sample.size == 0:  # every observable cell reads occupied
+            measured = self._empty_class_color(colors, occupancy, observable)
+            if measured is None:  # every observable cell reads occupied
                 return
-            self._background = np.asarray(np.median(sample, axis=0), dtype=np.float64)
+            self._background = measured
             self._confirmed = True
         else:
             # Uniform-empty frame: the whole frame is the background —
             # but only provisionally, since a solid pause panel is
             # indistinguishable from an empty board (never CONFIRM from
             # one, or a panel at startup would poison the session).
+            flat = colors.reshape(-1, colors.shape[-1])
+            keep = observable.ravel()
             sample = flat[keep] if keep.any() else flat
             self._background = np.asarray(np.median(sample, axis=0), dtype=np.float64)
+
+    def _second_opinion(self, colors: NDArray[np.float32]) -> bool | None:
+        """Does a from-scratch reading of this frame back the anchor up?
+
+        Classifies the frame by the top-row prior alone — no memory in it
+        — and compares the background THAT reading implies against the
+        remembered one. True when they are the same color, False when a
+        vouched reading names a different one, None when the frame has no
+        opinion to offer: refused by the prior (:func:`_top_row_vouchable`
+        would not vouch for it, so it is no evidence about anything), or
+        uniform-empty (a solid frame cannot tell the board's background
+        from a panel's, which is why such frames only ever anchor
+        provisionally).
+
+        "The same color" is the module's own floor for it: colors closer
+        than :data:`MIN_SPREAD` on the score scale are what a single cell
+        may not be split on either, which leaves room for the slow drift
+        the memory tracks (~54 uint8 units of Euclidean distance) while an
+        inverted anchor sits far outside it (the piece-vs-paper case
+        measured above: 0.63).
+        """
+        background = self._background
+        if background is None:
+            return None
+        occupancy, confidence = self._bootstrap(colors)
+        if confidence < self._min_confidence:
+            return None
+        observable = self._observable_mask(occupancy.shape)
+        if not bool((occupancy & observable).any()):
+            return None
+        measured = self._empty_class_color(colors, occupancy, observable)
+        if measured is None:
+            return None
+        return float(_distance_scores(measured, background)) < MIN_SPREAD
+
+    def _forget(self) -> None:
+        """Drop the memory back to nothing, so the next frame bootstraps."""
+        self._background = None
+        self._confirmed = False
+        self._corroborated = False
+
+    @staticmethod
+    def _empty_class_color(
+        colors: NDArray[np.float32],
+        occupancy: NDArray[np.bool_],
+        observable: NDArray[np.bool_],
+    ) -> NDArray[np.float64] | None:
+        """Median color of the OBSERVABLE cells a reading calls empty."""
+        flat = colors.reshape(-1, colors.shape[-1])
+        sample = flat[(~occupancy.ravel()) & observable.ravel()]
+        if sample.size == 0:
+            return None
+        return np.asarray(np.median(sample, axis=0), dtype=np.float64)
 
     def _observable_mask(self, shape: tuple[int, ...]) -> NDArray[np.bool_]:
         """(rows, cols) True wherever the capture really shows the board."""
