@@ -10,7 +10,7 @@ from tetris_coach.vision.pieces_vision import (
     explain_grid,
 )
 
-from .boards import EMPTY, bottom_lines, fp, merge, piece_cells, rows_of
+from .boards import EMPTY, Cell, bottom_lines, fp, merge, piece_cells, rows_of
 
 
 class TestQuiet:
@@ -308,10 +308,12 @@ class TestClearTierC3Unobserved:
 class TestUnexplained:
     STACK = rows_of(bottom_lines("###....###"))
 
-    @pytest.mark.parametrize("n_cells", [1, 2, 3])
-    def test_piece_entering_from_above(self, n_cells: int) -> None:
-        entering = [(0, 4 + i) for i in range(n_cells)]
-        exp = explain_grid(merge(self.STACK, entering), self.STACK, None)
+    def test_fragment_in_open_air_below_the_top_edge(self) -> None:
+        # A 2-cell blob floating at row 3 touches no edge of anything: no
+        # piece could be showing only that, so it stays unexplained (and can
+        # still reach the reset debounce). Contrast TestEnteringFromAbove,
+        # where the same blob AT ROW 0 is a piece cut by the capture's edge.
+        exp = explain_grid(merge(self.STACK, [(3, 4), (3, 5)]), self.STACK, None)
         assert exp.kind is FrameKind.UNEXPLAINED
 
     def test_five_cell_blob(self) -> None:
@@ -540,6 +542,136 @@ class TestUnobservableCells:
         assert exp.kind is FrameKind.FALLING
         assert exp.falling is not None
         assert exp.falling.piece == "O"
+
+
+def clipped_cells(piece: str, rotation_index: int, clip: int, left: int) -> list[Cell]:
+    """The on-grid part of a piece whose top ``clip`` rows are above row 0."""
+    return [
+        (r - clip, left + c) for r, c in ROTATIONS[piece][rotation_index].cells if r - clip >= 0
+    ]
+
+
+class TestEnteringFromAbove:
+    """The top edge of the board region cuts a piece that is entering.
+
+    Pieces spawn above row 0, so the frame in which one appears shows only
+    its bottom 1-3 cells. In a game with no gravity (drag to move, drag to
+    drop) that fragment SITS there for seconds. Read as board content it is
+    a broken tetromino -> UNEXPLAINED -> a BOARD_RESET storm that commits
+    the fragment as phantom stack cells, which is what made every hint
+    after the first one wrong on the real session (see
+    tests/test_live_session.py). Read as what it is, it is the same partial
+    observation as a piece under a UI panel.
+    """
+
+    STACK_CELLS = bottom_lines("###....###")
+    STACK = rows_of(STACK_CELLS)
+
+    @pytest.mark.parametrize("piece", PIECES)
+    @pytest.mark.parametrize("clip", [1, 2, 3])
+    def test_every_tetromino_clipped_by_one_two_or_three_rows(self, piece: str, clip: int) -> None:
+        # The rule is total over the shape space: no clipped piece is ever
+        # UNEXPLAINED, and none of them ever moves the committed stack.
+        for rotation in ROTATIONS[piece]:
+            if clip >= rotation.height:
+                continue  # entirely above the board: nothing is observed
+            visible = clipped_cells(piece, rotation.index, clip, 3)
+            exp = explain_grid(merge(self.STACK, visible), self.STACK, None)
+            assert exp.kind in (FrameKind.FALLING, FrameKind.OCCLUDED), (
+                f"{piece} rot{rotation.index} clipped by {clip}: {exp.kind}"
+            )
+            assert exp.stack_rows == self.STACK
+            if exp.falling is not None:
+                # Named only when the fragment admits exactly one piece, and
+                # then the name is the true one and the box starts off-grid.
+                assert exp.falling.piece == piece
+                assert exp.falling.row == -clip
+
+    def test_a_unique_fragment_names_its_piece(self) -> None:
+        # Three cells stacked in one column: only a vertical I has that as
+        # its bottom, so the piece is named (and hinted) at once, from a
+        # bounding box that starts one row above the board.
+        visible = clipped_cells("I", 1, 1, 6)
+        exp = explain_grid(merge(self.STACK, visible), self.STACK, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert (exp.falling.piece, exp.falling.row, exp.falling.col) == ("I", -1, 6)
+        assert exp.stack_rows == self.STACK  # a piece in flight, not stack
+
+    def test_an_ambiguous_fragment_holds_instead_of_guessing(self) -> None:
+        # Two cells side by side at row 0: an O, an S, a Z, a J and an L all
+        # fit. A guessed name is a guessed hint, so the frame is coherent
+        # and nameless; the piece names itself as soon as it descends.
+        exp = explain_grid(merge(self.STACK, [(0, 4), (0, 5)]), self.STACK, None)
+        assert exp.kind is FrameKind.OCCLUDED
+        assert exp.falling is None
+        assert exp.stack_rows == self.STACK
+
+    def test_a_row_zero_stack_remnant_is_not_an_entering_piece(self) -> None:
+        # The counter-case the airborne guard exists for: a column stacked to
+        # the very top. Its row-0 cell RESTS on the stack, so it is board
+        # content, not a spawn — never renamed, never deleted, and still
+        # unexplained, so a genuinely new world can still reset the board.
+        column = [(r, 3) for r in range(1, 20)]
+        stack = rows_of(self.STACK_CELLS, column)
+        exp = explain_grid(merge(stack, [(0, 3)]), stack, None)
+        assert exp.kind is FrameKind.UNEXPLAINED
+        assert exp.falling is None
+
+    def test_a_fragment_hanging_over_the_stack_is_still_entering(self) -> None:
+        # Airborne is about the cell directly below, not about height: a
+        # piece entering over a tall column has air under it.
+        column = [(r, 3) for r in range(2, 20)]
+        stack = rows_of(self.STACK_CELLS, column)
+        exp = explain_grid(merge(stack, [(0, 3)]), stack, None)
+        assert exp.kind is FrameKind.OCCLUDED
+        assert exp.stack_rows == stack
+
+    def test_lock_revealed_by_a_clipped_spawn_commits_only_the_lock(self) -> None:
+        # The live failure, frame by frame: the I hard-drops to the floor and
+        # the next piece appears in the same frame with only two cells on the
+        # grid. 4 + 2 added cells is not two tetrominoes, so this used to be
+        # UNEXPLAINED. The lock must commit; the fragment must NOT.
+        lock = piece_cells("I", 0, 19, 0)
+        observed = rows_of(lock, [(0, 4), (0, 5)])
+        exp = explain_grid(observed, EMPTY, fp("I", 0, 1, 3))
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == rows_of(lock)  # the fragment is not in it
+        assert exp.falling is None  # several pieces fit: name nothing
+
+    def test_a_clipped_spawn_is_named_when_one_piece_fits(self) -> None:
+        lock = piece_cells("I", 0, 19, 0)
+        observed = rows_of(lock, clipped_cells("I", 1, 1, 6))
+        exp = explain_grid(observed, EMPTY, fp("I", 0, 1, 3))
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == rows_of(lock)
+        assert exp.falling is not None
+        assert (exp.falling.piece, exp.falling.row) == ("I", -1)
+
+    def test_a_clearing_lock_tolerates_a_clipped_spawn(self) -> None:
+        # Same frame shape on the clear path: the row vanishes, the next
+        # piece is already half on the grid. Without the rule the settled
+        # post-clear frame is unexplainable and the board resets.
+        stack = rows_of(bottom_lines("#########."))
+        last = fp("I", 1, 16, 9)
+        s2 = rows_of([(17, 9), (18, 9), (19, 9)])
+        exp = explain_grid(merge(s2, [(0, 4), (0, 5)]), stack, last)
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == s2
+        assert exp.falling is None
+
+    def test_a_covered_panel_answers_before_the_top_edge(self) -> None:
+        # Priority, so that no session with a NEXT panel reads differently
+        # than it did: a fragment the panel can explain is explained there.
+        # Three cells of a flat I with (0,9) behind the panel stay a named I
+        # (a T, J or L cut by the top edge would fit those cells too).
+        unknown = rows_of([(0, 9)], height=12)
+        empty12: tuple[int, ...] = (0,) * 12
+        observed = merge(empty12, [(0, 6), (0, 7), (0, 8)])
+        exp = explain_grid(observed, empty12, None, unknown_rows=unknown)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.falling is not None
+        assert (exp.falling.piece, exp.falling.row) == ("I", 0)
 
 
 class TestClearFullRowsMatchesCore:

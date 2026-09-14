@@ -22,6 +22,16 @@ in for whatever cells a hypothesis needs (the hidden half of a piece, the
 hidden half of a lock). A frame whose visible evidence is only the
 visible part of a piece is :attr:`FrameKind.OCCLUDED` — explained, but
 carrying no candidate, so it holds state instead of tripping a reset.
+
+The board region has one unobservable region no mask can name: the space
+ABOVE row 0, which pieces enter the playfield through. A piece that has
+spawned but not yet descended is cut by the capture's top edge and shows
+only its bottom 1-3 cells, and in a game without gravity (drag to move,
+drag to drop) it SITS there for seconds rather than falling through in a
+frame. Those cells are read exactly like cells at the edge of a panel:
+named when one tetromino completes them, OCCLUDED when several do — and
+never committed as stack content, which is the corruption that made every
+hint after the first one wrong (see :func:`_clipped_completions`).
 """
 
 from __future__ import annotations
@@ -55,7 +65,11 @@ class FallingPiece:
 
     piece: str
     rotation_index: int
-    row: int  # top row of the bounding box on the board
+    # Top row of the bounding box on the board. NEGATIVE while the piece is
+    # still entering from above the board region: the bounding box starts
+    # off-grid and :attr:`cells` then names cells at rows < 0, which no
+    # board-indexed rule may touch (they are not board cells at all).
+    row: int
     col: int  # left column of the bounding box on the board
 
     @property
@@ -73,7 +87,7 @@ class FrameKind(Enum):
     QUIET = auto()  # nothing new on the board (post-lock, pre-spawn)
     FALLING = auto()  # stack intact + exactly one tetromino of new cells
     LOCKED = auto()  # a lock (with or without clears) exactly verified
-    OCCLUDED = auto()  # a piece partly hidden under an unobservable region
+    OCCLUDED = auto()  # a piece seen in part: under a panel, or cut by the top edge
     UNEXPLAINED = auto()  # no structural explanation; produce no candidate
 
 
@@ -191,6 +205,79 @@ def _hidden_completions(
     return completions
 
 
+def _clipped_completions(
+    fragment: set[Cell],
+    stack_rows: tuple[int, ...],
+    unknown_rows: tuple[int, ...],
+) -> set[FallingPiece]:
+    """Pieces whose visible part is exactly ``fragment``, cut by the TOP EDGE.
+
+    Pieces enter the playfield from above the board region, so the capture's
+    top edge cuts a just-spawned piece in half and 1-3 of its cells are on
+    the grid. Enumerates every placement whose bounding box starts above
+    row 0 and whose on-board cells are ``fragment`` (plus, as everywhere,
+    cells inside ``unknown_rows``, which are evidence for nothing).
+
+    Two guards keep real board content out of this rule:
+
+    - the fragment must touch row 0. A piece the top edge cuts always
+      reaches it; a blob floating at row 3 is something else entirely.
+    - the fragment must be AIRBORNE (``not _supported``). A piece entering
+      from above has air under it; cells at row 0 resting on the stack are
+      the top of the stack — a lock near top-out, or a row about to clear —
+      and reading those as an entering piece would delete them.
+
+    The returned pieces carry a negative ``row`` (the bounding box starts
+    off-grid). An empty set means "not a piece entering from above" and the
+    caller falls through to the ordinary rules unchanged.
+    """
+    if not 1 <= len(fragment) <= 3:
+        return set()
+    if not any(r == 0 for r, _ in fragment):
+        return set()
+    if _supported(fragment, stack_rows):
+        return set()
+    height = len(stack_rows)
+    anchor_r, anchor_c = next(iter(fragment))
+    completions: set[FallingPiece] = set()
+    for rots in ROTATIONS.values():
+        for rot in rots:
+            for cell_r, cell_c in rot.cells:
+                top, left = anchor_r - cell_r, anchor_c - cell_c
+                if top >= 0:
+                    continue  # fully on the board: the ordinary rules own it
+                if left < 0 or left + rot.width > WIDTH or top + rot.height > height:
+                    continue
+                cells = {(top + r, left + c) for r, c in rot.cells}
+                visible = {cell for cell in cells if cell[0] >= 0}
+                if not fragment <= visible:
+                    continue
+                if not all(_bit(unknown_rows, cell) for cell in visible - fragment):
+                    continue
+                completions.add(FallingPiece(rot.piece, rot.index, top, left))
+    return completions
+
+
+def _entering_piece(
+    fragment: set[Cell],
+    stack_rows: tuple[int, ...],
+    unknown_rows: tuple[int, ...],
+) -> tuple[bool, FallingPiece | None]:
+    """``(the fragment is a piece entering from above, its name when unique)``.
+
+    Ambiguity is reported as ``(True, None)``: the frame is coherent — some
+    piece is entering — but two horizontally adjacent cells fit an O, an S,
+    a Z, a J, an L and a T alike, and a guessed name means a guessed hint.
+    Holding beats guessing; the piece names itself one row later.
+    """
+    completions = _clipped_completions(fragment, stack_rows, unknown_rows)
+    if not completions:
+        return False, None
+    if len(completions) == 1:
+        return True, next(iter(completions))
+    return True, None
+
+
 def clear_full_rows(rows: tuple[int, ...]) -> tuple[int, ...]:
     """Remove full rows and prepend that many empty rows.
 
@@ -233,6 +320,12 @@ def _explains(
     piece = _piece_at(residual)
     if piece is not None and piece.row < SPAWN_ROWS:
         return True, piece
+    # The spawn may still be entering from above the board region, showing
+    # only its bottom cells: a clearing lock must not go UNEXPLAINED (and
+    # eventually reset the board) because the next piece is half off-grid.
+    entering, entering_piece = _entering_piece(residual, s2_rows, unknown_rows)
+    if entering:
+        return True, entering_piece
     return False, None
 
 
@@ -257,7 +350,9 @@ def _lock_reveal(
     """
     # L1 (position-anchored): the piece locked exactly where it was last
     # observed and the spawn appeared — even 4-adjacent to it (one blob).
-    if last_falling is not None:
+    # A piece last seen half above the board region (row < 0) is skipped:
+    # its cells are not all board cells, and a piece cannot lock up there.
+    if last_falling is not None and last_falling.row >= 0:
         last_cells = set(last_falling.cells)
         visible_last = {cell for cell in last_cells if not _bit(unknown_rows, cell)}
         if visible_last <= added:
@@ -272,15 +367,23 @@ def _lock_reveal(
     components = _connected_components(added)
     if len(components) != 2:
         return None
-    valid: list[tuple[set[Cell], FallingPiece]] = []
+    valid: list[tuple[set[Cell], FallingPiece | None]] = []
     for lock_cells, spawn_cells in (
         (components[0], components[1]),
         (components[1], components[0]),
     ):
         spawn_piece = _piece_at(spawn_cells)
         if spawn_piece is None:
-            continue
-        if spawn_piece.row >= SPAWN_ROWS:
+            # The spawn revealing the lock may itself be cut by the top edge
+            # of the board region, showing 1-3 cells (this game spawns a
+            # piece the moment the previous one is dropped, and the fragment
+            # SITS there). The lock below is verified exactly as ever; the
+            # entering piece is named only when one tetromino fits it, and
+            # its cells are never merged — only ``lock_cells`` are.
+            entering, spawn_piece = _entering_piece(spawn_cells, stack_rows, unknown_rows)
+            if not entering:
+                continue
+        elif spawn_piece.row >= SPAWN_ROWS:
             continue  # ghost-piece defense: spawns appear in the top rows
         lock_piece = _piece_at(lock_cells)
         if lock_piece is None:
@@ -324,7 +427,9 @@ def _lock_with_clears(
     """
     # C1: the piece locked exactly where it was last observed (covers
     # lock-delay slides, tucks and T-spins whose final position was seen).
-    if last_falling is not None:
+    # Skipped for a piece last seen half above the board region: its cells
+    # are not all board cells (C2 below still drops it from that column).
+    if last_falling is not None and last_falling.row >= 0:
         cells = last_falling.cells
         if all(not stack_rows[r] >> c & 1 for r, c in cells):
             merged = _rows_with(stack_rows, cells)
@@ -407,23 +512,37 @@ def explain_grid(
             # against a column, or touching the bottom row is FALLING.
             return Explanation(FrameKind.FALLING, stack_rows, piece)
 
-    # Step 1b — a piece straddling the edge of an unobservable region shows
-    # 1-3 cells. That is not a broken tetromino, it is a partly hidden one:
-    # a unique completion identifies it (and where it is), several mean the
+    # Step 1b — a piece the capture cannot see WHOLE shows 1-3 cells. That
+    # is not a broken tetromino, it is a partly observed one: hidden under a
+    # UI panel, or cut by the top edge of the board region on its way in. A
+    # unique completion identifies it (and where it is), several mean the
     # frame is coherent but the piece unnameable — OCCLUDED holds state
     # rather than letting a stationary piece trip the reset debounce.
-    if hidden and n_miss == 0 and 1 <= len(added) <= 3:
-        completions = _hidden_completions(added, unknown, len(observed_rows))
-        if len(completions) == 1:
-            piece = _piece_at(next(iter(completions)))
-            if piece is not None:
-                return Explanation(FrameKind.FALLING, stack_rows, piece)
-        if completions:
-            return Explanation(FrameKind.OCCLUDED, stack_rows, None)
+    if n_miss == 0 and 1 <= len(added) <= 3:
+        if hidden:
+            completions = _hidden_completions(added, unknown, len(observed_rows))
+            if len(completions) == 1:
+                piece = _piece_at(next(iter(completions)))
+                if piece is not None:
+                    return Explanation(FrameKind.FALLING, stack_rows, piece)
+            if completions:
+                return Explanation(FrameKind.OCCLUDED, stack_rows, None)
+        # The panel is asked first and answers conclusively, so a fragment
+        # it can explain is explained there and nothing a panel selection
+        # used to do changes. Only what the panel cannot explain — every
+        # fragment in a session with no panel at all — reaches the top edge.
+        entering, piece = _entering_piece(added, stack_rows, unknown)
+        if entering:
+            kind = FrameKind.FALLING if piece is not None else FrameKind.OCCLUDED
+            return Explanation(kind, stack_rows, piece)
 
     # Step 2 — lock revealed by the next spawn, no clears. A reveal whose
-    # locked piece is partly hidden carries fewer than 4 + 4 added cells.
-    if n_miss == 0 and (len(added) == 8 or (hidden and 5 <= len(added) < 8)):
+    # locked piece is partly hidden — or whose SPAWN is still cut by the top
+    # edge — carries fewer than 4 + 4 added cells. (Fully observed, 5-7
+    # added cells reach _lock_reveal and fail it, exactly as before: both
+    # its rules need two whole tetrominoes.)
+    partial = hidden or any(r == 0 for r, _ in added)
+    if n_miss == 0 and (len(added) == 8 or (partial and 5 <= len(added) < 8)):
         locked = _lock_reveal(added, stack_rows, last_falling, unknown)
         if locked is not None:
             return locked
