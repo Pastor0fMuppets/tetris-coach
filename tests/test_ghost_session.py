@@ -44,6 +44,7 @@ actually locks.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -53,6 +54,7 @@ from PIL import Image
 from tetris_coach.app import CoachConfig, CoachEngine, compute_overlap_mask
 from tetris_coach.capture.screen import Rect
 from tetris_coach.solver.search import Move
+from tetris_coach.vision import grid as vision_grid
 from tetris_coach.vision.pieces_vision import FrameKind
 from tetris_coach.vision.state import GameEvent
 
@@ -91,6 +93,41 @@ def frame_numbers() -> list[str]:
     return [p.stem.split("_")[1] for p in sorted(FIXTURES.glob("board_*.png"))]
 
 
+@contextmanager
+def previews_named():  # type: ignore[no-untyped-def]
+    """Record what ``vision.grid`` names a landing preview inside the block.
+
+    Yields a list that fills with ``(cells, pieces in flight)`` for every
+    layer the rule names — read off the rule itself rather than off the
+    occupancy, because "these cells read empty" is the weaker claim: a
+    faint cell lands in the empty class under the ordinary split too.
+    What is pinned here is which cells the rule takes responsibility for
+    deleting, and what it says they are a copy of.
+    """
+    seen: list[tuple[frozenset[tuple[int, int]], frozenset[str]]] = []
+    real = vision_grid._ghost_layer
+
+    def record(scores, unobservable):  # type: ignore[no-untyped-def]
+        layer = real(scores, unobservable)
+        if layer is not None:
+            solid = scores >= vision_grid.MIN_SPREAD
+            for cell in unobservable:
+                solid[cell] = False
+            seen.append(
+                (
+                    frozenset((int(r), int(c)) for r, c in zip(*np.nonzero(layer), strict=True)),
+                    frozenset(vision_grid._pieces_in_flight(solid, unobservable)),
+                )
+            )
+        return layer
+
+    vision_grid._ghost_layer = record  # type: ignore[assignment]
+    try:
+        yield seen
+    finally:
+        vision_grid._ghost_layer = real  # type: ignore[assignment]
+
+
 class Tick:
     """What one replayed frame did."""
 
@@ -105,6 +142,7 @@ class Tick:
         falling: str | None,
         next_piece: str | None,
         hint: Move | None,
+        preview: tuple[frozenset[tuple[int, int]], frozenset[str]] | None,
     ) -> None:
         self.number = number
         self.confidence = confidence
@@ -115,6 +153,7 @@ class Tick:
         self.falling = falling
         self.next_piece = next_piece
         self.hint = hint
+        self.preview = preview  # (cells named a landing preview, pieces in flight)
 
     @property
     def accepted(self) -> bool:
@@ -150,8 +189,9 @@ def replay() -> tuple[Tick, ...]:
         # The classifier is stateful, so this must read the same frame the
         # engine is about to digest — classify() is a pure function of the
         # image plus the memory, and the engine re-runs it identically.
-        _occupancy, confidence = engine.classifier.classify(board)
-        hint = engine.process_frame(board, load(preview.name) if preview.exists() else None)
+        with previews_named() as named:
+            _occupancy, confidence = engine.classifier.classify(board)
+            hint = engine.process_frame(board, load(preview.name) if preview.exists() else None)
         committed = engine.tracker.committed
         ticks.append(
             Tick(
@@ -164,6 +204,7 @@ def replay() -> tuple[Tick, ...]:
                 falling=committed.falling_piece,
                 next_piece=committed.next_piece,
                 hint=hint,
+                preview=named[-1] if named else None,
             )
         )
     return tuple(ticks)
@@ -280,3 +321,28 @@ def test_the_one_refused_frame_is_the_widget_with_the_badge_on_it() -> None:
     rejected = [t for t in replay() if not t.accepted]
     assert [t.number for t in rejected] == ["00150"]
     assert tick("00150").hint is not None  # the held hint is still on screen
+
+
+def test_every_named_preview_is_a_copy_of_the_piece_in_flight() -> None:
+    """The structure that separates a preview from a pale piece, on real pixels.
+
+    ``vision.grid._ghost_layer``'s test 5: a landing preview is a copy of
+    the piece that is falling, so one must be in the air. These six
+    frames are where that is checked against a real game — each names an
+    O, and an O is exactly what is in flight above it (the real piece the
+    player is dragging, at cols 4-5 near the top of the board).
+
+    Without the test the rule deletes any four band-scored cells that
+    form a tetromino resting on support with open air beside and above
+    them, which is an ordinary landing: on
+    ``tests/fixtures/roas_stacker/live2_board_00500`` those cells are a
+    real pale periwinkle T (0.346 against this session's ghost at
+    0.320), and the piece in flight there is a J, which is what refuses
+    it (see tests/test_ghost_layer.py).
+    """
+    named = {t.number: t.preview for t in replay() if t.preview is not None}
+    assert set(named) == set(GHOST_CELLS), "a different set of frames names a preview"
+    for number, (cells, in_flight) in named.items():
+        assert cells == GHOST_CELLS[number], f"{number}: {sorted(cells)}"
+        assert vision_grid._piece_named(sorted(cells)) == "O", f"{number}: layer is not an O"
+        assert in_flight == {"O"}, f"{number}: in flight {sorted(in_flight)}"
