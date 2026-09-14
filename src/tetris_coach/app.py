@@ -28,7 +28,7 @@ from numpy.typing import NDArray
 from .capture.screen import FrameSource, Rect
 from .core.board import DEFAULT_HEIGHT, FULL_ROW, WIDTH, Board
 from .solver.search import Move, best_move
-from .vision.grid import GridClassifier
+from .vision.grid import GridClassifier, OwnPaint
 from .vision.pieces_vision import FallingPiece, identify_next
 from .vision.state import GameEvent, GameStateTracker, Snapshot
 
@@ -210,10 +210,17 @@ class CoachEngine:
         # that estimate on every frame and — via the top-row cap — rejects
         # every frame, so the memory never anchors and the session is
         # deadlocked (the diagnosed ROAS Stacker failure).
+        # The hint color goes in too, because this tool's overlay is ON
+        # SCREEN when the next frame is captured: the coach reads its own
+        # paint back as board content unless the classifier is told what
+        # that paint looks like. It is the configured color, not the
+        # default, or a session run with --hint-color would paint one
+        # thing and look for another.
         self.classifier = GridClassifier(
             rows=self.config.rows,
             min_confidence=self.config.min_confidence,
             unobservable_cells=self._unobservable_cells,
+            own_paint=OwnPaint.for_hint_color(self.config.hint_color),
         )
         self.current_hint: Move | None = None
         self._predicted_board: Board | None = None

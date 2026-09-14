@@ -138,6 +138,40 @@ _IMPOSSIBLE_FRAME_LIMIT = 15
 # background and is never named a ghost.
 _GHOST_SEPARATION = MIN_SPREAD / 2
 
+# Opacity of the fill this tool paints its own placement hint with. THE
+# one definition: overlay.renderer.HintStyle draws with it and
+# :func:`_own_paint_layer` recognizes the result, so the painter and the
+# reader cannot drift apart. It lives here rather than in overlay/
+# because vision/ must stay importable without a display, and overlay/
+# may not (PySide6).
+HINT_FILL_OPACITY = 0.18
+
+# How near a cell's color must sit to the composite the tool's own hint
+# would produce there before that cell is called the tool's own paint
+# rather than the board. Plain Euclidean distance in uint8 units, on the
+# same scale the colors are. Measured over every observable cell of all
+# four committed session windows plus the roas_stacker frames (39040
+# cells, 309 of them under the hint):
+#
+#   the hint fill over the BOARD's own ground   0.470 - 0.565  (272 cells)
+#   the hint fill over a REAL PIECE            58.41 - 240.63  (37 cells)
+#   the nearest cell with no hint on it at all         23.77
+#
+# Three clusters, not two, and the middle one is the point: the same
+# translucent fill over a piece composites to a different color, so a
+# hint drawn on top of real content does not match and those cells are
+# never taken out (live_session 59-62, where the I hard-drops under the
+# hint that was pointing at its landing square, and the badge cells
+# below). What the rule deletes is cells that are EMPTY BOARD WITH OUR
+# PAINT ON THEM, which is the only thing it can safely claim.
+#
+# The nearest non-hint cell is the pale periwinkle piece itself — the one
+# color in these fixtures that must never be deleted (absorbed_piece
+# frame 280 at (0,3), scoring 0.346). 8.0 is 14x above the first cluster
+# and 3x below the third, which leaves room for a rescaled capture's
+# resampling without coming near a real piece color.
+_OWN_PAINT_TOLERANCE = 8.0
+
 # Every tetromino rotation as a normalized (row, col) cell tuple, mapped to
 # the piece it belongs to. No two pieces share a rotation, so a cell set
 # names at most one of them. A ghost is a copy of ONE piece, so an
@@ -149,6 +183,67 @@ _SHAPE_PIECES: dict[tuple[tuple[int, int], ...], str] = {
     for piece, rotations in ROTATIONS.items()
     for rotation in rotations
 }
+
+
+class OwnPaint(NamedTuple):
+    """The color this tool paints its own placement hint with.
+
+    The coach draws its hint ON TOP of the game and then captures the
+    screen again, so its own overlay comes back round as input. That is
+    the one piece of furniture on the board whose exact appearance is
+    known in advance rather than guessed at: a translucent fill of a
+    single configured color, composited over whatever the board shows
+    underneath. :func:`_own_paint_layer` recognizes it from that.
+
+    ``color`` is the hint color in the SAME channel order as the frames
+    the classifier is handed — the capture pipeline produces BGR, which
+    is what :data:`HINT_PAINT` holds. Nothing else in this module depends
+    on channel order; this does, unavoidably, because it is the only rule
+    here that knows a specific color rather than a distance. Handed
+    frames in the other order (or grayscale) the paint simply never
+    matches, and the reading falls back to :func:`_ghost_layer`'s
+    structural rule — a degradation, not a failure.
+
+    ``opacity`` is the alpha the fill is drawn at and ``tolerance`` how
+    far a cell may sit from the resulting composite and still be called
+    paint (see :data:`_OWN_PAINT_TOLERANCE`).
+    """
+
+    color: tuple[float, ...]
+    opacity: float = HINT_FILL_OPACITY
+    tolerance: float = _OWN_PAINT_TOLERANCE
+
+    @classmethod
+    def for_hint_color(
+        cls,
+        color: str,
+        opacity: float = HINT_FILL_OPACITY,
+        tolerance: float = _OWN_PAINT_TOLERANCE,
+    ) -> OwnPaint | None:
+        """A hint color as BGR, or ``None`` when it is not a hex color.
+
+        ``cli.py`` takes ``--hint-color`` as any Qt-parsable color string,
+        which includes names ("cyan") and forms this module has no parser
+        for. Those turn the rule OFF rather than raising: the session
+        still runs, on :func:`_ghost_layer`'s structural rule alone, which
+        is exactly where it stood before this rule existed. Returning
+        ``None`` for a color the painter accepts is the honest answer —
+        guessing at the paint is how a rule that deletes cells goes wrong.
+        """
+        text = color.strip().lstrip("#")
+        if len(text) == 3:
+            text = "".join(ch * 2 for ch in text)
+        if len(text) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in text):
+            return None
+        r, g, b = (float(int(text[i : i + 2], 16)) for i in (0, 2, 4))
+        return cls((b, g, r), opacity, tolerance)
+
+
+# The default hint paint: app.CoachConfig.hint_color at HINT_FILL_OPACITY,
+# in the capture pipeline's BGR order. app.CoachEngine passes its own
+# configured color in; this default keeps a bare classify_grid call
+# recognizing the overlay the tool actually ships with.
+HINT_PAINT = OwnPaint.for_hint_color("#00e5ff")
 
 
 def _cell_colors(
@@ -563,6 +658,7 @@ def classify_grid(
     cols: int = 10,
     background: NDArray[np.float64] | tuple[float, ...] | None = None,
     unobservable_cells: frozenset[tuple[int, int]] | None = None,
+    own_paint: OwnPaint | None = HINT_PAINT,
 ) -> tuple[NDArray[np.bool_], float]:
     """Classify a board-region image into per-cell occupancy.
 
@@ -602,9 +698,11 @@ def classify_grid(
     colors = _cell_colors(image, rows, cols, margin=0.25)
     unobservable = unobservable_cells or frozenset()
     if background is not None:
-        reading = _classify_scored(colors, np.asarray(background, dtype=np.float64), unobservable)
+        reading = _classify_scored(
+            colors, np.asarray(background, dtype=np.float64), unobservable, own_paint
+        )
         return reading.occupancy, reading.confidence
-    reading = _self_estimated(colors, unobservable)
+    reading = _self_estimated(colors, unobservable, own_paint)
     return reading.occupancy, reading.confidence
 
 
@@ -627,12 +725,145 @@ class _Reading(NamedTuple):
 def _self_estimated(
     colors: NDArray[np.float32],
     unobservable: frozenset[tuple[int, int]],
+    own_paint: OwnPaint | None = HINT_PAINT,
 ) -> _Reading:
     """The memoryless path: top-row-median background, plus the top-row cap."""
-    reading = _classify_scored(colors, _top_row_background(colors, unobservable), unobservable)
+    reading = _classify_scored(
+        colors, _top_row_background(colors, unobservable), unobservable, own_paint
+    )
     if reading.confidence > 0.0 and not _top_row_vouchable(reading.occupancy, unobservable):
         return reading._replace(confidence=0.0)
     return reading
+
+
+def _own_paint_layer(
+    colors: NDArray[np.float32],
+    background: NDArray[np.float64],
+    solid: NDArray[np.bool_],
+    unobservable: frozenset[tuple[int, int]],
+    paint: OwnPaint | None,
+) -> NDArray[np.bool_] | None:
+    """The cells carrying the coach's OWN hint overlay, or ``None``.
+
+    This tool paints a placement hint over the game and then captures the
+    screen again, so the hint is in its own next frame. Read as board
+    content it is a tetromino that appears from nowhere, sits exactly
+    where a piece would come to rest, and then TELEPORTS the moment the
+    solver changes its mind — which is a phantom lock, an unexplainable
+    frame, and a re-solve that moves the hint again. That loop is what
+    every committed session window in ``tests/fixtures`` actually
+    contains, and the evidence is in the pixels: on
+    ``ghost_beside_stack`` frame 147 the cell at (11, 0) is 1560 px of
+    ``(206, 248, 253)`` ringed by 442 px of exactly ``(0, 229, 255)`` —
+    ``HintStyle.color`` ``#00e5ff`` for the pen at full opacity, and the
+    same color at :data:`HINT_FILL_OPACITY` over that board's own
+    ``(251, 252, 252)`` for the fill (RGB; the frames arrive BGR).
+    The one-cell round badge the SPEC used to attribute to the game is
+    this module's own rotation badge, drawn by
+    ``overlay.renderer._draw_rotation_badge`` above the hint's top-left
+    cell and carrying the rotation index as its digit.
+
+    Which means this game — ROAS Stacker, the only game any committed
+    fixture holds — draws NO GHOST AT ALL. Measured over all four
+    windows: of the 582 cells that ever land in :func:`_ghost_layer`'s
+    band, 272 are this overlay and the other 310 are the real pale
+    periwinkle T of ``absorbed_piece``; not one is a landing preview.
+    Both halves of what the ghost rule was built from — the intermediate
+    level that flickers, and the badge that floats over it — are the
+    coach's own paint coming back round.
+
+    Being the tool's own paint, it is the one layer on the board that
+    does not have to be guessed at from structure. The fill is a straight
+    alpha composite, so the color it produces over a known background is
+    known too::
+
+        expected = background + opacity * (paint - background)
+
+    and a cell within :data:`_OWN_PAINT_TOLERANCE` of that is the
+    overlay. Measured over every observable cell of all four committed
+    windows plus the roas_stacker frames (39040 cells), that separates
+    three clusters and not two: the fill over the board's own ground at
+    0.470-0.565 (272 cells), the fill over a REAL PIECE at 58.41-240.63
+    (37 cells), and the nearest cell with no hint on it at all at 23.77.
+
+    The middle cluster is what makes the rule safe rather than merely
+    accurate. The same translucent fill over a piece composites to a
+    different color, so a hint drawn ON TOP of real content does not
+    match and those cells are never taken out — ``live_session`` 59-62,
+    where the I hard-drops onto the very square the hint was pointing
+    at, is that case on real pixels. What this rule deletes is only
+    cells that are EMPTY BOARD WITH OUR PAINT ON THEM, which is the only
+    thing the color can honestly claim.
+
+    And the far cluster is the pale periwinkle piece, the exact color
+    :func:`_ghost_layer` spends five structural tests protecting.
+    Nothing here can delete it: it is a different color, 3x outside the
+    tolerance, and this rule looks at nothing else.
+
+    That is also why this rule, unlike :func:`_ghost_layer`'s, needs no
+    score band — and why it must not have one. On the fixtures' near-white
+    ground the fill scores 0.321, inside the band; on a BLACK ground the
+    same composite scores 0.374, above :data:`MIN_SPREAD` entirely, so it
+    reads as an ordinary solid piece and a band-limited rule could not see
+    it at all. Over grey grounds the score runs 0.284-0.374, crossing both
+    edges of the band. The theme decides where the paint lands, which is
+    precisely the thing a rule keyed to the paint itself does not care
+    about.
+
+    Two structural tests remain, and both are about what is around the
+    paint rather than what it is:
+
+    1. It must be exactly one tetromino. That is what the overlay draws.
+       It is the guard for a partial match — a hint the panel mask cuts
+       in half, or one lying half over real content — which refuses the
+       whole widget rather than deleting a fragment. (No committed frame
+       is a partial match: every frame that carries a hint matches either
+       4 cells or 0.)
+    2. Nothing solid may sit directly ABOVE it. The hint marks a hard
+       drop's landing square, and a piece reaches one by falling down
+       its own columns, so every cell above a hint cell is empty by
+       construction — except for one thing, which is this tool's own
+       rotation badge. The badge is paint too, but it is drawn OPAQUE
+       over a single cell and blended with a black digit, so it matches
+       no composite and nothing can name it (measured: 58-64 from the
+       fill composite, and 0.49 on the score scale — a full piece
+       color). Taking the hint out from under it would leave the badge
+       behind as an unexplainable added cell: measured before any of
+       this existed at four UNEXPLAINED frames, a BOARD_RESET, and the
+       badge committed to the stack. Refusing the whole widget instead
+       leaves those frames reading exactly as they always did — below
+       the gate, last hint held. (The badge rides only a non-zero
+       rotation: ``live_session`` 121-135, ``ghost_session`` 150 and
+       ``absorbed_piece`` 298-301 and 360 are the frames that carry one.)
+
+    The real fix for a tool reading its own output is for the capture
+    never to contain the overlay in the first place; that is
+    platform-specific window-exclusion work in ``capture/``, and this is
+    the layer that keeps the reading correct whether or not it lands.
+    """
+    if paint is None:
+        return None
+    channels = int(colors.shape[-1])
+    if len(paint.color) != channels:
+        return None
+    rows, cols = int(colors.shape[0]), int(colors.shape[1])
+    bg = np.asarray(background, dtype=np.float64)
+    expected = bg + paint.opacity * (np.asarray(paint.color, dtype=np.float64) - bg)
+    diff = np.asarray(colors, dtype=np.float64) - expected
+    painted = np.sqrt(np.sum(diff * diff, axis=-1)) <= paint.tolerance
+    for r, c in unobservable:
+        if 0 <= r < rows and 0 <= c < cols:
+            painted[r, c] = False
+    cells = [(int(r), int(c)) for r, c in zip(*np.nonzero(painted), strict=True)]
+    # 1. Exactly one tetromino.
+    if _piece_named(cells) is None:
+        return None
+    # 2. Nothing solid on top of it: the rotation badge rides there, and
+    #    it is paint nothing can name.
+    for r, c in cells:
+        if r > 0 and bool(solid[r - 1, c]) and not bool(painted[r - 1, c]):
+            return None
+    return painted
 
 
 def _ghost_layer(
@@ -832,6 +1063,7 @@ def _classify_scored(
     colors: NDArray[np.float32],
     background: NDArray[np.float64],
     unobservable: frozenset[tuple[int, int]] = frozenset(),
+    own_paint: OwnPaint | None = HINT_PAINT,
 ) -> _Reading:
     """Split per-cell colors into empty/occupied by distance from ``background``."""
     rows, cols = int(colors.shape[0]), int(colors.shape[1])
@@ -873,7 +1105,26 @@ def _classify_scored(
     # layer left in the empty class, rejected at a 0.15 gate, against
     # 0.286 with it named). What the frame may then report is capped: see
     # :data:`_LAYER_CONFIDENCE_CEILING`.
-    ghost = _ghost_layer(scores, unobservable)
+    # Two rules name that layer, asked in order of what they know. The
+    # coach's OWN hint overlay is in its own capture and its color is
+    # known in advance, so _own_paint_layer decides it by measurement;
+    # only when there is no paint to find does _ghost_layer's structural
+    # rule get a turn, for the games that really do draw a landing
+    # preview. They are alternatives rather than a union on purpose: a
+    # frame carrying BOTH our paint and a real ghost has the paint taken
+    # out and the ghost left in, which is a held frame — the direction
+    # every rule here errs in. No committed fixture contains one (see
+    # _own_paint_layer: this game draws no ghost at all), so a
+    # composition would be written against nothing.
+    observable = np.ones((rows, cols), dtype=np.bool_)
+    for cell in unobservable:
+        if 0 <= cell[0] < rows and 0 <= cell[1] < cols:
+            observable[cell] = False
+    ghost = _own_paint_layer(
+        colors, background, (scores >= MIN_SPREAD) & observable, unobservable, own_paint
+    )
+    if ghost is None:
+        ghost = _ghost_layer(scores, unobservable)
     board = np.ones((rows, cols), dtype=np.bool_) if ghost is None else ~ghost
 
     threshold = otsu_threshold(scores[board])
@@ -1004,11 +1255,13 @@ class GridClassifier:
         cols: int = 10,
         min_confidence: float = _DEFAULT_MIN_CONFIDENCE,
         unobservable_cells: frozenset[tuple[int, int]] | None = None,
+        own_paint: OwnPaint | None = HINT_PAINT,
     ) -> None:
         self._rows = rows
         self._cols = cols
         self._min_confidence = min_confidence
         self._unobservable: frozenset[tuple[int, int]] = unobservable_cells or frozenset()
+        self._own_paint = own_paint
         self._background: NDArray[np.float64] | None = None
         self._confirmed = False
         self._corroborated = False
@@ -1033,7 +1286,9 @@ class GridClassifier:
         """Classify one frame; same return contract as :func:`classify_grid`."""
         colors = _cell_colors(image, self._rows, self._cols, margin=0.25)
         if self._background is not None:
-            reading = _classify_scored(colors, self._background, self._unobservable)
+            reading = _classify_scored(
+                colors, self._background, self._unobservable, self._own_paint
+            )
             if reading.confidence >= self._min_confidence:
                 if self._confirmed and not self._corroborated:
                     agrees = self._second_opinion(colors)
@@ -1061,7 +1316,7 @@ class GridClassifier:
 
     def _bootstrap(self, colors: NDArray[np.float32]) -> _Reading:
         """Self-estimated classification: classify_grid's memoryless path."""
-        return _self_estimated(colors, self._unobservable)
+        return _self_estimated(colors, self._unobservable, self._own_paint)
 
     def _remember(self, colors: NDArray[np.float32], reading: _Reading) -> None:
         """Re-measure the background from an accepted frame.

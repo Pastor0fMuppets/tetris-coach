@@ -44,7 +44,6 @@ actually locks.
 from __future__ import annotations
 
 from collections import Counter
-from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -57,6 +56,8 @@ from tetris_coach.solver.search import Move
 from tetris_coach.vision import grid as vision_grid
 from tetris_coach.vision.pieces_vision import FrameKind
 from tetris_coach.vision.state import GameEvent
+
+from .layers import NamedLayer, layers_named, pen_stroked_cells
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ghost_session"
 ROWS = 12
@@ -78,6 +79,14 @@ GHOST_CELLS: dict[str, frozenset[tuple[int, int]]] = {
     },
 }
 
+# The one frame whose widget carries a ROTATION BADGE: the hint is a
+# vertical I down col 9 at rows 8-11 and the badge floats opaque over
+# (7, 9). The badge is this tool's paint too, but it is drawn at full
+# opacity with a black digit through it, so it matches no composite and
+# nothing can name it; the rule refuses the whole widget rather than
+# leave it behind as an added cell nothing explains.
+BADGE_FRAMES = frozenset({"00150"})
+
 # The board as it really stands on the last frame of the window: the O the
 # coach tracked all session locked at cols 0-1, an I across cols 2-5 on the
 # floor, and the next I locked on top of it at cols 0-5.
@@ -91,41 +100,6 @@ def load(name: str) -> np.ndarray:
 
 def frame_numbers() -> list[str]:
     return [p.stem.split("_")[1] for p in sorted(FIXTURES.glob("board_*.png"))]
-
-
-@contextmanager
-def previews_named():  # type: ignore[no-untyped-def]
-    """Record what ``vision.grid`` names a landing preview inside the block.
-
-    Yields a list that fills with ``(cells, pieces in flight)`` for every
-    layer the rule names — read off the rule itself rather than off the
-    occupancy, because "these cells read empty" is the weaker claim: a
-    faint cell lands in the empty class under the ordinary split too.
-    What is pinned here is which cells the rule takes responsibility for
-    deleting, and what it says they are a copy of.
-    """
-    seen: list[tuple[frozenset[tuple[int, int]], frozenset[str]]] = []
-    real = vision_grid._ghost_layer
-
-    def record(scores, unobservable):  # type: ignore[no-untyped-def]
-        layer = real(scores, unobservable)
-        if layer is not None:
-            solid = scores >= vision_grid.MIN_SPREAD
-            for cell in unobservable:
-                solid[cell] = False
-            seen.append(
-                (
-                    frozenset((int(r), int(c)) for r, c in zip(*np.nonzero(layer), strict=True)),
-                    frozenset(vision_grid._pieces_in_flight(solid, unobservable)),
-                )
-            )
-        return layer
-
-    vision_grid._ghost_layer = record  # type: ignore[assignment]
-    try:
-        yield seen
-    finally:
-        vision_grid._ghost_layer = real  # type: ignore[assignment]
 
 
 class Tick:
@@ -142,7 +116,7 @@ class Tick:
         falling: str | None,
         next_piece: str | None,
         hint: Move | None,
-        preview: tuple[frozenset[tuple[int, int]], frozenset[str]] | None,
+        layer: NamedLayer | None,
     ) -> None:
         self.number = number
         self.confidence = confidence
@@ -153,7 +127,7 @@ class Tick:
         self.falling = falling
         self.next_piece = next_piece
         self.hint = hint
-        self.preview = preview  # (cells named a landing preview, pieces in flight)
+        self.layer = layer  # the third level this frame had removed, if any
 
     @property
     def accepted(self) -> bool:
@@ -189,7 +163,7 @@ def replay() -> tuple[Tick, ...]:
         # The classifier is stateful, so this must read the same frame the
         # engine is about to digest — classify() is a pure function of the
         # image plus the memory, and the engine re-runs it identically.
-        with previews_named() as named:
+        with layers_named() as named:
             _occupancy, confidence = engine.classifier.classify(board)
             hint = engine.process_frame(board, load(preview.name) if preview.exists() else None)
         committed = engine.tracker.committed
@@ -204,7 +178,7 @@ def replay() -> tuple[Tick, ...]:
                 falling=committed.falling_piece,
                 next_piece=committed.next_piece,
                 hint=hint,
-                preview=named[-1] if named else None,
+                layer=named[-1] if named else None,
             )
         )
     return tuple(ticks)
@@ -323,26 +297,54 @@ def test_the_one_refused_frame_is_the_widget_with_the_badge_on_it() -> None:
     assert tick("00150").hint is not None  # the held hint is still on screen
 
 
-def test_every_named_preview_is_a_copy_of_the_piece_in_flight() -> None:
-    """The structure that separates a preview from a pale piece, on real pixels.
+def test_the_layer_removed_here_is_the_coach_s_own_hint_overlay() -> None:
+    """What these six frames actually contain, read off the pixels.
 
-    ``vision.grid._ghost_layer``'s test 5: a landing preview is a copy of
-    the piece that is falling, so one must be in the air. These six
-    frames are where that is checked against a real game — each names an
-    O, and an O is exactly what is in flight above it (the real piece the
-    player is dragging, at cols 4-5 near the top of the board).
+    They were diagnosed as the game's landing preview and they are not:
+    they are THIS TOOL's placement hint, drawn over the game by
+    ``overlay.renderer.draw_hint`` and still on screen when the next
+    frame was captured. The proof is the color. Every cell named here
+    holds ``HintStyle.color`` ``#00e5ff`` composited onto the board's own
+    ground at ``HintStyle.fill_opacity``, ringed by the pen at full
+    opacity — which is why ``vision.grid._own_paint_layer`` names them by
+    arithmetic instead of guessing at them from structure, and why the
+    same frames keep reading the same way whatever else is on the board.
 
-    Without the test the rule deletes any four band-scored cells that
-    form a tetromino resting on support with open air beside and above
-    them, which is an ordinary landing: on
-    ``tests/fixtures/roas_stacker/live2_board_00500`` those cells are a
-    real pale periwinkle T (0.346 against this session's ghost at
-    0.320), and the piece in flight there is a J, which is what refuses
-    it (see tests/test_ghost_layer.py).
+    The shape agrees with the old reading because a hint is a placement
+    OF THE FALLING PIECE, so it is a copy of it and lands where the piece
+    would come to rest: an O layer under a falling O. What did not
+    survive is the COLUMN story — frames 61-64 put the layer at cols 2-3
+    while the real O hangs at cols 4-5, because the hint sits where the
+    SOLVER wants the piece, not under where the player is holding it.
     """
-    named = {t.number: t.preview for t in replay() if t.preview is not None}
-    assert set(named) == set(GHOST_CELLS), "a different set of frames names a preview"
-    for number, (cells, in_flight) in named.items():
-        assert cells == GHOST_CELLS[number], f"{number}: {sorted(cells)}"
-        assert vision_grid._piece_named(sorted(cells)) == "O", f"{number}: layer is not an O"
-        assert in_flight == {"O"}, f"{number}: in flight {sorted(in_flight)}"
+    named = {t.number: t.layer for t in replay() if t.layer is not None}
+    assert set(named) == set(GHOST_CELLS), "a different set of frames removes a layer"
+    for number, layer in named.items():
+        assert layer.rule == "own_paint", f"{number}: named by {layer.rule}"
+        assert layer.cells == GHOST_CELLS[number], f"{number}: {sorted(layer.cells)}"
+        assert vision_grid._piece_named(sorted(layer.cells)) == "O", f"{number}: not an O"
+        assert layer.in_flight == {"O"}, f"{number}: in flight {sorted(layer.in_flight)}"
+
+
+def test_every_named_cell_carries_this_tool_s_own_paint() -> None:
+    """The color claim, checked against the raw PNGs rather than the rule.
+
+    ``#00e5ff`` at full opacity is what ``draw_hint`` strokes every hint
+    cell's outline with, so a cell the classifier deletes must have that
+    exact value in it — and no cell it leaves alone may. Read straight
+    off the images so the rule cannot vouch for itself.
+
+    Frame 150 is the documented exception in both directions: the pen
+    stroked five cells there because the widget carries a rotation badge,
+    and the badge is one opaque cell that matches no composite, so the
+    rule refuses the whole widget rather than leave it behind as an
+    unexplainable added cell.
+    """
+    named = {t.number: t.layer.cells for t in replay() if t.layer is not None}
+    for number in frame_numbers():
+        painted = pen_stroked_cells(FIXTURES / f"board_{number}.png", ROWS)
+        if number in BADGE_FRAMES:
+            assert len(painted) == 5, f"{number}: {sorted(painted)} is not a widget + badge"
+            assert number not in named, f"{number}: the badge frame must be refused whole"
+        else:
+            assert painted == named.get(number, frozenset()), f"{number}: {sorted(painted)}"

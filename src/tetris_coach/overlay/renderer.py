@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..solver.search import Move
+from ..vision.grid import HINT_FILL_OPACITY
 
 try:  # pragma: no cover - depends on platform
     from PySide6.QtCore import QRectF
@@ -23,11 +24,19 @@ except ImportError:  # pragma: no cover
 
 @dataclass(frozen=True)
 class HintStyle:
-    """Visual style of the placement hint."""
+    """Visual style of the placement hint.
+
+    What is painted here comes back round: the overlay sits over the game
+    and the next capture contains it, so ``vision.grid`` has to recognize
+    this paint again to keep it out of the board reading (see
+    ``vision.grid._own_paint_layer``). ``fill_opacity`` is therefore
+    imported rather than written twice — the painter and the reader must
+    agree on the composite or the reader names nothing.
+    """
 
     color: str = "#00e5ff"  # any Qt-parsable color string
     outline_width: float = 3.0
-    fill_opacity: float = 0.18  # 0..1 subtle fill inside each cell
+    fill_opacity: float = HINT_FILL_OPACITY  # 0..1 subtle fill inside each cell
     inset: float = 1.5  # pixels each cell rectangle is shrunk on every side
     show_rotation_badge: bool = True
 
