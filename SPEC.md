@@ -247,7 +247,22 @@ vision/
                   # makes an inset skin readable), one band means cells
                   # drawn flush (an even division is then exact), and
                   # anything else contradicts the hypothesis and is refused
-                  # rather than guessed. Each cell is sampled at its CENTER
+                  # rather than guessed. Those bands ARE the cells, so they
+                  # must look like cells: all the same size (within the same
+                  # 25%; measured, they agree exactly on every style and
+                  # every live crop) and separated by gaps smaller than one
+                  # of them (a skin's inset or gridline; measured at most
+                  # 0.67 of a cell, 0.05 live). Both refuse the furniture
+                  # the SOLIDITY filter cannot: a caption drawn as a solid
+                  # BAR rather than as glyph strokes is block-like by every
+                  # test above, and one wide enough to bridge the gap
+                  # between two cells merges them into a band three times
+                  # its neighbours' width, which the median band size read
+                  # as an ordinary cell (measured: a 40x9 bar over a
+                  # horizontal I is a confident J, on 120 of 495 bar
+                  # geometries; 0 of 495 now, and 43 of 143665 over the
+                  # style matrix, all of them a bar that IS the picture of
+                  # a horizontal I). Each cell is sampled at its CENTER
                   # (insets and gridlines sit at the edges), the derived
                   # cell must be square within 25% (measured: exactly 1.000
                   # on every synthetic style and every live crop), an
