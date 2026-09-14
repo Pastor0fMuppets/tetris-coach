@@ -41,19 +41,21 @@ and frame 74, where the piece descends into full view and the ordinary
 shape rule names it independently, agrees: an O.
 
 17 of the 96 frames are still REJECTED by the confidence gate before the
-tracker ever sees them. That is down from 32: this game draws a landing
-preview, and the 15 frames that used to read 0.08 did so because the
-preview's cells sat between the two classes and squeezed the gap the
-confidence is measured from (see ``vision.grid._ghost_layer`` and
-``tests/fixtures/ghost_session``). The 15 that remain are frames 121-135,
-where the preview carries a little round "1" badge one cell above it: the
-badge is furniture too, but it is a single cell at a full piece color, so
-nothing can name it, and the rule refuses the whole widget rather than
-name the preview and leave an unexplainable cell behind. Frames 40-41 are
-the other two — the session opens mid-animation on a solid field. A
-rejected frame holds the last good hint, so this costs resolution rather
-than correctness, and the replay pins it so a vision change that alters
-it is seen.
+tracker ever sees them. That is down from 32: these frames carry a
+translucent third level, and the 15 that used to read 0.08 did so because
+its cells sat between the two classes and squeezed the gap the confidence
+is measured from. That level was diagnosed as a game-drawn landing preview
+and it is not one — it is THIS TOOL'S own placement hint, painted over the
+game and still on screen when the next frame was captured (see
+``vision.grid._own_paint_layer`` and the fixtures' README). The 15 that
+remain are frames 121-135, where the widget carries a little round badge
+one cell above it: the badge is this tool's rotation badge, drawn opaque,
+so no composite matches it and nothing can name it, and the rule refuses
+the whole widget rather than leave an unexplainable cell behind. Frames
+40-41 are the other two — the session opens mid-animation on a solid
+field. A rejected frame holds the last good hint, so this costs resolution
+rather than correctness, and the replay pins it so a vision change that
+alters it is seen.
 """
 
 from __future__ import annotations

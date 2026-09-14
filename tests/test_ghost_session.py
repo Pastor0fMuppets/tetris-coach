@@ -12,21 +12,31 @@ Consecutive is the whole point: the tracker explains every frame as a diff
 against the previous committed one, so only a contiguous run replays what
 the live session actually did.
 
-The defect: this game draws a GHOST — the landing preview under the falling
-piece — and a ghost cell scores between the background and a real piece
-(measured against the remembered background: background 0.00-0.02, ghost
-0.32, solid piece 0.57-0.82). Otsu has two classes to give, so the third
-level went to whichever side the rest of the board pushed it. Measured on
-these frames BEFORE the ghost layer was named:
+The defect: a translucent third level, scoring between the background and a
+real piece (measured against the remembered background: background
+0.00-0.02, layer 0.32, solid piece 0.57-0.82). Otsu has two classes to
+give, so it went to whichever side the rest of the board pushed it.
+
+It was diagnosed as the GHOST — the landing preview under the falling
+piece — and it is not one. Every cell of it carries ``HintStyle.color``
+``#00e5ff``: it is THIS TOOL'S placement hint, drawn over the game and
+still on screen when the next frame was captured, and the "little round
+badge" on frame 150 is ``_draw_rotation_badge``'s. See the fixtures'
+README and ``vision.grid._own_paint_layer``. The frame-by-frame story
+below is unaffected — what changed is which rule names those cells, and
+the numbers are identical either way.
+
+Measured on these frames BEFORE the layer was named at all:
 
     UNEXPLAINED 52 of 95   BOARD_RESET 9   PIECE_LOCKED 1 (a phantom)
     frames with a hint 8   longest run with no hint 85 (00064-00148, ~5.7 s)
 
-Frames 59-60 read the ghost — resting on the floor at cols 0-1 while the
+Frames 59-60 read the layer — resting on the floor at cols 0-1 while the
 real O hung at the top of the board — as occupied, and two identical frames
-is exactly the tracker's debounce, so it committed a LOCK. On frame 61 the
-player dragged, the ghost moved to cols 2-3, and "locked" cells moved, which
-a locked piece cannot do. Four unexplainable frames later the reset debounce
+is exactly the tracker's debounce, so it committed a LOCK. On frame 61 it
+moved to cols 2-3 (the solver changing its mind, not the player dragging),
+and "locked" cells moved, which a locked piece cannot do. Four
+unexplainable frames later the reset debounce
 fired, adopted the observed board, and absorbed the real falling O into the
 stack; from there every frame read QUIET with no falling piece and no hint —
 the user's "on a few pieces it didn't run at all".

@@ -33,3 +33,21 @@ leaves the preview as it is dealt onto the board. Each crop also carries a
 faint grey "NEXT" caption in its top-left corner and a lot of white space —
 the piece is neither centered nor anywhere near filling the box, which is
 what Bug 2 was about.
+
+## The coach's own overlay is in these frames too
+
+Frames 00044-00062 carry this tool's placement hint at row 11, cols 0-3,
+and frames 00121-00135 carry it as a vertical I down col 9 with
+`_draw_rotation_badge`'s badge over (7, 9). It is drawn by
+`overlay/renderer.py:draw_hint` and is on screen when the next capture is
+taken; `vision.grid._own_paint_layer` recognizes it by its color and takes
+it out of the board reading.
+
+Frames 59-62 are the interesting ones and the reason the rule keys on the
+COMPOSITE rather than on the pen: on 59 the I hard-drops onto exactly the
+square the hint had been marking, so from there the fill lies over a real
+piece and composites to something else entirely (measured: 240.63 from the
+over-the-board composite, against 0.47-0.57 for the fill over bare board).
+The rule sees no paint there and the I stays content, which is the whole
+safety property — it deletes cells that are empty board with our paint on
+them, never cells that are a piece with our paint on them.

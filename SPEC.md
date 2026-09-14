@@ -143,16 +143,15 @@ vision/
                   # so on stderr at startup, because that mask is what an
                   # ordinary mis-selection produces: a NEXT queue drawn as a
                   # bar across the top of the playfield.
-                  # THIRD LEVEL: almost every modern Tetris draws a GHOST —
-                  # the landing preview under the falling piece. It is
-                  # translucent, so its cells score BETWEEN the background
-                  # and a real piece, and Otsu has only two classes to give
-                  # them to. Measured on tests/fixtures/ghost_session:
-                  # background 0.00-0.02, ghost 0.32, solid 0.57-0.82, with
-                  # the split landing either side depending on what else is
-                  # on the board. Read as content a ghost is a tetromino
-                  # that TELEPORTS, which the tracker cannot explain: two
-                  # identical ghost frames are exactly its debounce, so it
+                  # THIRD LEVEL: a board can show a translucent layer whose
+                  # cells score BETWEEN the background and a real piece,
+                  # and Otsu has only two classes to give them to.
+                  # Measured on tests/fixtures/ghost_session: background
+                  # 0.00-0.02, layer 0.32, solid 0.57-0.82, with the split
+                  # landing either side depending on what else is on the
+                  # board. Read as content that layer is a tetromino that
+                  # TELEPORTS, which the tracker cannot explain: two
+                  # identical frames of it are exactly its debounce, so it
                   # committed a phantom LOCK, the next drag "moved" locked
                   # cells, and four unexplainable frames later BOARD_RESET
                   # adopted the observed board and swallowed the real
@@ -165,6 +164,84 @@ vision/
                   # and one that shows up on the other committed window
                   # rather than this one (live_session 32 of 96 frames
                   # rejected, ghost_session only 1 of 95).
+                  # WHERE THAT LAYER COMES FROM was diagnosed wrong, and
+                  # the correction is the point of _own_paint_layer. It
+                  # was read as the GHOST almost every modern Tetris
+                  # draws — the landing preview under the falling piece.
+                  # In every committed fixture it is THIS TOOL'S OWN
+                  # HINT: overlay/renderer.draw_hint paints it over the
+                  # game, the window is on screen when mss takes the next
+                  # shot, and the coach reads its own output back as
+                  # board content. The pixels settle it — on
+                  # ghost_beside_stack frame 147 cell (11,0) is 1560 px
+                  # of (206,248,253) ringed by 442 px of exactly
+                  # (0,229,255), i.e. HintStyle.color #00e5ff for the pen
+                  # and the same color at HintStyle.fill_opacity over
+                  # that board's own (251,252,252) for the fill. Measured
+                  # over every observable cell of all four session
+                  # windows plus the roas_stacker frames (39040 cells):
+                  # of the 582 that reach the band below, 272 are this
+                  # overlay and the other 310 are the real pale
+                  # periwinkle T of absorbed_piece. Not one is a
+                  # game-drawn ghost — ROAS Stacker draws none.
+                  # _own_paint_layer therefore names it by ARITHMETIC
+                  # rather than by structure. The fill is a straight
+                  # alpha composite, so its color over a known
+                  # background is known too (background + opacity *
+                  # (paint - background)), and a cell within 8.0 uint8
+                  # units of that is our paint. That separates three
+                  # clusters, not two: the fill over the board's own
+                  # ground at 0.470-0.565, the fill over a REAL PIECE at
+                  # 58.41-240.63, and the nearest cell with no hint on
+                  # it at 23.77 (the periwinkle). The middle cluster is
+                  # what makes it safe to delete anything at all — a
+                  # hint drawn ON TOP of real content composites
+                  # differently and is never taken out (live_session
+                  # 59-62, where the I hard-drops onto the very square
+                  # the hint was marking), so the claim is only ever
+                  # "this cell is empty board with our paint on it".
+                  # Two structural tests remain, both about what is
+                  # around the paint: it must be exactly one tetromino
+                  # (the guard for a partial match — a widget the panel
+                  # mask cuts in half, or one lying half over content —
+                  # which refuses the whole thing rather than deleting a
+                  # fragment), and nothing solid may sit directly ABOVE
+                  # it. The second is not arbitrary: a hint marks a hard
+                  # drop's landing square and a piece reaches one by
+                  # falling down its own columns, so the cells above it
+                  # are empty by construction — except for the ROTATION
+                  # BADGE, which is this tool's paint too but drawn
+                  # opaque with a black digit through it, so it matches
+                  # no composite and nothing can name it. Naming the
+                  # hint under it would leave the badge as an
+                  # unexplainable added cell (measured: four UNEXPLAINED
+                  # frames, a BOARD_RESET, and the badge committed to
+                  # the stack), so the whole widget is refused and those
+                  # frames read as they always did — below the gate,
+                  # last hint held.
+                  # The rule needs no score band and must not have one:
+                  # on the fixtures' near-white ground the fill scores
+                  # 0.321, inside the band, but on a BLACK ground the
+                  # same composite scores 0.374, above MIN_SPREAD
+                  # entirely, and over grey grounds it runs 0.284-0.374.
+                  # The theme decides where the paint lands, which is
+                  # exactly what a rule keyed to the paint itself does
+                  # not care about.
+                  # The real fix is for the capture never to contain the
+                  # overlay: that is platform-specific window-exclusion
+                  # work in capture/, and this layer keeps the reading
+                  # correct whether or not it lands. app.py passes its
+                  # configured hint_color in, so a session run with
+                  # --hint-color looks for what it actually drew; a color
+                  # string this module cannot parse (Qt takes names too)
+                  # turns the rule off rather than guessing.
+                  # _ghost_layer below is now the FALLBACK, for the games
+                  # that really do draw a ghost. The two are alternatives
+                  # rather than a union on purpose: a frame carrying both
+                  # our paint and a real ghost has the paint taken out
+                  # and the ghost left in, which is a held frame — the
+                  # direction every rule here errs in — and no committed
+                  # fixture contains one to write a composition against.
                   # _ghost_layer names that level instead, and it is taken
                   # out of the split entirely, so both the threshold and the
                   # confidence are measured on the separation that decides
@@ -195,6 +272,16 @@ vision/
                   # air (an O over ghost_session's O layer, an I over
                   # live_session's I layer), while the pale periwinkle
                   # that must NOT be deleted sits under a falling J.
+                  # Those 21 frames turned out to hold this tool's own
+                  # hint rather than a game ghost, and the test survives
+                  # the correction for the same reason it worked: a hint
+                  # is a PLACEMENT of the falling piece, so it is a copy
+                  # of a piece in flight exactly as a ghost is. What the
+                  # correction does cost is the evidence — no committed
+                  # fixture holds a game-drawn ghost any more, so this
+                  # rule is now argued from the shape space rather than
+                  # from pixels, and _own_paint_layer is what the real
+                  # sessions are carried by.
                   # Position alone does not carry it: the neighbour test
                   # saves the periwinkle on live2_board_00500 only because
                   # the stack abuts it there, and ONE legal board
@@ -210,12 +297,18 @@ vision/
                   # ghost in a WELL is not, since its sides touch and it is
                   # the same picture as a piece played into the notch.
                   # ANY solid neighbour refuses, not merely a grounded one,
-                  # because this game floats a one-cell round "1" badge
-                  # directly over the preview: the badge is furniture too
-                  # but scores 0.49, so nothing can name it, and naming the
-                  # preview under it left the badge as an unexplainable
-                  # added cell (measured: 4 UNEXPLAINED frames, a
-                  # BOARD_RESET, and the badge committed as a phantom).
+                  # because a one-cell round badge can float directly over
+                  # the layer: the badge is furniture too but scores 0.49,
+                  # so nothing can name it, and naming the layer under it
+                  # left the badge as an unexplainable added cell
+                  # (measured: 4 UNEXPLAINED frames, a BOARD_RESET, and
+                  # the badge committed as a phantom). The badge is not
+                  # the game's — it is overlay/renderer's own rotation
+                  # badge, carrying the rotation index as its digit, and
+                  # _own_paint_layer refuses those widgets for the same
+                  # reason. On a game that really does draw a ghost the
+                  # test costs a ghost with anything beside it, which is
+                  # the trade the rest of this rule is written around.
                   # Unobservable cells are left out of the band, out of the
                   # background cluster, out of the neighbour tests and out
                   # of the pieces counted as in flight (a piece a panel
@@ -270,7 +363,19 @@ vision/
                   # wrong with the ghost session: 1 of its 95 frames is
                   # rejected before and after, the same frame 150 at 0.096
                   # (the badge, refused on purpose). On that window the
-                  # ghost cost hints, not frames.
+                  # layer cost hints, not frames. Those numbers are
+                  # UNCHANGED by _own_paint_layer taking the naming over:
+                  # it names the same cells on the same frames of both
+                  # windows, so the two replays read frame for frame as
+                  # they did. What it adds is the case the structural
+                  # rule could not reach — a hint landing BESIDE the
+                  # stack (tests/fixtures/ghost_beside_stack, where
+                  # UNEXPLAINED goes 22 of 48 -> 4, resets 3 -> 1,
+                  # phantom locks 2 -> 0, frames hinted 18 -> 31, and the
+                  # hint targets for the one I piece 2 -> 1) and the
+                  # phantom lock on absorbed_piece 296-297 (LOCKED 4 -> 2,
+                  # FALLING 53 -> 55, the hint no longer jumping off the
+                  # piece the player is holding).
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the
@@ -535,6 +640,14 @@ capture/
   screen.py       # mss-based capture of a screen rect at native (Retina) scale;
                   # handles logical-vs-pixel coordinate scaling. Protocol/interface
                   # so tests can inject frames from PNG files instead.
+                  # A screen shot of the board region contains whatever is
+                  # ON TOP of it, and this tool's own overlay window is —
+                  # every committed fixture has the coach's hint in it,
+                  # and reading it back as board content is what
+                  # vision.grid._own_paint_layer exists to undo. Excluding
+                  # the overlay's own window from the shot is the real
+                  # fix and is platform-specific work that belongs here;
+                  # until it lands the classifier carries it.
 overlay/
   window.py       # PySide6 frameless, transparent, always-on-top, click-through
                   # window (WA_TransparentForMouseEvents, WindowStaysOnTopHint,
@@ -542,12 +655,26 @@ overlay/
                   # exactly over the board region.
   renderer.py     # Draw target placement: 4 cell outlines + subtle fill; distinct
                   # color (configurable); optional arrow/rotation count badge.
+                  # What is painted here comes back round in the next
+                  # capture, so HintStyle.fill_opacity is IMPORTED from
+                  # vision.grid.HINT_FILL_OPACITY rather than written
+                  # twice: the painter and the classifier that has to
+                  # recognize the composite again cannot be allowed to
+                  # drift. (That direction, overlay -> vision, and not the
+                  # other, because vision/ must stay importable with no
+                  # display and overlay/ needs PySide6.)
 region_select.py  # Full-screen dim + drag-rectangle picker (Qt), returns rect in
                   # logical coords; run twice (board, next box).
 app.py            # Main loop wiring: capture -> vision -> state -> solve -> overlay.
                   # Precompute: while piece A falls, assume it lands on target and
                   # pre-solve piece B; on lock, flip hint instantly; if observed
                   # board != predicted, re-solve from observed.
+                  # The loop is a FEEDBACK loop, not a pipeline: the
+                  # overlay it draws is on screen when the next capture is
+                  # taken. CoachConfig.hint_color therefore goes to the
+                  # classifier as well as to the renderer, so the coach
+                  # looks for the paint it actually drew (see
+                  # vision.grid._own_paint_layer).
                   # compute_overlap_mask: when the next-piece region overlaps
                   # the board region (a preview floated over the top corner),
                   # project next_rect into the board's unit square (board-

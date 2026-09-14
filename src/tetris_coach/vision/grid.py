@@ -31,12 +31,16 @@ and :class:`GridClassifier`'s memory (which only anchors from ACCEPTED
 frames) can never form. The default, an empty set, leaves every
 behavior exactly as it was.
 
-A two-way split is not always the whole story: most modern Tetris draws
-a GHOST (landing preview) under the falling piece, a translucent copy
-whose cells score BETWEEN the background and a real piece. Otsu has to
-put that third level on one side or the other, and which side it lands
-on varies frame to frame. :func:`_ghost_layer` names it instead — see
-that function for the rule, what it costs, and which way it errs.
+A two-way split is not always the whole story. Two things put a
+translucent THIRD level on the board, scoring between the background and
+a real piece, and Otsu has to give it to one side or the other — which
+side varying frame to frame. :func:`_own_paint_layer` names the first:
+this tool's OWN placement hint, which is on screen when the capture is
+taken, so the coach reads its own overlay back as board content. It is
+recognized by its color, which is known in advance. :func:`_ghost_layer`
+names the second: a game-drawn landing preview, which has to be argued
+for from structure. See each for the rule, what it costs, and which way
+it errs.
 
 
 Channel order does not matter (BGR vs RGB): Euclidean distance and the
@@ -976,14 +980,24 @@ def _ghost_layer(
 
     What is deliberately NOT required is the tighter structural story —
     same ROTATION as the falling piece, in the same columns, directly
-    below it. It does not survive contact with the fixtures. This game is
-    drag-to-place, so on frames 59-63 the ghost sits at cols 0-1 while
-    the piece it belongs to is at cols 4-5, and on frame 150 the ghost is
-    a VERTICAL I at col 9 under a HORIZONTAL I at row 0; requiring it
-    would have refused every ghost in the session and fixed nothing. The
-    piece TYPE, which test 5 does require, survives all of it, because a
-    preview is a copy of the piece whatever the game does with the
-    rotation or the column.
+    below it. It does not survive contact with the fixtures, and the
+    reason is now known: what those frames carry is not a ghost but this
+    tool's own hint (see :func:`_own_paint_layer`), which marks where the
+    SOLVER wants the piece rather than where the player is holding it. On
+    ghost_session 61-64 it sits at cols 2-3 while the O it belongs to is
+    at cols 4-5, and on frame 150 it is a VERTICAL I at col 9 under a
+    HORIZONTAL I at row 0. A real ghost would track the piece's columns;
+    a hint does not, and a rule that demanded it would have refused every
+    frame in both committed sessions. The piece TYPE, which test 5 does
+    require, holds for both, because each is a copy of the piece in
+    flight whatever is done with the rotation or the column.
+
+    Since the correction, no committed fixture holds a game-drawn ghost
+    at all, so this rule is the one part of the module argued from the
+    shape space rather than from real pixels. It is kept because the SPEC
+    hard requirement is game-agnosticism and most modern Tetris does draw
+    a preview; it is the FALLBACK, reached only when there is no paint of
+    ours to find.
 
     Cells the capture cannot read are left out of ALL of it — the band,
     the background cluster test 1 measures against, the neighbours tests

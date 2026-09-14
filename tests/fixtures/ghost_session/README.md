@@ -76,3 +76,22 @@ Note for anyone reading these frames by eye: the pale CYAN fill
 fainter preview the classifier never sees at all - they score 0.02,
 because each cell is sampled at its center and the outline is at its
 edge.
+
+## CORRECTION: the "ghost" here is the coach's own overlay
+
+The narrative above holds frame for frame; the attribution does not. The
+translucent layer at rows 10-11 on frames 59-64 is not a landing preview
+drawn by ROAS Stacker — it is this tool's own placement hint, drawn by
+`overlay/renderer.py:draw_hint` and still on screen when the next frame was
+captured. Every one of those cells carries `HintStyle.color` `#00e5ff` at
+full opacity round its edge and the same color at `fill_opacity` 0.18 over
+the board's own ground inside it.
+
+Frame 150's "little round `1` badge" is `_draw_rotation_badge`'s, and the
+digit in it is the rotation index of the hint below it.
+
+This is why the layer "moved" from cols 0-1 to cols 2-3 on frame 61 while
+the real O stayed at cols 4-5: the solver changed its mind, not the game.
+`vision.grid._own_paint_layer` now names these cells by their color;
+`_ghost_layer` remains for games that really do draw a preview. The frames
+this window reads, and the numbers under "After", are unchanged by that.
