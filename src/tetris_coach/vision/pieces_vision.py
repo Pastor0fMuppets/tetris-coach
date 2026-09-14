@@ -278,6 +278,42 @@ def _entering_piece(
     return True, None
 
 
+def strip_entering_piece(
+    rows: tuple[int, ...],
+    unknown_rows: tuple[int, ...],
+) -> tuple[int, ...]:
+    """``rows`` without the visible part of a piece entering from above.
+
+    For the one path that adopts a board with no memory to diff it against
+    (the tracker's resync). Everything on such a frame is taken to be the
+    stack, because there is no evidence for anything else — except the 1-3
+    airborne cells of a piece the top edge has cut in half, which are
+    evidence of a piece that has NOT landed. Committing them plants blocks
+    no lock ever put there, in the row that costs the solver most: a
+    column whose top cell is filled is one nothing can be dropped into.
+
+    Conservative by construction. The cells must form a single component
+    that reaches row 0, and that component must satisfy the entering-piece
+    rule against the rest of the board (:func:`_clipped_completions`):
+    1-3 cells, airborne, completed by some tetromino above the board.
+    Anything else — a column stacked to the top, two fragments at once, a
+    blob no piece could be — is left exactly as observed.
+    """
+    cells = _cells_from_rows(rows)
+    if not any(r == 0 for r, _ in cells):
+        return rows
+    touching = [comp for comp in _connected_components(cells) if any(r == 0 for r, _ in comp)]
+    if len(touching) != 1:
+        return rows
+    fragment = touching[0]
+    rest = tuple(
+        row & ~sum(1 << c for r, c in fragment if r == index) for index, row in enumerate(rows)
+    )
+    if not _clipped_completions(fragment, rest, unknown_rows):
+        return rows
+    return rest
+
+
 def clear_full_rows(rows: tuple[int, ...]) -> tuple[int, ...]:
     """Remove full rows and prepend that many empty rows.
 

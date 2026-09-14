@@ -32,6 +32,11 @@ Events:
   the settled board is explained as a lock); a one-frame glitch never
   does (the counter resets on the next coherent frame).
 
+A resync adopts the observed board as the stack, minus the visible part
+of a piece the board region's top edge has cut in half: that fragment is
+evidence of a piece still in flight, and freezing it into the stack is
+the corruption that made every hint after the first one wrong.
+
 ``unobservable_cells`` names board cells the capture can never read (a
 game UI panel floating over the playfield). The observed value there is
 meaningless and is discarded; what the committed stack holds for those
@@ -51,7 +56,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..core.board import DEFAULT_HEIGHT, WIDTH
-from .pieces_vision import FallingPiece, FrameKind, explain_grid
+from .pieces_vision import FallingPiece, FrameKind, explain_grid, strip_entering_piece
 
 
 class GameEvent(Enum):
@@ -177,7 +182,14 @@ class GameStateTracker:
                 # anything else. (Seeding them filled instead would be a
                 # different lie, and a permanent one — a board whose top
                 # rows are filled has columns nothing can be dropped into.)
-                self._committed = Snapshot(rows, None, next_piece)
+                # A piece the top edge has cut in half is the one thing on
+                # the frame that is demonstrably not settled, and a resync
+                # is exactly when one is likely to be sitting there (an
+                # attach mid-game, in a game that parks spawns at the top
+                # edge). It is left out rather than frozen into the stack.
+                self._committed = Snapshot(
+                    strip_entering_piece(rows, self.unknown_rows), None, next_piece
+                )
                 self._pending = None
                 self._pending_kind = None
                 self._pending_count = 0

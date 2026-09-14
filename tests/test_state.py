@@ -486,3 +486,58 @@ class TestUnobservableCells:
         board = rows_of(bottom_lines("#.#.#.#.#.", "##.##.##.#", height=12), height=12)
         feed(tracker, merge(board, list(self.CORNER)), None, times=4)
         assert tracker.committed.stack_rows == board
+
+
+class TestResyncAndTheTopEdge:
+    """A resync must not freeze a piece that is still entering the field.
+
+    A mid-game attach adopts the observed board wholesale — there is no
+    memory to diff it against. In a game that parks a spawned piece at the
+    top edge of the board region (drag to move, drag to drop), that board
+    very often carries 1-3 cells of a piece hanging half above the
+    capture, and freezing them into the stack plants blocks no lock ever
+    put there, in the row the solver can least afford: a column whose top
+    cell is filled is one nothing can be dropped into.
+    """
+
+    STACK = rows_of(bottom_lines("#.########", "##.#######", "#########."))
+
+    def test_a_resync_leaves_out_a_piece_entering_from_above(self) -> None:
+        tracker = GameStateTracker()
+        entering = merge(self.STACK, [(0, 4), (0, 5)])
+        for _ in range(3):
+            assert feed(tracker, entering, "T") == []
+        assert feed(tracker, entering, "T") == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == self.STACK
+
+    def test_the_entering_piece_is_then_tracked_normally(self) -> None:
+        # And the proof it was the right call: the very same piece descends
+        # into full view and is named against the stack it was left out of.
+        tracker = GameStateTracker()
+        feed(tracker, merge(self.STACK, [(0, 4), (0, 5)]), "T", times=4)
+        descended = merge(self.STACK, piece_cells("O", 0, 2, 4))
+        assert feed(tracker, descended, "T", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "O"
+        assert tracker.committed.stack_rows == self.STACK
+
+    def test_a_resync_keeps_a_column_stacked_to_the_top(self) -> None:
+        # The counter-case: cells at row 0 that REST on the stack are board
+        # content (side columns stacked to the top, garbage pushed up).
+        # Stripping those would delete a real, and very load-bearing, block.
+        topped_out = merge(self.STACK, [(r, 4) for r in range(17)])
+        tracker = GameStateTracker()
+        for _ in range(3):
+            assert feed(tracker, topped_out, None) == []
+        assert feed(tracker, topped_out, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == topped_out
+
+    def test_a_resync_still_absorbs_a_fully_visible_piece(self) -> None:
+        # Unchanged: a piece wholly inside the board region is absorbed by
+        # the resync exactly as before (there is no evidence, in a single
+        # board with no memory, that it is in flight rather than settled).
+        tracker = GameStateTracker()
+        in_flight = merge(self.STACK, piece_cells("O", 0, 0, 4))
+        for _ in range(3):
+            assert feed(tracker, in_flight, None) == []
+        assert feed(tracker, in_flight, None) == [GameEvent.BOARD_RESET]
+        assert tracker.committed.stack_rows == in_flight
