@@ -632,10 +632,14 @@ class TestGridClassifier:
             np.testing.assert_array_equal(occupancy, grid)
             assert confidence >= self.GATE
 
-    def test_bootstrap_keeps_the_strict_cap(self) -> None:
-        # With no memory the classifier is exactly classify_grid: a
-        # row-0-contaminated first frame is never vouched for, and a
-        # rejected frame must not anchor anything.
+    def test_bootstrap_keeps_the_top_row_cap(self) -> None:
+        # With no memory the classifier is exactly classify_grid: a first
+        # frame whose top row is GROUNDED in the stack (six of its ten
+        # cells occupied, every one of those columns running unbroken to
+        # the floor) is never vouched for, and a rejected frame must not
+        # anchor anything. Only that configuration caps — a piece merely
+        # spawning in row 0 is read and accepted, which is the whole point
+        # of the relaxation (see test_spawn_in_top_row_recovered).
         classifier = GridClassifier()
         image = render_board(side_stack_grid(), STYLES[1], cell_size=20)
         _, confidence = classifier.classify(image)
