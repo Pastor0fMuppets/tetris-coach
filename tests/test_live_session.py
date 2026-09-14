@@ -40,11 +40,20 @@ edge that nothing else can name. It is named on frame 61 instead of 74,
 and frame 74, where the piece descends into full view and the ordinary
 shape rule names it independently, agrees: an O.
 
-32 of the 96 frames are still REJECTED by the confidence gate before the
-tracker ever sees them (this game's light theme reads at 0.08 while a
-piece is the only thing on the board). That is a separate defect; it costs
-resolution, not correctness — a rejected frame holds the last good hint —
-and this replay pins it as-is so a vision change that alters it is seen.
+17 of the 96 frames are still REJECTED by the confidence gate before the
+tracker ever sees them. That is down from 32: this game draws a landing
+preview, and the 15 frames that used to read 0.08 did so because the
+preview's cells sat between the two classes and squeezed the gap the
+confidence is measured from (see ``vision.grid._ghost_layer`` and
+``tests/fixtures/ghost_session``). The 15 that remain are frames 121-135,
+where the preview carries a little round "1" badge one cell above it: the
+badge is furniture too, but it is a single cell at a full piece color, so
+nothing can name it, and the rule refuses the whole widget rather than
+name the preview and leave an unexplainable cell behind. Frames 40-41 are
+the other two — the session opens mid-animation on a solid field. A
+rejected frame holds the last good hint, so this costs resolution rather
+than correctness, and the replay pins it so a vision change that alters
+it is seen.
 """
 
 from __future__ import annotations
@@ -194,7 +203,8 @@ def test_frame_59_is_a_lock_plus_a_piece_entering_from_above() -> None:
     # The exact frame that used to kill the session: the I hard-drops to
     # the floor and the next piece appears with two cells on the grid.
     before = tick("00058")
-    assert not before.accepted  # the descent frames are below the gate
+    assert before.accepted  # readable since the preview stopped blurring the split
+    assert before.kind is FrameKind.FALLING
     assert tick("00059").kind is FrameKind.LOCKED
     assert tick("00059").accepted
     # Debounced: the lock commits on its second consecutive frame, and the
@@ -247,7 +257,7 @@ def test_the_preview_is_read_on_every_frame_of_the_window() -> None:
     # session and no hint was ever 2-ply. Every committed frame now
     # carries the upcoming piece.
     accepted = [t for t in replay() if t.accepted]
-    assert len(accepted) == 64
+    assert len(accepted) == 79
     # The first accepted frame is still the bootstrap snapshot (nothing has
     # been committed yet); every commit from there on carries the preview.
     assert accepted[0].next_piece is None
@@ -263,8 +273,9 @@ def test_the_preview_corner_is_never_read_as_board_content() -> None:
 
 
 def test_the_confidence_gate_still_rejects_the_same_frames() -> None:
-    # Pinned so a vision change shows up here: 32 frames never reach the
+    # Pinned so a vision change shows up here: 17 frames never reach the
     # tracker at all. Every one of them keeps the last good hint on screen.
     rejected = [t for t in replay() if not t.accepted]
-    assert len(rejected) == 32
+    expected = ["00040", "00041", *(f"00{n}" for n in range(121, 136))]
+    assert [t.number for t in rejected] == expected
     assert all(t.kind is not FrameKind.UNEXPLAINED for t in rejected)

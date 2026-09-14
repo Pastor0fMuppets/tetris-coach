@@ -24,11 +24,20 @@ when a stack legally reaches the visible top row (see
 because a game UI panel floats over them (ROAS Stacker's NEXT preview
 sits on the board's top corner; ``app.compute_overlap_mask`` computes
 the set). Their pixels are the panel's, not the board's, so they are
-excluded from the top-row background sample and from the top-row cap —
-otherwise a permanently covered top-row cell is a permanently "occupied"
-top row, the cap fires on every frame, and :class:`GridClassifier`'s
-memory (which only anchors from ACCEPTED frames) can never form. The
-default, an empty set, leaves every behavior exactly as it was.
+excluded from the top-row background sample, from the top-row cap and
+from the ghost layer below — otherwise a permanently covered top-row
+cell is a permanently "occupied" top row, the cap fires on every frame,
+and :class:`GridClassifier`'s memory (which only anchors from ACCEPTED
+frames) can never form. The default, an empty set, leaves every
+behavior exactly as it was.
+
+A two-way split is not always the whole story: most modern Tetris draws
+a GHOST (landing preview) under the falling piece, a translucent copy
+whose cells score BETWEEN the background and a real piece. Otsu has to
+put that third level on one side or the other, and which side it lands
+on varies frame to frame. :func:`_ghost_layer` names it instead — see
+that function for the rule, what it costs, and which way it errs.
+
 
 Channel order does not matter (BGR vs RGB): Euclidean distance and the
 per-channel median are permutation-equivariant in the channel axis.
@@ -37,10 +46,13 @@ A 2-D grayscale image is simply the single-channel (C=1) case.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 from numpy.typing import NDArray
 
 from ..core.board import DEFAULT_HEIGHT
+from ..core.pieces import ROTATIONS
 
 # Uniformity floor on the sqrt-compressed distance-score scale: below this
 # spread there are no two classes for Otsu to separate (see classify_grid).
@@ -88,6 +100,26 @@ _PIECE_CELLS = 4
 # any clear animation, and it costs a wedged session that long only when
 # no frame in it can be read from scratch at all.
 _IMPOSSIBLE_FRAME_LIMIT = 15
+
+# How far clear of the background cluster an intermediate score level must
+# stand before it is believed to be a rendering LAYER of its own rather
+# than the background's own noise. Half the floor, because the layer being
+# looked for is by definition NOT a different color from the background
+# (that is what scoring below :data:`MIN_SPREAD` means) while the
+# background's own spread is an order of magnitude smaller: measured on
+# the ghost session, the background cluster spans 0.00-0.02 and the ghost
+# sits at 0.32, a clearance of 0.30 and 0.21 on the two frames where the
+# panel's own cells raise the background class. Doubles as the band's
+# lower edge, so a cell nearer the background than this is simply
+# background and is never named a ghost.
+_GHOST_SEPARATION = MIN_SPREAD / 2
+
+# Every tetromino rotation as a normalized (row, col) cell tuple. A ghost
+# is a copy of ONE piece, so an intermediate layer that is not the shape
+# of a piece is not a ghost (see :func:`_ghost_layer`).
+_TETROMINO_SHAPES: frozenset[tuple[tuple[int, int], ...]] = frozenset(
+    tuple(sorted(rotation.cells)) for rotations in ROTATIONS.values() for rotation in rotations
+)
 
 
 def _cell_colors(
@@ -504,26 +536,202 @@ def classify_grid(
     whose preview also covers two top-row cells permanently unreadable.
     """
     colors = _cell_colors(image, rows, cols, margin=0.25)
+    unobservable = unobservable_cells or frozenset()
     if background is not None:
-        return _classify_scored(colors, np.asarray(background, dtype=np.float64))
-    return _self_estimated(colors, unobservable_cells or frozenset())
+        reading = _classify_scored(colors, np.asarray(background, dtype=np.float64), unobservable)
+        return reading.occupancy, reading.confidence
+    reading = _self_estimated(colors, unobservable)
+    return reading.occupancy, reading.confidence
+
+
+class _Reading(NamedTuple):
+    """One frame's classification, plus the layer that is not board content.
+
+    ``ghost`` is the (rows, cols) mask of cells :func:`_ghost_layer` named
+    as a landing preview, or ``None`` when the frame had no third level.
+    Those cells are already EMPTY in ``occupancy``; the mask is carried
+    separately because they are not evidence about the BACKGROUND either
+    — :class:`GridClassifier` re-measures its memory from the empty class
+    and must not average a translucent overlay into it.
+    """
+
+    occupancy: NDArray[np.bool_]
+    confidence: float
+    ghost: NDArray[np.bool_] | None
 
 
 def _self_estimated(
     colors: NDArray[np.float32],
     unobservable: frozenset[tuple[int, int]],
-) -> tuple[NDArray[np.bool_], float]:
+) -> _Reading:
     """The memoryless path: top-row-median background, plus the top-row cap."""
-    occupancy, confidence = _classify_scored(colors, _top_row_background(colors, unobservable))
-    if confidence > 0.0 and not _top_row_vouchable(occupancy, unobservable):
-        confidence = 0.0
-    return occupancy, confidence
+    reading = _classify_scored(colors, _top_row_background(colors, unobservable), unobservable)
+    if reading.confidence > 0.0 and not _top_row_vouchable(reading.occupancy, unobservable):
+        return reading._replace(confidence=0.0)
+    return reading
+
+
+def _ghost_layer(
+    scores: NDArray[np.float32],
+    unobservable: frozenset[tuple[int, int]],
+) -> NDArray[np.bool_] | None:
+    """The cells of a landing preview, or ``None`` when there is no such layer.
+
+    Almost every modern Tetris draws a GHOST under the falling piece: a
+    translucent copy of it, resting where a hard drop would put it. Being
+    translucent, its cells are a blend of a piece color and the board's
+    background, so they score BETWEEN the two — a third level in a
+    measure built to carry two. Otsu must put that level on one side or
+    the other, and on the session this was diagnosed from
+    (``tests/fixtures/ghost_session``: background 0.00-0.02, ghost 0.32,
+    solid piece 0.57-0.82) it lands on either side depending on what else
+    is on the board. Read as content the ghost is a tetromino that
+    teleports between frames, which is a phantom lock, then four
+    unexplainable frames, then a BOARD_RESET that swallows the real
+    falling piece; read as background it is merely invisible. It is not
+    board content either way: nothing is there.
+
+    A cell is a CANDIDATE for the layer when it scores in the band
+    ``[_GHOST_SEPARATION, MIN_SPREAD)``: clear of the background, yet
+    nearer to it than the module's own floor for "a different color".
+
+    The band is only ever a candidate, never the answer, and the reason
+    is measured rather than theoretical. This same game has a real piece
+    color INSIDE the band — a pale periwinkle scoring 0.346 against its
+    near-white ground, four thousandths under the floor, against the
+    ghost's 0.320 (``tests/fixtures/roas_stacker``: the piece is on the
+    stack at rows 10-11 of ``live2_board_00500`` and ``00600`` a hundred
+    ticks apart, and is caught in mid-air, unambiguously a real falling
+    piece, at rows 0-2 of ``00800`` and rows 1-2 of ``live_board_800``).
+    No threshold on this scale separates 0.320 from 0.346, so nothing
+    about a cell's score can decide this; only where the cells SIT can.
+
+    And it must be decided the careful way round, because the costs are
+    not symmetric: a ghost left in reads as a tetromino that teleports,
+    which costs held frames, while real content read as a ghost DELETES
+    STACK and hands the solver a board with room in it that does not
+    exist. So the candidate is dropped unless the whole structure of a
+    landing preview is there, and every one of these tests errs toward
+    leaving the cells alone:
+
+    1. It must stand clear of the background cluster by at least
+       :data:`_GHOST_SEPARATION`. A level that blends into the background
+       is the background, and inventing a layer inside it would widen the
+       reported confidence of every ordinary frame.
+    2. It must be exactly one tetromino: ``_PIECE_CELLS`` cells whose
+       normalized shape is a real rotation (which also makes it
+       4-connected — every tetromino is). A preview is a copy of ONE
+       piece; a half-dozen scattered faint cells are something else and
+       are left as content.
+    3. It must REST — a landing preview is by definition where the piece
+       comes to rest, so at least one of its cells must have the floor,
+       or a cell at a real piece color, directly beneath it. A layer
+       floating in mid-air is not a landing preview.
+    4. Nothing may sit BESIDE or ON TOP of it: no cell of the layer may
+       touch a solid cell to its left, to its right, or above. This is
+       the test that keeps real content, and it is the one the band
+       cannot do. A preview marks space the falling piece can still drop
+       into, so it is the topmost thing in its own cells, with open air
+       either side; a piece the stack has grown AROUND, or that carries
+       anything on its shoulders, got there by being played. On the pale
+       periwinkle above it fires on both frames: at ``00500`` the stack
+       continues straight into the piece's left edge along the floor, and
+       at ``00600`` there is stack directly over two of its cells.
+       Support from BELOW is the one direction that stays legal — that is
+       what test 3 requires — so a ghost resting on a flat stack surface
+       is still named. A ghost resting inside a WELL is not: its sides
+       touch, and the rule declines rather than guesses.
+       Any solid neighbour refuses, not merely a grounded one, and the
+       reason is a second piece of furniture this game draws: a little
+       round "1" badge that floats directly over the preview (live
+       session frames 121-135, ghost session frame 150). The badge is
+       not board content either, but it is one cell and scores 0.49 —
+       solidly a piece color — so nothing here can name it, and naming
+       the preview under it leaves the badge behind as an unexplainable
+       added cell. Measured: it costs four UNEXPLAINED frames, a
+       BOARD_RESET, and the badge committed to the stack as a phantom
+       floating cell. Refusing the whole widget instead leaves those
+       frames reading exactly as they did before this rule existed —
+       below the gate, hint held — which is the outcome to prefer.
+    5. There must be a solid class at all (some cell at or above
+       :data:`MIN_SPREAD`). With nothing but background and the band, the
+       frame is uniform-near and already reads empty.
+
+    What is deliberately NOT required is the tighter structural story —
+    same shape as the falling piece, in the same columns, directly below
+    it. It does not survive contact with the fixtures. This game is
+    drag-to-place, so on frames 59-63 the ghost sits at cols 0-1 while
+    the piece it belongs to is at cols 4-5, and on frame 150 the ghost is
+    a VERTICAL I at col 9 under a HORIZONTAL I at row 0; requiring it
+    would have refused every ghost in the session and fixed nothing. The
+    piece TYPE alone is no better: the pale periwinkle that must be
+    refused is a T under a falling T (``live2_board_00500``), so the test
+    would have waved through the one case that deletes a stack.
+
+    Cells the capture cannot read are left out of ALL of it — the band,
+    the background cluster test 1 measures against, and the neighbours
+    tests 3 and 4 look at. Their pixels are a UI panel's, and a panel is
+    neither board content nor the board's background: measured on the
+    live session, the covered cell (0, 8) scores 0.15 against a
+    background cluster that otherwise tops out at 0.02, which is enough
+    on its own to put a real ghost 0.005 inside test 1's margin and
+    refuse every frame of the session.
+
+    Two residual errors are accepted, and they are opposite corners:
+
+    - A ghost drawn opaque enough to leave the band, or resting in a
+      well, stays CONTENT. The frame then reads as it does today: a
+      tetromino that cannot be explained, so the tracker holds and the
+      last hint stays on screen. This is the direction the module
+      prefers and the common one.
+    - A real piece whose color is in the band, freshly locked on a FLAT
+      stack surface with open air beside and above it, alone in the band
+      and shaped like a tetromino, is deleted. It needs a palette with a
+      piece within ~54 uint8 units of the background — a pale-on-pale
+      skin, which the periwinkle above shows is not hypothetical — and
+      it survives only until the next piece lands beside it, which puts
+      a grounded neighbour against it and ends the coincidence. Test 4
+      is what makes this narrow rather than routine.
+    """
+    rows, cols = int(scores.shape[0]), int(scores.shape[1])
+    observable = np.ones((rows, cols), dtype=np.bool_)
+    for r, c in unobservable:
+        if 0 <= r < rows and 0 <= c < cols:
+            observable[r, c] = False
+    band = (scores >= _GHOST_SEPARATION) & (scores < MIN_SPREAD) & observable
+    if int(band.sum()) != _PIECE_CELLS:
+        return None
+    solid = (scores >= MIN_SPREAD) & observable
+    if not bool(solid.any()):
+        return None
+    cells = [(int(r), int(c)) for r, c in zip(*np.nonzero(band), strict=True)]
+    # 1. Clear of the background cluster.
+    layer_min = float(scores[band].min())
+    below = scores[(scores < layer_min) & observable]
+    if below.size == 0 or layer_min - float(below.max()) < _GHOST_SEPARATION:
+        return None
+    # 2. Exactly one tetromino.
+    min_r = min(r for r, _ in cells)
+    min_c = min(c for _, c in cells)
+    if tuple(sorted((r - min_r, c - min_c) for r, c in cells)) not in _TETROMINO_SHAPES:
+        return None
+    # 3. Resting on the floor or on something at a real piece color.
+    if not any(r + 1 >= rows or bool(solid[r + 1, c]) for r, c in cells):
+        return None
+    # 4. Open air beside it and above it: the stack may hold it up, but
+    #    it may not have grown around it.
+    for r, c in cells:
+        for nr, nc in ((r - 1, c), (r, c - 1), (r, c + 1)):
+            if 0 <= nr < rows and 0 <= nc < cols and bool(solid[nr, nc]):
+                return None
+    return band
 
 
 def _classify_scored(
     colors: NDArray[np.float32],
     background: NDArray[np.float64],
-) -> tuple[NDArray[np.bool_], float]:
+    unobservable: frozenset[tuple[int, int]] = frozenset(),
+) -> _Reading:
     """Split per-cell colors into empty/occupied by distance from ``background``."""
     rows, cols = int(colors.shape[0]), int(colors.shape[1])
     scores = _distance_scores(colors, background)
@@ -543,7 +751,7 @@ def _classify_scored(
         # anything; under a REMEMBERED background only a solid frame at
         # the board's own background color lands here, and a bright
         # overlay on a dark theme falls to uniform-far below.
-        return np.zeros((rows, cols), dtype=np.bool_), _UNIFORM_EMPTY_CONFIDENCE
+        return _Reading(np.zeros((rows, cols), dtype=np.bool_), _UNIFORM_EMPTY_CONFIDENCE, None)
     if hi - lo < MIN_SPREAD:
         # Uniform-far: every cell is far from the background estimate yet
         # mutually similar — the estimator is inconsistent with the field
@@ -552,11 +760,22 @@ def _classify_scored(
         # remembered background). Truly unreadable: described as
         # all-occupied at zero confidence so the caller's gate rejects it;
         # it is never classified as empty.
-        return np.ones((rows, cols), dtype=np.bool_), 0.0
+        return _Reading(np.ones((rows, cols), dtype=np.bool_), 0.0, None)
 
-    threshold = otsu_threshold(scores)
-    occupancy = scores > threshold
-    empty_scores = scores[~occupancy]
+    # A landing preview is a third level between the two classes; name it
+    # and take it out of the split entirely, so the threshold and the
+    # confidence below are both measured on the separation that decides
+    # occupancy — background versus a real piece color. Left in, it drags
+    # whichever class Otsu attaches it to toward the other one, which is
+    # how a cleanly readable frame ends up reported as ambiguous (measured
+    # on the ghost session's frame 150: 0.10, rejected at a 0.15 gate,
+    # against 0.35 with the layer named).
+    ghost = _ghost_layer(scores, unobservable)
+    board = np.ones((rows, cols), dtype=np.bool_) if ghost is None else ~ghost
+
+    threshold = otsu_threshold(scores[board])
+    occupancy = (scores > threshold) & board
+    empty_scores = scores[board & ~occupancy]
     if empty_scores.size and float(empty_scores.max()) >= MIN_SPREAD:
         # Otsu split piece-vs-piece: on a nearly full board, a palette
         # with a near-background piece color (paper-white's lavender) can
@@ -567,16 +786,18 @@ def _classify_scored(
         # re-anchor the split at the floor; the class-gap confidence
         # below still rejects frames with no real gap around it (smooth
         # gradients and other continuums).
-        occupancy = scores > MIN_SPREAD
-        empty_scores = scores[~occupancy]
+        occupancy = (scores > MIN_SPREAD) & board
+        empty_scores = scores[board & ~occupancy]
     occupied_scores = scores[occupancy]
     if occupied_scores.size == 0 or empty_scores.size == 0:
-        return occupancy, 0.0
+        return _Reading(occupancy, 0.0, ghost)
     # Fraction of the observed score range separating the two classes:
     # 1.0 when the split is wide open, near 0 when samples nearly touch.
+    # The range stays the FULL one: a ghost lies strictly inside it, so
+    # dropping the layer changes the gap, never the scale it is read on.
     gap = float(occupied_scores.min() - empty_scores.max())
     confidence = float(np.clip(gap / (hi - lo), 0.0, 1.0))
-    return occupancy, confidence
+    return _Reading(occupancy, confidence, ghost)
 
 
 # Acceptance bar for GridClassifier's memory updates. Mirrors the default
@@ -704,8 +925,8 @@ class GridClassifier:
         """Classify one frame; same return contract as :func:`classify_grid`."""
         colors = _cell_colors(image, self._rows, self._cols, margin=0.25)
         if self._background is not None:
-            occupancy, confidence = _classify_scored(colors, self._background)
-            if confidence >= self._min_confidence:
+            reading = _classify_scored(colors, self._background, self._unobservable)
+            if reading.confidence >= self._min_confidence:
                 if self._confirmed and not self._corroborated:
                     agrees = self._second_opinion(colors)
                     if agrees is False:
@@ -713,33 +934,37 @@ class GridClassifier:
                         # frame that disagree about the background cannot
                         # both be the board: believe neither.
                         self._forget()
-                        return occupancy, 0.0
+                        return reading.occupancy, 0.0
                     self._corroborated = agrees is True
-                if _claims_a_completed_row(occupancy, self._unobservable):
+                if _claims_a_completed_row(reading.occupancy, self._unobservable):
                     # The anchor is describing a board that cannot exist.
-                    return occupancy, self._impossible_frame(colors)
-                self._remember(colors, occupancy)
-                return occupancy, confidence
+                    return reading.occupancy, self._impossible_frame(colors)
+                self._remember(colors, reading)
+                return reading.occupancy, reading.confidence
             if self._confirmed:
-                return occupancy, confidence
+                return reading.occupancy, reading.confidence
             # Provisional memory failed on this frame: fall through and
             # re-bootstrap, so a wrong provisional anchor cannot wedge
             # the session before play has even been observed.
-        occupancy, confidence = self._bootstrap(colors)
-        if confidence >= self._min_confidence:
-            self._remember(colors, occupancy)
-        return occupancy, confidence
+        reading = self._bootstrap(colors)
+        if reading.confidence >= self._min_confidence:
+            self._remember(colors, reading)
+        return reading.occupancy, reading.confidence
 
-    def _bootstrap(self, colors: NDArray[np.float32]) -> tuple[NDArray[np.bool_], float]:
+    def _bootstrap(self, colors: NDArray[np.float32]) -> _Reading:
         """Self-estimated classification: classify_grid's memoryless path."""
         return _self_estimated(colors, self._unobservable)
 
-    def _remember(self, colors: NDArray[np.float32], occupancy: NDArray[np.bool_]) -> None:
+    def _remember(self, colors: NDArray[np.float32], reading: _Reading) -> None:
         """Re-measure the background from an accepted frame.
 
         Unobservable cells are left out of every sample: their pixels are
         the covering panel's, and a memory measured partly from the panel
-        would drift toward a color the board never shows.
+        would drift toward a color the board never shows. So are the cells
+        of a landing preview (:attr:`_Reading.ghost`): they read EMPTY,
+        and nothing is there, but their color is a piece blended into the
+        board, so averaging them into the anchor would walk it toward the
+        pieces — the one direction that inverts a reading.
 
         Reaching here is also what ends a run of impossible frames: this
         is called exactly when a frame was accepted AND describes a board
@@ -747,7 +972,10 @@ class GridClassifier:
         one, so no count survives into the next anchor.
         """
         self._impossible = 0
+        occupancy = reading.occupancy
         observable = self._observable_mask(occupancy.shape)
+        if reading.ghost is not None:
+            observable = observable & ~reading.ghost
         if bool((occupancy & observable).any()):
             # Two-class frame: the empty class IS the background, freshly
             # measured. Anchoring here is what makes polarity survive the
@@ -790,10 +1018,13 @@ class GridClassifier:
         background = self._background
         if background is None:
             return None
-        occupancy, confidence = self._bootstrap(colors)
-        if confidence < self._min_confidence:
+        reading = self._bootstrap(colors)
+        if reading.confidence < self._min_confidence:
             return None
+        occupancy = reading.occupancy
         observable = self._observable_mask(occupancy.shape)
+        if reading.ghost is not None:
+            observable = observable & ~reading.ghost
         if not bool((occupancy & observable).any()):
             return None
         measured = self._empty_class_color(colors, occupancy, observable)

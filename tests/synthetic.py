@@ -120,13 +120,44 @@ STYLES = (
 )
 
 
+def ghost_color(style: Style, score: float, color_index: int = 0) -> tuple[int, int, int]:
+    """A style color faded toward the ground until it scores ``score``.
+
+    A landing preview is the falling piece drawn translucent, so its cells
+    sit on the segment between a piece color and the board's background.
+    Which point of that segment is what the rule in
+    :func:`~tetris_coach.vision.grid._ghost_layer` turns on, so the tests
+    address it directly: ``score`` is the cell score the faded color is
+    meant to produce (``grid._distance_scores``' sqrt-compressed normalized
+    distance), not an alpha, so one number means the same thing on a dark
+    theme and a light one.
+    """
+    background = np.asarray(style.background, dtype=np.float64)
+    piece = np.asarray(style.cell_colors[color_index % len(style.cell_colors)], dtype=np.float64)
+    # score = sqrt(distance / (255 * sqrt(C))) -> distance = score^2 * 255 * sqrt(C)
+    target = (score**2) * 255.0 * np.sqrt(background.size)
+    full = float(np.linalg.norm(piece - background))
+    fraction = 0.0 if full == 0.0 else min(1.0, target / full)
+    faded = background + (piece - background) * fraction
+    return tuple(round(float(v)) for v in np.clip(faded, 0, 255))  # type: ignore[return-value]
+
+
 def render_board(
     grid: np.ndarray,
     style: Style,
     cell_size: int = 24,
     seed: int = 0,
+    ghost: np.ndarray | None = None,
+    ghost_score: float = 0.30,
 ) -> np.ndarray:
-    """Render an occupancy grid into an RGB uint8 image (H, W, 3)."""
+    """Render an occupancy grid into an RGB uint8 image (H, W, 3).
+
+    ``ghost`` is an optional second grid drawn the way almost every modern
+    Tetris draws its landing preview: the same cell geometry as a piece,
+    filled with a faded piece color (see :func:`ghost_color`) rather than
+    a solid one. It is painted before the real cells, so a piece sitting
+    on top of its own ghost hides it exactly as the game would.
+    """
     rows, cols = grid.shape
     width, height = cols * cell_size, rows * cell_size
     img = Image.new("RGB", (width, height), style.background)
@@ -148,17 +179,23 @@ def render_board(
             )
 
     colors = style.cell_colors
-    for r in range(rows):
-        for c in range(cols):
-            if not grid[r, c]:
-                continue
-            color = colors[(r * cols + c) % len(colors)]
-            inset = style.cell_inset
-            x0 = c * cell_size + inset
-            y0 = r * cell_size + inset
-            x1 = (c + 1) * cell_size - 1 - inset
-            y1 = (r + 1) * cell_size - 1 - inset
-            draw.rectangle([x0, y0, x1, y1], fill=color)
+
+    def paint(mask: np.ndarray, fill: tuple[int, int, int] | None) -> None:
+        for r in range(rows):
+            for c in range(cols):
+                if not mask[r, c]:
+                    continue
+                color = fill if fill is not None else colors[(r * cols + c) % len(colors)]
+                inset = style.cell_inset
+                x0 = c * cell_size + inset
+                y0 = r * cell_size + inset
+                x1 = (c + 1) * cell_size - 1 - inset
+                y1 = (r + 1) * cell_size - 1 - inset
+                draw.rectangle([x0, y0, x1, y1], fill=color)
+
+    if ghost is not None:
+        paint(ghost, ghost_color(style, ghost_score))
+    paint(grid, None)
 
     out = np.asarray(img, dtype=np.int16)
     if style.noise:
