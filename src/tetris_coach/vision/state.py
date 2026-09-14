@@ -33,13 +33,22 @@ Events:
   does (the counter resets on the next coherent frame).
 
 A resync adopts the observed board as the stack, minus the piece in
-flight — the one component of the frame that rests on nothing. Stack
-cells do not float, so floating content has not landed, and freezing it
-into the stack is the corruption that made every hint after the first one
-wrong: the piece's own descent then reads as stack cells vanishing, which
-nothing can explain, so the tracker resets again and re-absorbs it one row
-lower, the whole way down. A resync that lands on the stack the tracker
-already believes is a no-op and fires no event.
+flight — a component that rests on nothing AND touches row 0, where
+settled content cannot be. Freezing a piece in flight into the stack is
+the corruption that made every hint after the first one wrong: the
+piece's own descent then reads as stack cells vanishing, which nothing
+can explain, so the tracker resets again and re-absorbs it one row lower,
+the whole way down. Floating LOWER DOWN is not evidence of anything —
+naive gravity leaves settled cells hanging over holes after a clear — so
+it is adopted like the rest of the board (see ``strip_piece_in_flight``).
+Everything the resync does not hold back is adopted unconditionally: an
+earlier "re-anchoring on the board already believed fires no event"
+short-circuit existed only because the strip removed real content, and
+with the strip narrowed no unexplainable frame can reach it (measured:
+0 of 82249 frames whose strip lands exactly on the committed stack are
+UNEXPLAINED; every one is FALLING or OCCLUDED, neither of which resets).
+Left in, it was a livelock: a real floating remnant the strip deleted
+made the resync a no-op for good, and the tracker never adopted it.
 
 ``unobservable_cells`` names board cells the capture can never read (a
 game UI panel floating over the playfield). The observed value there is
@@ -207,26 +216,16 @@ class GameStateTracker:
                 # anything else. (Seeding them filled instead would be a
                 # different lie, and a permanent one — a board whose top
                 # rows are filled has columns nothing can be dropped into.)
-                # A piece the top edge has cut in half is the one thing on
-                # the frame that is demonstrably not settled, and a resync
-                # is exactly when one is likely to be sitting there (an
-                # attach mid-game, in a game that parks spawns at the top
-                # edge). It is left out rather than frozen into the stack.
+                # A piece at the top edge — entering, or just spawned, and
+                # floating — is the one thing on the frame that is
+                # demonstrably not settled, and a resync is exactly when
+                # one is likely to be sitting there (an attach mid-game, in
+                # a game that parks spawns at the top edge). It is left out
+                # rather than frozen into the stack. Everything else the
+                # frame shows is adopted, floating or not: a piece absorbed
+                # lower down is taken back out by _carried_piece on its next
+                # descending frame, while content deleted here is gone.
                 resynced = strip_piece_in_flight(rows, self.unknown_rows)
-                if resynced == self._committed.stack_rows:
-                    # Re-anchoring on the board already believed is a no-op,
-                    # and the event is not free: the consumer drops the hint
-                    # on a reset, so firing one here blanks the overlay and
-                    # throws away the falling anchor to arrive exactly where
-                    # the tracker already was. The frame stays unexplainable
-                    # for some reason of its own — a pale piece the
-                    # threshold reads one cell of, a torn capture — and
-                    # holding is what the tracker does with those. The
-                    # counter is cleared so the same nothing is not
-                    # re-confirmed every fourth frame.
-                    self._unexplained_rows = None
-                    self._unexplained_count = 0
-                    return []
                 self._committed = Snapshot(resynced, None, next_piece)
                 self._pending = None
                 self._pending_kind = None

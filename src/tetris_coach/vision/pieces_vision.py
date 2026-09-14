@@ -372,6 +372,17 @@ def _resting(
     return any(r + 1 < len(rest_rows) and _bit(unknown_rows, (r + 1, c)) for r, c in component)
 
 
+def _touches_unobservable(component: set[Cell], unknown_rows: tuple[int, ...]) -> bool:
+    """True when any cell of ``component`` is 4-adjacent to a covered cell."""
+    height = len(unknown_rows)
+    for r, c in component:
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < height and 0 <= nc < WIDTH and _bit(unknown_rows, (nr, nc)):
+                return True
+    return False
+
+
 def _floating_component(
     rows: tuple[int, ...],
     unknown_rows: tuple[int, ...],
@@ -387,11 +398,24 @@ def _floating_component(
     ``None`` when nothing floats, or when two things do: two floating blobs
     name no single piece, and absorbing both keeps content, which is the
     safe direction.
+
+    "Maximal" holds only on the board the capture can SEE. An unobservable
+    cell is blanked before any of this runs, so a component that touches
+    one may be a piece of a larger component the panel cuts in half, and
+    the half that reaches the floor can be on the other side: in this
+    session's own geometry (the NEXT preview over cols 8-9 of rows 0-1) a
+    column stacked to the top with a piece locked beside it at cols 6-7 is
+    ONE grounded component in the true board and two components here, the
+    inner one floating. Support directly below is not the only way through
+    — :func:`_resting` answers that one — so a component ADJACENT to an
+    unobservable cell in any direction is not demonstrably floating, and
+    the resync absorbs it like any other content it cannot rule on.
     """
     floating = [
         component
         for component in _connected_components(_cells_from_rows(rows))
         if not _resting(component, _rows_without(rows, component), unknown_rows)
+        and not _touches_unobservable(component, unknown_rows)
     ]
     if len(floating) != 1:
         return None
@@ -420,7 +444,35 @@ def strip_piece_in_flight(
     - exactly one component floats (two at once name no single piece);
     - it is at most :data:`MAX_IN_FLIGHT_CELLS` cells;
     - at exactly four cells it is a tetromino — a four-cell blob that is no
-      piece is something else and stays.
+      piece is something else and stays;
+    - and it TOUCHES ROW 0, i.e. it is entering or has just spawned.
+
+    That last one is the load-bearing one, because "floating" does NOT
+    imply "in flight". Naive gravity makes SETTLED cells float: clear a
+    row and everything above descends onto a row with holes in it, so the
+    repo's own :meth:`Board.drop` turns an ordinary position (stack at
+    rows 8-9 of cols 0-1 over holes at row 11) into a board with a real
+    locked O floating at rows 9-10. Without the row-0 test a resync
+    deletes those four settled cells; the next frames read the same cells
+    as added, match an O, and the tracker announces a piece the player
+    does not have on a board four cells short of the truth. The same
+    premise failure with a 1-3 cell post-clear remnant was worse than
+    one-shot: the shortened board equals the committed one, the resync
+    no-ops, and the tracker never adopts the real content at all
+    (measured: 300 identical frames, zero events, three real cells
+    missing for good).
+
+    Settled content cannot be at row 0 with air under it — that is the
+    one arrangement the board itself rules out, and it is the picture
+    ``grid.py`` already vouches for as "one piece in flight" when it
+    judges confidence. Anything lower is the same picture as post-clear
+    debris, and the costs are not symmetric, so it stays. A piece that
+    was absorbed lower down is not stranded: its next descending frame
+    takes it back out (:func:`_carried_piece`), which is the loop-breaker
+    that works however the piece got in. Measured over the three
+    committed session replays and the 707-frame session: all 10 resyncs
+    that hold anything back hold back a component touching row 0, so the
+    test costs nothing on real frames.
 
     A component resting on the floor, on the rest of the board, or on an
     unobservable cell is absorbed exactly as it always was: a column
@@ -436,6 +488,8 @@ def strip_piece_in_flight(
         return rows
     if len(fragment) == MAX_IN_FLIGHT_CELLS and match_cells(fragment) is None:
         return rows
+    if not any(r == 0 for r, _ in fragment):
+        return rows  # floating lower down is post-clear debris, not evidence
     return _rows_without(rows, fragment)
 
 
