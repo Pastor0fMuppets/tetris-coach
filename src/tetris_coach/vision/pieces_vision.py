@@ -630,6 +630,82 @@ def _lock_with_clears(
     return None
 
 
+def _carried_piece(
+    observed_rows: tuple[int, ...],
+    stack_rows: tuple[int, ...],
+    unknown_rows: tuple[int, ...],
+    max_missing_cells: int,
+    entering_hint: str | None,
+) -> Explanation | None:
+    """The committed stack was holding a falling piece; take it back out.
+
+    Self-healing, and the reason the absorbed-piece loop cannot persist
+    however the piece got in. When settled cells vanish and no line clear
+    explains it, one hypothesis is not "the world changed" but "the memory
+    was wrong": the stack was carrying a piece that had not landed, and
+    what looks like cells vanishing is that piece moving.
+
+    The hypothesis is accepted only when it explains the WHOLE frame:
+
+    - every vanished cell belongs to one tetromino-shaped set of cells the
+      committed stack holds (so more than four missing cells — a line
+      clear, rising garbage, a new board, a torn frame — is never this);
+    - that piece is airborne in the stack without it (a piece resting on
+      the stack is stack: it landed, and the memory is right);
+    - and with it removed the frame reads as an ordinary FALLING frame
+      whose piece has the SAME NAME. That is the "it reappeared elsewhere"
+      test, and it is what separates a piece in flight from vision losing
+      a block: a dropout leaves nothing to find.
+
+    Errs toward doing nothing: any ambiguity, any leftover, any resting
+    candidate, and the frame stays unexplainable and the tracker holds.
+    Unobservable cells are excluded from the vanished set upstream, so
+    content that is merely covered is never evidence for this rule.
+    """
+    missing = _cells_from_rows(
+        s & ~o & ~u for o, s, u in zip(observed_rows, stack_rows, unknown_rows, strict=True)
+    )
+    if not missing or len(missing) > MAX_IN_FLIGHT_CELLS:
+        return None
+    height = len(stack_rows)
+    anchor_r, anchor_c = next(iter(missing))
+    for rots in ROTATIONS.values():
+        for rot in rots:
+            for cell_r, cell_c in rot.cells:
+                top, left = anchor_r - cell_r, anchor_c - cell_c
+                if top < 0 or left < 0 or top + rot.height > height or left + rot.width > WIDTH:
+                    continue
+                cells = {(top + r, left + c) for r, c in rot.cells}
+                if not missing <= cells:
+                    continue
+                if not all(_bit(stack_rows, cell) for cell in cells):
+                    continue  # the stack never held this piece
+                rest = _rows_without(stack_rows, cells)
+                if _resting(cells, rest, unknown_rows):
+                    continue  # it landed; the memory is right
+                explanation = explain_grid(
+                    observed_rows,
+                    rest,
+                    FallingPiece(rot.piece, rot.index, top, left),
+                    max_missing_cells=max_missing_cells,
+                    unknown_rows=unknown_rows,
+                    entering_hint=entering_hint,
+                    _heal=False,
+                )
+                if (
+                    explanation.kind is FrameKind.FALLING
+                    and explanation.falling is not None
+                    and explanation.falling.piece == rot.piece
+                ):
+                    return Explanation(
+                        FrameKind.FALLING,
+                        rest,
+                        explanation.falling,
+                        hinted_name=explanation.hinted_name,
+                    )
+    return None
+
+
 def explain_grid(
     observed_rows: tuple[int, ...],
     stack_rows: tuple[int, ...],
@@ -638,6 +714,7 @@ def explain_grid(
     max_missing_cells: int = 2,
     unknown_rows: tuple[int, ...] | None = None,
     entering_hint: str | None = None,
+    _heal: bool = True,
 ) -> Explanation:
     """Explain one observed frame against the committed stack memory.
 
@@ -714,6 +791,20 @@ def explain_grid(
         locked = _lock_with_clears(observed_rows, stack_rows, last_falling, unknown)
         if locked is not None:
             return locked
+
+    # Step 3b — the committed stack was carrying a piece. Settled cells
+    # cannot vanish, so a frame that says they did is either a new world or
+    # a wrong memory; when one tetromino's worth of stack has gone missing
+    # and that same piece is on the board somewhere else, the memory is
+    # what was wrong. Correcting it here is what stops an absorbed piece
+    # from resetting the board once a row, the whole way down. (Ordered
+    # after the clear rules on purpose: a real clear reads as a clear.)
+    if _heal and n_miss > 0:
+        healed = _carried_piece(
+            observed_rows, stack_rows, unknown, max_missing_cells, entering_hint
+        )
+        if healed is not None:
+            return healed
 
     # Step 4 — no structural explanation. A first-class outcome, not an
     # error: piece entering from above, tearing, mid-fade clear frames,

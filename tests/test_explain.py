@@ -2,7 +2,7 @@
 
 import pytest
 
-from tetris_coach.core.board import Board
+from tetris_coach.core.board import HEIGHT, Board
 from tetris_coach.core.pieces import PIECES, ROTATIONS
 from tetris_coach.vision.pieces_vision import (
     FrameKind,
@@ -792,6 +792,112 @@ class TestTheEnteringPieceHint:
         exp = explain_grid(merge(stack, [(0, 3)]), stack, None, entering_hint="I")
         assert exp.kind is FrameKind.UNEXPLAINED
         assert exp.falling is None
+
+
+class TestTheStackCarryingAPiece:
+    """The committed stack was holding a piece that had not landed.
+
+    The self-healing half of the absorbed-piece fix. However a falling
+    piece gets into the committed stack, it used to be stuck there: its
+    own motion reads as settled cells vanishing, which nothing explains,
+    so the tracker resets and re-absorbs it one row lower, the whole way
+    down (``tests/fixtures/absorbed_piece``). When one tetromino's worth of
+    stack goes missing and that same piece is on the board somewhere else,
+    the memory is what was wrong — so take the piece back out of the stack
+    and read the frame as that piece falling.
+    """
+
+    STACK = rows_of(bottom_lines("#.########", "##.#######", "#########."))
+
+    def carrying(self, piece: str, rotation: int, row: int, col: int) -> tuple[int, ...]:
+        """The committed stack with a falling piece wrongly frozen into it."""
+        return merge(self.STACK, piece_cells(piece, rotation, row, col))
+
+    def test_the_carried_piece_falling_one_row_is_read_as_falling(self) -> None:
+        carried = self.carrying("T", 0, 0, 3)
+        exp = explain_grid(merge(self.STACK, piece_cells("T", 0, 1, 3)), carried, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.stack_rows == self.STACK, "the piece is still in the stack"
+        assert exp.falling is not None
+        assert exp.falling.piece == "T"
+        assert exp.falling.row == 1
+
+    def test_the_carried_piece_dragged_sideways_is_read_as_falling(self) -> None:
+        # This game drags rather than drops, so sideways is the common case.
+        carried = self.carrying("T", 0, 0, 3)
+        exp = explain_grid(merge(self.STACK, piece_cells("T", 0, 0, 6)), carried, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.stack_rows == self.STACK
+        assert exp.falling is not None
+        assert (exp.falling.piece, exp.falling.col) == ("T", 6)
+
+    def test_the_carried_piece_rotating_is_read_as_falling(self) -> None:
+        carried = self.carrying("T", 0, 0, 3)
+        exp = explain_grid(merge(self.STACK, piece_cells("T", 1, 0, 3)), carried, None)
+        assert exp.kind is FrameKind.FALLING
+        assert exp.stack_rows == self.STACK
+        assert exp.falling is not None
+        assert (exp.falling.piece, exp.falling.rotation_index) == ("T", 1)
+
+    def test_the_whole_descent_heals_to_the_same_stack(self) -> None:
+        # The property that kills the loop: every frame of the descent
+        # names the same corrected stack, so the tracker's debounce
+        # confirms it and the piece is out after one more frame — rather
+        # than the board resetting once a row, all the way down.
+        carried = self.carrying("O", 0, 0, 4)
+        for row in range(1, 10):
+            exp = explain_grid(merge(self.STACK, piece_cells("O", 0, row, 4)), carried, None)
+            assert exp.kind is FrameKind.FALLING, row
+            assert exp.stack_rows == self.STACK, row
+            assert exp.falling is not None and exp.falling.piece == "O"
+
+    def test_a_piece_that_merely_vanished_is_not_healed(self) -> None:
+        # The "reappeared elsewhere" test doing its job. Cells the vision
+        # lost leave nothing to find, and inventing a lock or a clear to
+        # explain them would corrupt the stack. Holding is the answer.
+        carried = self.carrying("T", 0, 0, 3)
+        exp = explain_grid(self.STACK, carried, None)
+        assert exp.kind is FrameKind.UNEXPLAINED
+
+    def test_a_piece_that_reappears_under_another_name_is_not_healed(self) -> None:
+        # A T leaving and an S arriving is not one piece moving.
+        carried = self.carrying("T", 0, 0, 3)
+        exp = explain_grid(merge(self.STACK, piece_cells("S", 0, 4, 3)), carried, None)
+        assert exp.kind is FrameKind.UNEXPLAINED
+
+    def test_a_piece_shaped_component_at_rest_is_stack(self) -> None:
+        # The guard rail, and the direction this errs in: an O RESTING on
+        # the stack landed there, so the memory is right and the frame is
+        # what is wrong. Never delete a block the solver has to plan around.
+        resting = merge(self.STACK, piece_cells("O", 0, HEIGHT - 5, 4))
+        exp = explain_grid(merge(self.STACK, piece_cells("O", 0, 2, 4)), resting, None)
+        assert exp.kind is FrameKind.UNEXPLAINED
+
+    def test_more_than_one_tetrominos_worth_missing_is_never_healed(self) -> None:
+        # The budget, which is what keeps clears, garbage and a new board
+        # out of this rule: five missing cells are not one piece.
+        carried = merge(self.carrying("T", 0, 0, 3), [(5, 0)])
+        exp = explain_grid(merge(self.STACK, piece_cells("T", 0, 1, 3)), carried, None)
+        assert exp.kind is FrameKind.UNEXPLAINED
+
+    def test_a_real_line_clear_still_reads_as_a_clear(self) -> None:
+        # Ordering, pinned: the clear rules run FIRST, so a frame a clear
+        # explains is a lock with clears and never a healed stack.
+        stack = rows_of(bottom_lines("#########."))
+        settled = rows_of([(HEIGHT - 3, 9), (HEIGHT - 2, 9), (HEIGHT - 1, 9)])
+        exp = explain_grid(settled, stack, fp("I", 1, HEIGHT - 4, 9))
+        assert exp.kind is FrameKind.LOCKED
+        assert exp.stack_rows == settled
+
+    def test_covered_cells_are_never_evidence_that_a_piece_moved(self) -> None:
+        # Unobservable cells read as empty, and "covered" must never be
+        # read as "vanished" — that would let a panel delete the stack
+        # under it one tetromino at a time.
+        unknown = (0b1100000000, 0b1100000000) + (0,) * (HEIGHT - 2)
+        carried = merge(self.STACK, piece_cells("O", 0, 0, 8))
+        exp = explain_grid(self.STACK, carried, None, unknown_rows=unknown)
+        assert exp.kind is FrameKind.QUIET
+        assert exp.stack_rows == carried, "a covered piece was deleted from the stack"
 
 
 class TestClearFullRowsMatchesCore:

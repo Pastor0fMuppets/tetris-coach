@@ -614,6 +614,55 @@ class TestTheEnteringPieceHint:
         assert tracker.falling.piece == "S"
 
 
+class TestAStackCarryingAPiece:
+    """The loop cannot persist even if a piece does get into the stack.
+
+    The self-healing half of the absorbed-piece fix, at the tracker level.
+    Before it, a committed stack holding a falling piece produced one
+    BOARD_RESET per row of that piece's descent — 58 frames, ~3.9 s, with
+    no hint at all on the session that produced
+    ``tests/fixtures/absorbed_piece``.
+
+    The piece gets in here the way a resync can still let one in: leaning
+    against a column, so it is part of a component that reaches the floor
+    and nothing marks it as in flight. It has air underneath all the same,
+    which is what the healing rule keys on.
+    """
+
+    STACK = rows_of(
+        [(r, 0) for r in range(HEIGHT - 10, HEIGHT)],
+        bottom_lines("#.########"),
+    )
+    CARRIED = merge(STACK, piece_cells("O", 0, HEIGHT - 10, 1))
+
+    def test_a_carried_piece_is_taken_back_out_and_tracked(self) -> None:
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.CARRIED, "I")
+        all_events: list[GameEvent] = []
+        for row in range(HEIGHT - 9, HEIGHT - 5):
+            all_events += feed(tracker, merge(self.STACK, piece_cells("O", 0, row, 1)), "I")
+        assert GameEvent.BOARD_RESET not in all_events, "the reset loop is back"
+        assert tracker.committed.stack_rows == self.STACK
+        assert tracker.committed.falling_piece == "O"
+
+    def test_the_healed_piece_then_locks_onto_the_corrected_stack(self) -> None:
+        # The end of the story: with the stack corrected, the descent ends
+        # in an ordinary verified lock rather than another resync.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.CARRIED, "I")
+        for row in range(HEIGHT - 9, HEIGHT - 3):
+            feed(tracker, merge(self.STACK, piece_cells("O", 0, row, 1)), "I")
+        landed = merge(self.STACK, piece_cells("O", 0, HEIGHT - 3, 1))
+        feed(tracker, landed, "I", times=2)
+        assert tracker.committed.stack_rows == self.STACK
+        revealed = merge(landed, piece_cells("I", 0, 0, 3))
+        assert feed(tracker, revealed, "S", times=2) == [
+            GameEvent.PIECE_LOCKED,
+            GameEvent.PIECE_SPAWNED,
+        ]
+        assert tracker.committed.stack_rows == landed
+
+
 class TestResyncAndThePieceInFlight:
     """A resync must not freeze a piece that has not landed.
 
