@@ -37,13 +37,27 @@ the ghost is read as real board content intermittently:
   plainly shows a green O falling at rows 2-3 and the NEXT box shows an I.
 
 The ghost is also what collapses the confidence measure on this game: the
-intermediate cluster sits between the two classes, narrowing the gap the
-confidence is computed from, which is why frames are rejected at the gate.
+intermediate cluster sits between the two classes and narrows the gap the
+confidence is computed from. That is a SECOND, separate cost, and it is
+worth being exact about where it lands, because it is not here. On this
+window the gate rejects 1 of 95 frames both before and after - the same
+frame 150, at 0.096, refused on purpose (see below). The collapse shows
+up on the other committed window: live_session, 32 of 96 frames rejected
+before, 17 of 96 after. What the ghost cost THIS session was hints, not
+frames: 8 of 95 before, 93 of 95 after.
 
 ## After
 
 `vision.grid._ghost_layer` names the third level and takes it out of the
-split. Replayed through `CoachEngine` (tests/test_ghost_session.py):
+split. It names a layer only where the whole structure of a landing
+preview is there, and the test that carries the weight is that the layer
+must be a copy of a piece actually in flight: on every frame below the
+layer is an O and an O is what hangs at the top of the board. (Without
+it the rule deletes any four band-scored cells forming a tetromino at
+rest with open air beside and above - an ordinary landing - and this
+game has a real piece color in the band, the pale periwinkle at 0.346 in
+tests/fixtures/roas_stacker.) Replayed through `CoachEngine`
+(tests/test_ghost_session.py):
 
 - 0 UNEXPLAINED frames, 0 BOARD_RESETs, 3 verified locks.
 - 93 of 95 frames carry a hint; the only gap is the two frames before

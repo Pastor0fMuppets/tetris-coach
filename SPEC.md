@@ -161,7 +161,10 @@ vision/
                   # / 5.7 s stretch with none). The same intermediate
                   # cluster also sits inside the class gap confidence is
                   # measured from, so readable frames were reported
-                  # ambiguous and dropped at the gate.
+                  # ambiguous and dropped at the gate — a SEPARATE cost,
+                  # and one that shows up on the other committed window
+                  # rather than this one (live_session 32 of 96 frames
+                  # rejected, ghost_session only 1 of 95).
                   # _ghost_layer names that level instead, and it is taken
                   # out of the split entirely, so both the threshold and the
                   # confidence are measured on the separation that decides
@@ -179,9 +182,26 @@ vision/
                   # preview is there: clear of the background cluster by
                   # MIN_SPREAD/2 (the background's own spread is 0.02, a
                   # ghost's clearance 0.21-0.30), exactly one tetromino,
-                  # RESTING on the floor or on a piece color, and with no
-                  # solid cell to its left, to its right, or above it.
-                  # That last test is the one the band cannot do: a preview
+                  # RESTING on the floor or on a piece color, with no
+                  # solid cell to its left, to its right, or above it, and
+                  # a copy OF something — the piece it previews must be on
+                  # the board, in flight: a whole tetromino of the SAME
+                  # PIECE TYPE, airborne (not 4-connected to the floor).
+                  # That last one is the structure a landing preview
+                  # cannot be without, since a game draws a ghost because
+                  # a piece is falling, and it is what separates the two
+                  # cases on the real pixels: 21 of 21 named frames across
+                  # both committed sessions have their own piece in the
+                  # air (an O over ghost_session's O layer, an I over
+                  # live_session's I layer), while the pale periwinkle
+                  # that must NOT be deleted sits under a falling J.
+                  # Position alone does not carry it: the neighbour test
+                  # saves the periwinkle on live2_board_00500 only because
+                  # the stack abuts it there, and ONE legal board
+                  # difference (that abutting cell gone) had the rule
+                  # delete four real locked cells at confidence 0.26.
+                  # The neighbour test is the other one the band cannot
+                  # do: a preview
                   # marks space the piece can still drop into, so it is the
                   # topmost thing in its own cells with open air either
                   # side, while a piece the stack has grown around got there
@@ -197,8 +217,10 @@ vision/
                   # added cell (measured: 4 UNEXPLAINED frames, a
                   # BOARD_RESET, and the badge committed as a phantom).
                   # Unobservable cells are left out of the band, out of the
-                  # background cluster and out of the neighbour tests, for
-                  # the same reason they are left out of everything else
+                  # background cluster, out of the neighbour tests and out
+                  # of the pieces counted as in flight (a piece a panel
+                  # cuts in half is not a whole tetromino), for the same
+                  # reason they are left out of everything else
                   # (measured: the covered cell (0,8) scores 0.15 against a
                   # background otherwise topping out at 0.02, which alone
                   # put a real ghost 0.005 inside the clearance margin and
@@ -211,9 +233,29 @@ vision/
                   # opaque enough to leave the band, or resting in a well,
                   # stays content and the frame is simply held (the common
                   # one, and the preferred direction); a real band-colored
-                  # piece freshly locked on a FLAT surface with open air
-                  # beside and above it is deleted, which needs a pale-on-
-                  # pale skin and ends the moment anything lands beside it.
+                  # piece freshly landed on a FLAT surface with open air
+                  # beside and above it is deleted IF the piece now
+                  # falling is the same type. The neighbour test alone
+                  # does not make that narrow — measured over every legal
+                  # placement on 4000 random stacks (644563 landings), 49%
+                  # come to rest with nothing occupied beside or above
+                  # them, i.e. a coin flip — which is why the piece must
+                  # also be in flight: roughly one landing in seven, none
+                  # at all between a lock and the next spawn, and over the
+                  # moment a neighbour arrives.
+                  # A named layer also caps the frame's confidence at 0.5,
+                  # the same number a uniform-empty frame reports, because
+                  # both mean "structurally grounded rather than measured":
+                  # the gap is taken with the layer out of BOTH classes,
+                  # so without the cap a three-level frame reports like a
+                  # clean two-level one (measured on a synthetic board
+                  # where the rule deletes content: 0.94). It is a
+                  # signature, not a second defense — the same board reads
+                  # 0.58 with the rule off, and the conservative measure
+                  # that would flag it (layer counted in the empty class)
+                  # reads 0.078 on live_session's fifteen REAL ghost
+                  # frames, which is the pre-rule number that had them
+                  # rejected. The rule is the defense.
                   # TWO CLUSTERS BEHAVE EXACTLY AS BEFORE: past the
                   # uniform-near branch the ordinary split already puts
                   # every sub-floor cell in the empty class, and no cell of
@@ -221,9 +263,14 @@ vision/
                   # all (measured: 0 band cells over 840 random boards x 3
                   # cell sizes x 7 styles).
                   # Measured after: ghost_session 0 UNEXPLAINED, 0 resets,
-                  # 93 of 95 frames hinted, longest gap 2 (the bootstrap);
-                  # gate rejections across both committed sessions 33 of
-                  # 191 -> 18 of 191, and live_session's own 32 -> 17.
+                  # 93 of 95 frames hinted (8 of 95 before), longest gap 2
+                  # (the bootstrap); gate rejections across both committed
+                  # sessions 33 of 191 -> 18 of 191, all of it
+                  # live_session's own 32 -> 17. The gate is NOT what was
+                  # wrong with the ghost session: 1 of its 95 frames is
+                  # rejected before and after, the same frame 150 at 0.096
+                  # (the badge, refused on purpose). On that window the
+                  # ghost cost hints, not frames.
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the

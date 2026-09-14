@@ -869,8 +869,10 @@ def _classify_scored(
     # occupancy — background versus a real piece color. Left in, it drags
     # whichever class Otsu attaches it to toward the other one, which is
     # how a cleanly readable frame ends up reported as ambiguous (measured
-    # on the ghost session's frame 150: 0.10, rejected at a 0.15 gate,
-    # against 0.35 with the layer named).
+    # on the fifteen live_session frames that carry one: 0.078 with the
+    # layer left in the empty class, rejected at a 0.15 gate, against
+    # 0.286 with it named). What the frame may then report is capped: see
+    # :data:`_LAYER_CONFIDENCE_CEILING`.
     ghost = _ghost_layer(scores, unobservable)
     board = np.ones((rows, cols), dtype=np.bool_) if ghost is None else ~ghost
 
