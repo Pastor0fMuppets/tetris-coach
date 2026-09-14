@@ -224,7 +224,18 @@ class GameStateTracker:
             # LOCKED frames must NOT overwrite this until they commit: the
             # L1/C1 anchors need the pre-lock position to re-derive the
             # same candidate on the confirmation frame.
-            self._last_falling = explanation.falling
+            #
+            # A name the entering hint supplied is NOT an observation: the
+            # frame showed 1-3 cells that several tetrominoes fit, and the
+            # preview picked one. Good enough to hint on, and not good
+            # enough to become evidence — explain_grid uses this piece's
+            # NAME to refuse a lock ("a piece cannot change identity
+            # between flight and lock"), so a misnamed entering piece would
+            # block its own lock and, four identical frames later, reset
+            # the board. In this game a piece goes straight from the top
+            # edge to a hard drop, so the correction the ordinary rules
+            # apply on the way down never gets to run.
+            self._last_falling = None if explanation.hinted_name else explanation.falling
 
         candidate = Snapshot(
             stack_rows=explanation.stack_rows,

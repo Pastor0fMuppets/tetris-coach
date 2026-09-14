@@ -538,6 +538,40 @@ class TestTheEnteringPieceHint:
         assert feed(tracker, merge(self.STACK, self.FRAGMENT), "O", times=3) == []
         assert tracker.committed.falling_piece is None
 
+    def test_a_hinted_name_is_a_hint_and_not_an_observation(self) -> None:
+        # The hint may be wrong (the preview is read by the same vision as
+        # everything else), and a wrong name must cost no more than a wrong
+        # hint. explain_grid refuses a lock whose piece does not match the
+        # last OBSERVED one, so if a hint-named fragment became the last
+        # observation, a misnamed piece would block its own lock: four
+        # identical unexplainable frames, a spurious BOARD_RESET, and a
+        # blank overlay. Here the preview says O and the piece is an S.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        assert tracker.committed.falling_piece == "O"  # hinted, and shown
+        # The S hard-drops to the floor and the next piece enters behind it.
+        locked = piece_cells("S", 0, HEIGHT - 2, 3)
+        dropped = merge(self.STACK, locked, self.FRAGMENT)
+        assert feed(tracker, dropped, "I") == []
+        assert feed(tracker, dropped, "I") == [GameEvent.PIECE_LOCKED]
+        assert tracker.committed.stack_rows == merge(self.STACK, locked)
+        # ...and the frame never reaches the reset debounce.
+        assert feed(tracker, dropped, "I", times=4) == []
+        assert tracker.committed.stack_rows == merge(self.STACK, locked)
+        # The mechanism: the hinted name was shown, never remembered.
+        assert tracker.falling is None or tracker.falling.piece != "O"
+
+    def test_a_piece_seen_whole_is_still_an_observation(self) -> None:
+        # The other half of the rule: a name the frame's own structure
+        # produced is evidence exactly as it always was.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        feed(tracker, merge(self.STACK, piece_cells("S", 0, 2, 3)), "I", times=2)
+        assert tracker.committed.falling_piece == "S"
+        assert tracker.falling is not None
+        assert tracker.falling.piece == "S"
+
 
 class TestResyncAndTheTopEdge:
     """A resync must not freeze a piece that is still entering the field.

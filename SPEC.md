@@ -225,7 +225,18 @@ vision/
                   # piece — the deliberate trade against no name at all for
                   # as long as it sits at the top edge (measured on the live
                   # session: 13 frames, ~0.9 s) — and the ordinary rules
-                  # rename it the moment it descends into view. It only
+                  # rename it the moment it descends into view. That trade
+                  # holds only while the cost of a wrong name IS a wrong
+                  # name, so a hinted name is marked as one and the tracker
+                  # never keeps it as the last observation: explain_grid
+                  # refuses a lock whose piece disagrees with the last
+                  # OBSERVED name, so a misnamed entering piece would block
+                  # its own lock (4 identical unexplainable frames -> a
+                  # spurious BOARD_RESET, hint cleared, overlay blank),
+                  # making a wrong name strictly worse than no name. In
+                  # this game a piece goes from the top edge straight to a
+                  # hard drop, so the correction on the way down — the
+                  # other half of the trade — never runs. It only
                   # became possible once the preview could be read at all
                   # (see identify_next); the panel case is deliberately left
                   # alone, because a piece that slides under a panel was
