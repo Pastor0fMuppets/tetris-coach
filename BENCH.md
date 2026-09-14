@@ -57,12 +57,17 @@ background.
 | Stage                                     | before p50 | before p95 | after p50 | after p95 |
 | ----------------------------------------- | ---------- | ---------- | --------- | --------- |
 | Grid: `classify_grid` at 600x1200         | 4.9 ms     | 5.1 ms     | 2.2 ms    | 2.3 ms    |
-| Preview: `identify_next` at 200x200       | 1.8 ms     | 1.9 ms     | 2.0 ms    | 2.0 ms    |
+| Preview: `identify_next` at 200x200       | 1.8 ms     | 1.9 ms     | 2.2 ms    | 2.3 ms    |
 | Preview cache gate (`np.array_equal`)     | 0.011 ms   | 0.011 ms   | 0.006 ms  | 0.006 ms  |
 
 The grid stage got cheaper: a per-channel patch mean plus one distance per
 cell is less work than LUT-indexing every sampled pixel. The preview stage
-pays a little more for its whole-image median background estimate. Both
+pays a little more for its whole-image median background estimate, and
+0.2 ms more again (2.0 -> 2.2 ms p50, measured back-to-back on the same
+machine) for picking the piece's blocks out of the mask: one connected-
+components pass plus a per-cell central sample instead of one block-average
+of the whole bounding box. That buys a preview that reads at all on a real
+capture — it returned None on 96 of 96 frames of the live session before. Both
 stages keep histogram Otsu for pixel-scale inputs and the exact small-N
 Otsu for the 200 cell scores, and `CoachEngine` still gates
 `identify_next` behind the byte-identical preview cache (~14 of 15 frames

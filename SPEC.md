@@ -196,8 +196,48 @@ vision/
                   # hint was right and every later one was random. After: 0
                   # unexplained, 0 resets, 4 locks, and a committed stack
                   # equal to the board in the image.
-                  # Next-piece region: threshold, crop to bounding box, normalize to
-                  # cell grid, match shape signature. Color is a hint, not required.
+                  # Next-piece region: threshold, keep the BLOCK-LIKE
+                  # connected components, derive the cell grid from those
+                  # blocks, match the shape. Color is a hint, not required.
+                  # None of it assumes the crop is tight, centered or
+                  # square, because a real preview box is none of those: the
+                  # captured one (tests/fixtures/live_session) is 94x94
+                  # holding a 19px-celled piece over about a fifth of it,
+                  # off center, under a faint grey "NEXT" caption. The
+                  # caption is the killer — it scores as far from the white
+                  # ground as the pieces do (measured: caption 0.57, I blue
+                  # 0.75, O yellow-green 0.53), so NO threshold separates
+                  # them, and inside the raw bounding box (45x79 for a
+                  # 19x79 piece) every rotation either failed its aspect
+                  # test (a horizontal I at 0.44) or resampled to a
+                  # non-tetromino: None on 96 of 96 frames of the session,
+                  # i.e. no lookahead at all and every hint 1-ply. So the
+                  # furniture is dropped on SHAPE: a block nearly fills its
+                  # own bounding box (>= 0.5; the merged T/S/Z/J/L box is
+                  # 4/6, a glyph stroke or a hollow border far less) and is
+                  # within 8x of the largest block (a cell against four
+                  # merged is 4x; the live caption's fragments are 1-9 px
+                  # against 357-361 px cells). The grid then comes from the
+                  # blocks, per axis: every row and column of a tetromino's
+                  # bounding box holds a cell, so N bands mean N cells
+                  # (centers and cell size read off them, which is what
+                  # makes an inset skin readable), one band means cells
+                  # drawn flush (an even division is then exact), and
+                  # anything else contradicts the hypothesis and is refused
+                  # rather than guessed. Each cell is sampled at its CENTER
+                  # (insets and gridlines sit at the edges), the derived
+                  # cell must be square within 25% (measured: exactly 1.000
+                  # on every synthetic style and every live crop), an
+                  # occupied sample must read >= 0.75 and an empty one
+                  # <= 0.45 (measured: 1.00 and <= 0.40), and two pieces
+                  # matching at once says nothing. Those last gates are
+                  # what refuse TEXT, which is the adversarial case for a
+                  # shape rule: "NEXT" is four shapes in a row, exactly a
+                  # horizontal I's arrangement, and it fails on fill (0.60)
+                  # and on squareness. Returning None is a first-class
+                  # answer here; a confident WRONG piece is worse, since it
+                  # feeds a 2-ply hint planning around a piece the game
+                  # never deals.
   state.py        # GameState tracker: keeps the committed stack as the one
                   # authoritative memory (never None), feeds explain_grid, and
                   # debounces (2 consistent frames) before committing. UNEXPLAINED

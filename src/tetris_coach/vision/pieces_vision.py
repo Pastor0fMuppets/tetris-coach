@@ -40,6 +40,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum, auto
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 
@@ -595,12 +596,73 @@ def explain_grid(
     return Explanation(FrameKind.UNEXPLAINED, stack_rows, None)
 
 
+# --- Next-piece preview ----------------------------------------------------
+
+# A real preview crop is NOT a tight, centered, square box around the piece.
+# The one in tests/fixtures/live_session is 94x94 and holds: a 4-cell piece
+# of 19 px cells occupying about a fifth of the box, a faint grey "NEXT"
+# label in the top-left corner, and white space. The label is the problem: it
+# thresholds in at the SAME distance from the white ground as the piece does
+# (measured on next_00043/00063: label 0.57, I-piece blue 0.75, O-piece
+# yellow-green 0.53 on the score scale), so no threshold separates the two,
+# and the mask's bounding box then runs from the label down to the piece:
+# 45x79 for a piece that is 19x79. Measured on that box, every rotation
+# either failed its aspect gate (a horizontal I: 0.44) or resampled to a
+# shape that is no tetromino, and identify_next returned None on 96 of 96
+# frames of the session — no lookahead at all, every hint 1-ply.
+#
+# So the piece is found by SHAPE, not by the crop: the mask's connected
+# components are filtered down to the block-like ones, and the cell grid is
+# derived from those blocks (their bands and their size) rather than from an
+# even division of whatever the bounding box happens to span.
+
+# A block (one cell, or several cells merged where a skin draws no gap)
+# nearly fills its own bounding box: 1.0 for I and O, 4/6 for the merged
+# T/S/Z/J/L bounding box, which is the floor any real block can reach.
+# Glyph strokes, a box border and a gridline lattice all sit far below it
+# (measured: the live "NEXT" fragments 0.60-0.75 but tiny, a hollow letter
+# ~0.4), so this is what keeps a label out of the bounding box.
+_MIN_BLOCK_SOLIDITY = 0.5
+
+# ...and what keeps SMALL things out: a block is at worst a quarter of the
+# largest block (one cell against four merged into one component), so
+# anything under an eighth of it is not a block of the same rendering.
+# Measured on the live crops: cells 357-361 px, label fragments 1-9 px.
+_MAX_BLOCK_AREA_RATIO = 8.0
+
+# Decisiveness of the per-cell sample (a central window of each derived
+# cell, so insets and gridlines fall outside it). Measured over the whole
+# synthetic style matrix and the live crops, an occupied cell samples 1.00
+# and an empty one at most 0.40; the gap is what refuses text arranged in
+# a row, which samples ~0.6 where a piece samples 1.0.
+_MIN_CELL_FILL = 0.75
+_MAX_EMPTY_FILL = 0.45
+
+# Cells are square: the block size derived along x and the one along y must
+# agree. Measured, they agree EXACTLY (ratio 1.000) on every synthetic style
+# and every live crop; the slack is for antialiasing, not for shape. This is
+# the test the old bounding-box aspect gate was approximating, except it is
+# now measured on the blocks themselves, where an inset skin does not skew
+# it — and it refuses tall solid blobs in a row (fake "letters" at 1.23).
+_MAX_CELL_ASPECT = 1.25
+
+
 def identify_next(image: NDArray[np.uint8]) -> str | None:
     """Recognize the piece shown in a next-piece preview image.
 
-    Thresholds the image, crops the foreground to its bounding box,
-    resamples it to each candidate rotation's cell grid, and returns the
-    piece whose shape signature matches exactly (or ``None``).
+    Thresholds the image, keeps the block-like connected components (the
+    piece; not a label, a border or a gridline lattice), derives the cell
+    grid from those blocks, and returns the piece whose shape matches
+    exactly — or ``None``.
+
+    Game-agnostic by construction: nothing here assumes the piece is
+    centered, that it fills the crop, that the crop is square, or that the
+    crop holds nothing else. What it assumes is that a tetromino is drawn
+    as square cells of one size, which is the same premise the board
+    reader works from.
+
+    ``None`` is a first-class answer. A confidently WRONG piece is worse:
+    it feeds a 2-ply hint that plans around a piece the game never deals.
 
     Scoring is per-pixel distance from the box's own background color,
     estimated as the per-channel median of ALL pixels: a preview box is
@@ -626,52 +688,148 @@ def identify_next(image: NDArray[np.uint8]) -> str | None:
     # the floor (see the measured anchors on MIN_SPREAD).
     mask = scores > max(otsu_threshold_hist(flat), MIN_SPREAD)
 
-    ys, xs = np.nonzero(mask)
-    if ys.size == 0:
+    blocks = _preview_blocks(mask)
+    if blocks is None:
         return None
+    ys, xs = np.nonzero(blocks)
     y0, y1 = int(ys.min()), int(ys.max()) + 1
     x0, x1 = int(xs.min()), int(xs.max()) + 1
-    crop = mask[y0:y1, x0:x1]
+    crop = blocks[y0:y1, x0:x1]
     if crop.shape[0] < 2 or crop.shape[1] < 2:
         return None
 
-    best: tuple[float, str] | None = None
+    rows_profile = crop.any(axis=1)
+    cols_profile = crop.any(axis=0)
+    matched: set[str] = set()
     for rots in ROTATIONS.values():
         for rot in rots:
-            resampled = _resample_to_cells(crop, rot.height, rot.width)
-            if resampled is None:
+            down = _axis_grid(rows_profile, rot.height)
+            across = _axis_grid(cols_profile, rot.width)
+            if down is None or across is None:
                 continue
-            occupancy, fit = resampled
+            aspect = across.cell / down.cell
+            if not 1.0 / _MAX_CELL_ASPECT <= aspect <= _MAX_CELL_ASPECT:
+                continue
+            means = _cell_means(crop, down, across)
             expected = np.zeros((rot.height, rot.width), dtype=bool)
             for r, c in rot.cells:
                 expected[r, c] = True
-            if not np.array_equal(occupancy, expected):
+            if not np.array_equal(means > 0.5, expected):
                 continue
-            if best is None or fit > best[0]:
-                best = (fit, rot.piece)
-    return best[1] if best else None
-
-
-def _resample_to_cells(
-    crop: NDArray[np.bool_], rows: int, cols: int
-) -> tuple[NDArray[np.bool_], float] | None:
-    """Block-average ``crop`` onto a (rows, cols) cell grid.
-
-    Returns ``(occupancy, fit)`` where ``fit`` measures how decisive the
-    block means are (1.0 = every block fully on or off), or ``None`` when
-    the crop's aspect ratio is far from the target grid's.
-    """
-    h, w = crop.shape
-    aspect = (w / h) / (cols / rows)
-    if not 0.6 <= aspect <= 1.7:
+            if float(means[expected].min()) < _MIN_CELL_FILL:
+                continue
+            empty = means[~expected]
+            if empty.size and float(empty.max()) > _MAX_EMPTY_FILL:
+                continue
+            matched.add(rot.piece)
+    # Two different pieces reading the same blocks is an ambiguity no
+    # shape rule can settle (it cannot happen between two rotations of one
+    # grid, whose cell patterns differ by construction), so say nothing.
+    if len(matched) != 1:
         return None
-    ys = np.linspace(0, h, rows + 1).round().astype(int)
-    xs = np.linspace(0, w, cols + 1).round().astype(int)
-    means = np.empty((rows, cols), dtype=np.float64)
-    for r in range(rows):
-        for c in range(cols):
-            block = crop[ys[r] : max(ys[r] + 1, ys[r + 1]), xs[c] : max(xs[c] + 1, xs[c + 1])]
-            means[r, c] = block.mean()
-    occupancy = means > 0.5
-    fit = float(np.abs(means - 0.5).mean() * 2.0)
-    return occupancy, fit
+    return next(iter(matched))
+
+
+def _preview_blocks(mask: NDArray[np.bool_]) -> NDArray[np.bool_] | None:
+    """The block-like part of a preview mask: the piece, without the furniture.
+
+    A preview box holds more than the piece — a "NEXT" label, a border, a
+    gridline lattice — and those score as far from the background as the
+    piece does, so they survive the threshold and, left in, drag the
+    bounding box off the piece entirely. They are dropped on shape:
+
+    - a block nearly fills its own bounding box (:data:`_MIN_BLOCK_SOLIDITY`),
+      which a glyph stroke, a hollow border and a lattice never do;
+    - a block is within :data:`_MAX_BLOCK_AREA_RATIO` of the largest one,
+      which small furniture next to a big piece never is.
+
+    Returns ``None`` when nothing block-like is left (an empty preview box
+    holding only its label).
+    """
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=4
+    )
+    solid: list[tuple[int, int]] = []
+    for index in range(1, count):
+        width = int(stats[index, cv2.CC_STAT_WIDTH])
+        height = int(stats[index, cv2.CC_STAT_HEIGHT])
+        area = int(stats[index, cv2.CC_STAT_AREA])
+        if area >= _MIN_BLOCK_SOLIDITY * width * height:
+            solid.append((area, index))
+    if not solid:
+        return None
+    largest = max(area for area, _ in solid)
+    kept = [index for area, index in solid if area * _MAX_BLOCK_AREA_RATIO >= largest]
+    return np.isin(labels, kept)
+
+
+@dataclass(frozen=True)
+class _AxisGrid:
+    """Where one axis' cells sit, derived from the blocks along it."""
+
+    centers: tuple[float, ...]  # cell centers, in crop pixels
+    half: float  # half-width of the sample window around a center
+    cell: float  # block size along this axis, for the squareness test
+
+
+def _bands(profile: NDArray[np.bool_]) -> list[tuple[int, int]]:
+    """Maximal runs of rows/columns that hold any foreground pixel."""
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, filled in enumerate(profile):
+        if filled and start is None:
+            start = index
+        elif not filled and start is not None:
+            runs.append((start, index))
+            start = None
+    if start is not None:
+        runs.append((start, len(profile)))
+    return runs
+
+
+def _axis_grid(profile: NDArray[np.bool_], count: int) -> _AxisGrid | None:
+    """The ``count`` cell positions along one axis, derived from the blocks.
+
+    EVERY row and column of a tetromino's bounding box holds at least one
+    of its cells (that is what a bounding box is), so the blocks say how
+    many cells the axis has:
+
+    - ``count`` bands: a skin that leaves a gap between cells. The cells
+      are the bands — centers and size read straight off them, which is
+      what makes an inset skin readable (dividing the bounding box evenly
+      instead puts the sample window off the cell by half the inset, and
+      that is what made small inset previews unreadable).
+    - one band: a skin that draws cells flush, where a band cannot be a
+      cell and an even division of the extent is exact (cell size = pitch).
+    - anything else: the blocks contradict this hypothesis — a broken or
+      missing cell — and there is nothing to say. Refused, not guessed.
+    """
+    bands = _bands(profile)
+    if len(bands) == count:
+        centers = tuple((start + stop - 1) / 2.0 for start, stop in bands)
+        size = float(np.median([stop - start for start, stop in bands]))
+        return _AxisGrid(centers, max(size * 0.4, 0.5), size)
+    if len(bands) == 1:
+        pitch = len(profile) / count
+        centers = tuple((index + 0.5) * pitch for index in range(count))
+        return _AxisGrid(centers, max(pitch * 0.25, 0.5), pitch)
+    return None
+
+
+def _cell_means(crop: NDArray[np.bool_], down: _AxisGrid, across: _AxisGrid) -> NDArray[np.float64]:
+    """Foreground fraction of a central window of each derived cell.
+
+    A central window rather than the whole cell: the gap an inset skin
+    leaves between cells, and a gridline drawn over one, are at the cell's
+    EDGE, so sampling the middle reads occupancy without reading the skin.
+    """
+    height, width = crop.shape
+    means = np.empty((len(down.centers), len(across.centers)), dtype=np.float64)
+    for r, center_y in enumerate(down.centers):
+        top = max(0, round(center_y - down.half))
+        bottom = min(height, max(top + 1, round(center_y + down.half) + 1))
+        for c, center_x in enumerate(across.centers):
+            left = max(0, round(center_x - across.half))
+            right = min(width, max(left + 1, round(center_x + across.half) + 1))
+            means[r, c] = crop[top:bottom, left:right].mean()
+    return means

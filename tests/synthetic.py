@@ -166,20 +166,56 @@ def render_board(
     return out.clip(0, 255).astype(np.uint8)
 
 
+def label_color(style: Style) -> tuple[int, int, int]:
+    """A faint caption color for ``style``: a third of the way off the ground.
+
+    Matched to the real capture (tests/fixtures/live_session): a grey
+    ~170 "NEXT" on a ~252 white ground, which scores 0.57 against that
+    background — as far from it as the piece colors themselves (0.53-0.75),
+    so no threshold can separate caption from piece.
+    """
+    return tuple(  # type: ignore[return-value]
+        round(channel + 0.35 * ((0 if channel > 127 else 255) - channel))
+        for channel in style.background
+    )
+
+
 def render_next_preview(
     cells: tuple[tuple[int, int], ...],
     style: Style,
     cell_size: int = 20,
     box_cells: tuple[int, int] = (4, 6),
     seed: int = 0,
+    label: str | None = None,
+    offset: tuple[int, int] | None = None,
 ) -> np.ndarray:
-    """Render a next-piece preview box with the piece roughly centered."""
+    """Render a next-piece preview box.
+
+    The piece is roughly centered unless ``offset`` places its bounding
+    box explicitly. ``label`` draws a faint caption in the top-left corner
+    (games title their preview box "NEXT"), which is what a real preview
+    crop holds besides the piece.
+    """
     box_rows, box_cols = box_cells
     piece_h = max(r for r, _ in cells) + 1
     piece_w = max(c for _, c in cells) + 1
-    off_r = (box_rows - piece_h) // 2
-    off_c = (box_cols - piece_w) // 2
+    off_r, off_c = (
+        offset
+        if offset is not None
+        else (
+            (box_rows - piece_h) // 2,
+            (box_cols - piece_w) // 2,
+        )
+    )
     grid = np.zeros((box_rows, box_cols), dtype=bool)
     for r, c in cells:
         grid[r + off_r, c + off_c] = True
-    return render_board(grid, style, cell_size=cell_size, seed=seed)
+    image = render_board(grid, style, cell_size=cell_size, seed=seed)
+    return image if label is None else with_label(image, style, label)
+
+
+def with_label(image: np.ndarray, style: Style, text: str = "NEXT") -> np.ndarray:
+    """Draw a faint caption into the top-left corner of a preview image."""
+    pil = Image.fromarray(image)
+    ImageDraw.Draw(pil).text((2, 1), text, fill=label_color(style))
+    return np.asarray(pil, dtype=np.uint8)
