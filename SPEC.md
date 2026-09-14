@@ -48,23 +48,34 @@ vision/
                   # locks onto piece colors and the whole board inverts, so a
                   # self-estimated reading is vouched for only when its own
                   # top row is consistent with the premise: a strict majority
-                  # of the OBSERVABLE top-row cells read empty, and what
-                  # hangs off row 0 is ONE TETROMINO AT MOST — every occupied
-                  # top-row cell's column runs out into air, and the runs
-                  # together hold at most 4 cells. A piece spawning or
-                  # falling through row 0 fits that and keeps full
-                  # confidence; a stack grounded at row 0 (legal: side
-                  # columns stacked to the top, versus garbage pushed up)
-                  # does not and is capped to 0.0, because an inverted
-                  # reading's occupied cells are the true background, which
-                  # runs from row 0 down to the stack — grounded, or (when
-                  # the stack has settled a few rows down) a block of empty
-                  # space far bigger than any one piece. A count alone
-                  # separates nothing here: benign and inverted readings BOTH
-                  # show a minority occupied, which is why the earlier "any
-                  # occupied top-row cell caps" rule was total, and why a
-                  # plain majority rule is no rule at all (measured: it lets
-                  # monochrome-theme inversions through at 0.95).
+                  # of the OBSERVABLE top-row cells read empty, those cells
+                  # are ONE PIECE IN FLIGHT (all airborne — not 4-connected
+                  # down to the floor — all in the same airborne component,
+                  # and that component no bigger than a tetromino), and
+                  # board-wide no more than a tetromino's worth of cells
+                  # hangs OVER THE VOID: airborne with nothing at all below
+                  # them in their column. A piece spawning or falling
+                  # through row 0 fits that and keeps full confidence; a
+                  # stack grounded at row 0 (legal: side columns stacked to
+                  # the top, versus garbage pushed up) does not and is
+                  # capped to 0.0, because an inverted reading's occupied
+                  # cells are the true background, which runs from row 0
+                  # down to the stack. A count alone separates nothing here:
+                  # benign and inverted readings BOTH show a minority
+                  # occupied, which is why the earlier "any occupied top-row
+                  # cell caps" rule was total, and why a plain majority rule
+                  # is no rule at all (measured: it lets monochrome-theme
+                  # inversions through at 0.95). Nor is a budget on what
+                  # hangs off row 0 alone: the air over a stack topping out
+                  # at rows 0 and 1 is four cells, a tetromino exactly, so
+                  # the whole-board rule is what refuses it (measured: 142
+                  # of 300 seeded legal near-top-out boards read INVERTED
+                  # above the gate, up to 0.97, under the per-column budget;
+                  # 0 under this one). The budget is spent on cells over the
+                  # void rather than on every airborne cell because a
+                  # hole-riddled real stack falls into floating bands that
+                  # are not pieces (measured: budgeting those refused 257 of
+                  # 360 legal piece-in-flight frames).
                   # The classifier stays pure of layout, but not of what the
                   # capture cannot see: it takes the same unobservable-cell
                   # set the engine does. When a game floats its NEXT preview

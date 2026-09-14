@@ -156,46 +156,64 @@ def _top_row_background(
     return np.asarray(np.median(top, axis=0), dtype=np.float64)
 
 
-def _hangs_one_piece_at_most(
+def _flood(solid: NDArray[np.bool_], seeds: list[tuple[int, int]]) -> NDArray[np.bool_]:
+    """Cells of ``solid`` reachable from ``seeds`` by 4-connected steps."""
+    rows, cols = int(solid.shape[0]), int(solid.shape[1])
+    seen = np.zeros((rows, cols), dtype=np.bool_)
+    stack = [(r, c) for r, c in seeds if solid[r, c]]
+    for cell in stack:
+        seen[cell] = True
+    while stack:
+        r, c = stack.pop()
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if 0 <= nr < rows and 0 <= nc < cols and solid[nr, nc] and not seen[nr, nc]:
+                seen[nr, nc] = True
+                stack.append((nr, nc))
+    return seen
+
+
+def _support(
     occupancy: NDArray[np.bool_],
-    columns: list[int],
     unobservable: frozenset[tuple[int, int]],
-) -> bool:
-    """Is everything hanging off the top row one tetromino at most?
+) -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
+    """Split the occupied cells into ``(airborne, grounded)``.
 
-    Walks down from ``occupancy[0, col]`` for each of ``columns`` (the
-    top-row cells that read occupied) and asks two things of what it
-    finds:
+    Grounded means 4-connected to the bottom row through occupied cells:
+    a stack rests on the floor, and a piece that lands joins it (that is
+    what landing IS). Connectivity, not the cell directly below, is what
+    decides — an overhang has air under it and is still part of the stack
+    it juts out of, so support cannot be read column by column.
 
-    - Each run must END in air. A column occupied from row 0 to the floor
-      is a stack GROUNDED at the top, not a piece in flight.
-    - The runs together must hold no more cells than a tetromino has. One
-      piece is the whole budget: nothing else can legitimately hang off
-      row 0 with air under it.
-
-    Cells the capture cannot read are evidence for neither: they are
-    skipped, so they neither end a run nor spend the budget.
+    Cells the capture cannot read are evidence for neither side: they
+    neither ground a component nor conduct support to one, exactly as
+    they are left out of every other rule here.
     """
-    rows = int(occupancy.shape[0])
-    cells = 0
-    for col in columns:
-        run = 1  # row 0 itself
-        airborne = False
-        for r in range(1, rows):
-            if (r, col) in unobservable:
-                continue
-            if not bool(occupancy[r, col]):
-                airborne = True
-                break
-            run += 1
-            if run > _PIECE_CELLS:
-                break
-        if not airborne:
-            return False
-        cells += run
-        if cells > _PIECE_CELLS:
-            return False
-    return True
+    rows, cols = int(occupancy.shape[0]), int(occupancy.shape[1])
+    solid = np.array(occupancy, dtype=np.bool_)
+    for r, c in unobservable:
+        if 0 <= r < rows and 0 <= c < cols:
+            solid[r, c] = False
+    grounded = _flood(solid, [(rows - 1, c) for c in range(cols)])
+    return solid & ~grounded, grounded
+
+
+def _over_the_void(
+    airborne: NDArray[np.bool_],
+    grounded: NDArray[np.bool_],
+) -> NDArray[np.bool_]:
+    """Airborne cells with no grounded cell anywhere below them.
+
+    The strongest form of "hanging": not merely unsupported, but with
+    nothing under it all the way down to the floor. A stack band cut
+    loose by a buried hole is airborne and NOT over the void — the rest
+    of its own column still stands under it — which is why this, and not
+    the raw airborne count, is what a board-wide budget can be spent on.
+    """
+    supported_below = np.zeros_like(grounded)
+    # reach[r, c] = "a grounded cell lies at or below row r in column c"
+    reach = np.logical_or.accumulate(grounded[::-1], axis=0)[::-1]
+    supported_below[:-1] = reach[1:]
+    return airborne & ~supported_below
 
 
 def _top_row_vouchable(
@@ -208,38 +226,58 @@ def _top_row_vouchable(
     sampled cells really are background; past that the estimate locks onto
     piece colors and every score in the frame inverts (see
     :func:`cell_scores`). The reading itself is the only evidence
-    available, so two things are asked of it, both over the OBSERVABLE
-    top-row cells only:
+    available, so it is asked to show what a board carrying ONE PIECE IN
+    FLIGHT would show, and nothing else:
 
-    1. A strict majority of them must read empty. More cells occupied than
-       not contradicts the estimator's own premise outright — and no
-       single falling piece can put that many cells in one row.
-    2. What hangs off the top row must be ONE PIECE AT MOST
-       (:func:`_hangs_one_piece_at_most`): every occupied top-row cell's
-       column must run out into air, and the runs together must hold no
-       more cells than a tetromino has.
+    1. A strict majority of the OBSERVABLE top-row cells must read empty.
+       More cells occupied than not contradicts the estimator's own
+       premise outright — and no single falling piece can put that many
+       cells in one row.
+    2. The occupied top-row cells must BE that piece: every one of them
+       airborne (:func:`_support`), all in the same airborne component,
+       and that component no bigger than a tetromino. A stack reaching
+       row 0 is grounded instead — and so, transitively, is an inverted
+       reading's "piece", because the cells it calls occupied are the
+       true background, which reaches the floor down some column often
+       enough.
+    3. Board-wide, no more than a tetromino's worth of cells may hang
+       OVER THE VOID (:func:`_over_the_void`) — airborne with nothing
+       below them at all. One piece falling over empty columns is the
+       only thing a legal board can show there.
 
-    Rule 2 is what separates the two states a count alone cannot. A piece
-    spawning or falling through row 0 leaves board under it; a stack
-    reaching row 0 continues down — and an INVERTED reading is always of
-    the second kind, because the cells it calls occupied are the true
-    board background, which runs from row 0 down to the top of the stack.
-    (A count cannot separate them at all: with m of N top-row cells truly
-    non-background, a benign reading shows m occupied and an inverted one
-    shows N - m, and inversion needs m > N/2, so both land under N/2.
-    Measured: a plain majority rule lets six monochrome-theme inversions
-    through at confidence 0.95.) The cell budget is the half that catches
-    the inversions whose columns DO run out into air: the true empty
-    region above a near-topped-out stack is many cells deep across several
-    columns, which is nothing a single tetromino can be. Measured over
-    1500 seeded legal near-top-out boards: two inversions above the gate
-    without the budget (hanging 8 and 9 cells), none with it.
+    Rule 2 is what separates the two states a count alone cannot: a piece
+    spawning or falling through row 0 hangs over the board, a stack
+    reaching row 0 stands on it. (A count cannot separate them at all:
+    with m of N top-row cells truly non-background, a benign reading
+    shows m occupied and an inverted one shows N - m, and inversion needs
+    m > N/2, so both land under N/2. Measured: a plain majority rule lets
+    six monochrome-theme inversions through at confidence 0.95.)
 
-    What is left is only what a legal board can no longer be: a frame
-    whose true empty space above the stack is itself tetromino-sized and
-    tetromino-shaped while six-plus columns are grounded at row 0. And it
-    is confined to the bootstrap path — :class:`GridClassifier`'s memory,
-    once anchored, never consults this.
+    Rule 3 is the one that reads the REST of the board, and it is there
+    because rule 2 is satisfied by more than pieces. The air above a
+    near-topped-out stack is routinely tetromino-sized — four columns
+    topping out at row 1 leave four cells of air over a stack grounded at
+    row 0 — so inverted, it is piece-shaped and piece-sized and rule 2
+    waves it through. What gives it away is everything else the inversion
+    turns upside down: the stack's buried holes become cells hanging over
+    the void, and there are many more of them than a piece could account
+    for. Measured over 300 seeded legal near-top-out boards per style
+    (six-plus columns grounded at row 0, no complete row, holes below):
+    142 read WRONG above the gate at up to 0.97 confidence with the
+    earlier per-column cell budget, 0 with these rules — and the family
+    gained no exact reading either way, since 12 to 32 cells hang over
+    the void in every one of those inversions against a budget of four.
+    Availability is what keeps the budget off the raw airborne count: on
+    360 synthetic frames of a legal board with a piece falling through
+    row 0, a whole-board airborne budget vouched only 103 (a messy stack
+    cut into floating bands by its own holes), where rules 2 and 3 vouch
+    for 350.
+
+    What is left is a frame whose true air above the stack is itself
+    tetromino-sized and tetromino-shaped AND drains to the floor down a
+    covered well, so that nothing else hangs. It is confined to the
+    bootstrap path — :class:`GridClassifier`'s memory, once anchored,
+    never consults this.
     """
     cols = int(occupancy.shape[1])
     observable = [c for c in range(cols) if (0, c) not in unobservable]
@@ -248,7 +286,13 @@ def _top_row_vouchable(
         return True
     if len(occupied) * 2 > len(observable):
         return False
-    return _hangs_one_piece_at_most(occupancy, occupied, unobservable)
+    airborne, grounded = _support(occupancy, unobservable)
+    if not all(bool(airborne[0, c]) for c in occupied):
+        return False
+    piece = _flood(airborne, [(0, occupied[0])])
+    if int(piece.sum()) > _PIECE_CELLS or not all(bool(piece[0, c]) for c in occupied):
+        return False
+    return int(_over_the_void(airborne, grounded).sum()) <= _PIECE_CELLS
 
 
 def cell_scores(

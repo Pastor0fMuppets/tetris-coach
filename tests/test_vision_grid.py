@@ -330,10 +330,10 @@ def near_top_out_with_air_grid() -> np.ndarray:
 
 
 @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
-def test_airborne_inversion_is_refused_by_the_cell_budget(style) -> None:  # type: ignore[no-untyped-def]
+def test_airborne_inversion_is_refused(style) -> None:  # type: ignore[no-untyped-def]
     # The half of the inversion family the airborne test alone lets past:
     # here the inverted reading's contaminated columns really do run out
-    # into air, so only the size of what hangs there gives it away. Left
+    # into air, so only the SIZE of what hangs there gives it away. Left
     # unbudgeted this was measured wrong above the gate at 0.95 on the
     # monochrome styles (and twice in a 1500-board seeded sweep of legal
     # near-top-out boards).
@@ -343,6 +343,98 @@ def test_airborne_inversion_is_refused_by_the_cell_budget(style) -> None:  # typ
     assert bool(np.array_equal(occupancy, grid)) or confidence < CoachConfig().min_confidence, (
         f"wrong reading above the gate: {style.name} conf={confidence:.3f}"
     )
+
+
+def shallow_air_near_top_out_grid() -> np.ndarray:
+    """Legal, and the exact size of a tetromino's worth of air: six columns
+    grounded at row 0, four topping out at row 1.
+
+    Cols 0-5 reach row 0; cols 6-9 start at row 1, so the air above them
+    is FOUR cells — one piece's budget exactly, and contiguous, so
+    inverted it is both piece-sized and piece-shaped. What still gives
+    the inversion away is the rest of the board: the buried holes that
+    keep rows 1-19 from being complete lines turn into cells hanging
+    over the void, far past a piece's worth.
+    """
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[:, 0:6] = True
+    grid[1:, 6:10] = True
+    for r in range(1, 20):  # a hole per row: a complete line would clear
+        grid[r, (3 * r) % 10] = False
+    assert not grid.all(axis=1).any(), "a complete row would have cleared"
+    return grid
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_tetromino_sized_air_over_a_top_row_stack_is_refused(style) -> None:  # type: ignore[no-untyped-def]
+    # The regression the per-column cell budget shipped: four cells of air
+    # over four columns is exactly one tetromino, so the budget vouched
+    # for the INVERTED reading of this board at ~0.95 on the monochrome
+    # styles. Nothing here is exotic — a stack topping out at rows 0 and 1
+    # is the position a near-top-out player is actually in.
+    grid = shallow_air_near_top_out_grid()
+    image = render_board(grid, style, cell_size=20)
+    occupancy, confidence = classify_grid(image)
+    assert bool(np.array_equal(occupancy, grid)) or confidence < CoachConfig().min_confidence, (
+        f"wrong reading above the gate: {style.name} conf={confidence:.3f}"
+    )
+
+
+def seeded_near_top_out(rng: np.random.Generator, rows: int = 20, cols: int = 10) -> np.ndarray:
+    """A legal near-top-out board: 6+ columns grounded at row 0, no complete row."""
+    grid = np.zeros((rows, cols), dtype=bool)
+    tops = rng.integers(1, 4, size=cols)
+    tops[rng.permutation(cols)[: int(rng.integers(6, 10))]] = 0
+    for c in range(cols):
+        grid[int(tops[c]) :, c] = True
+    for _ in range(int(rng.integers(4, 14))):  # buried holes
+        c = int(rng.integers(0, cols))
+        grid[int(rng.integers(int(tops[c]) + 1, rows)), c] = False
+    for r in range(rows):  # a complete line would have cleared
+        if grid[r].all():
+            grid[r, int(rng.choice([c for c in range(cols) if tops[c] < r]))] = False
+    return grid
+
+
+@pytest.mark.parametrize("style", [STYLES[1], STYLES[5]], ids=lambda s: s.name)
+def test_seeded_near_top_out_boards_are_never_wrong_above_the_gate(style) -> None:  # type: ignore[no-untyped-def]
+    # Sweep of the whole family, on the two MONOCHROME styles (one piece
+    # color: the worst case, since the inverted reading's classes separate
+    # just as cleanly as the true one's). 142 of these 300 read wrong
+    # above the gate — up to confidence 0.97, every cell inverted — under
+    # the per-column cell budget; none of them read exactly then or now,
+    # so refusing the family costs nothing and the memory is what
+    # recovers it (see TestGridClassifier).
+    rng = np.random.default_rng(4242)
+    gate = CoachConfig().min_confidence
+    for i in range(300):
+        grid = seeded_near_top_out(rng)
+        image = render_board(grid, style, cell_size=20, seed=i)
+        occupancy, confidence = classify_grid(image)
+        assert bool(np.array_equal(occupancy, grid)) or confidence < gate, (
+            f"wrong reading above the gate: {style.name} seed={i} conf={confidence:.3f}"
+        )
+
+
+def test_a_piece_over_a_hole_riddled_stack_stays_vouched() -> None:
+    # The availability side of the board-wide budget, and why it is spent
+    # on cells hanging OVER THE VOID rather than on every unsupported
+    # cell: buried holes cut a real stack into bands that touch the floor
+    # nowhere, and those bands are NOT a second piece in flight — the rest
+    # of their own columns stands under them. Budgeting raw airborne cells
+    # instead refused 257 of 360 frames of this shape.
+    grid = np.zeros((20, 10), dtype=bool)
+    grid[8:, :] = True
+    grid[12, :] = False  # a full-width band of holes: everything above floats
+    grid[19, 4] = False
+    grid[0, 3:7] = True  # an I piece across the top row
+    airborne_band = int(grid[8:12].sum())
+    assert airborne_band > 4, "the band must be more than a piece's worth"
+    for style in STYLES:
+        image = render_board(grid, style, cell_size=20)
+        occupancy, confidence = classify_grid(image)
+        np.testing.assert_array_equal(occupancy, grid, err_msg=style.name)
+        assert confidence >= CoachConfig().min_confidence, style.name
 
 
 @pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
