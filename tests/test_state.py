@@ -501,6 +501,10 @@ class TestTheEnteringPieceHint:
 
     STACK = rows_of(bottom_lines("###....###"))
     FRAGMENT = ((0, 4), (0, 5))
+    # A piece entering EDGE-ON: two cells in one column, which a vertical
+    # I fits — and so do a J, an L, an S and a Z, so shape alone still
+    # names nothing.
+    COLUMN = ((0, 4), (1, 4))
 
     def test_the_departing_preview_names_the_entering_piece(self) -> None:
         tracker = GameStateTracker(confirm_frames=2)
@@ -589,6 +593,64 @@ class TestTheEnteringPieceHint:
         # ...so the fragment sitting at the top edge is nameless again,
         # instead of being called an O for the rest of the session.
         assert feed(tracker, merge(second, self.FRAGMENT), "I", times=3) == []
+        assert tracker.committed.falling_piece is None
+
+    def test_a_flip_the_box_is_readable_on_both_sides_of_names_the_piece(self) -> None:
+        # The flip the accelerator runs on, in its plainest form: the box
+        # is read on two consecutive frames and the value changes between
+        # them. Nothing can have been dealt in between except the piece
+        # that left, so the column at the top edge — which a vertical I, a
+        # J, an L, an S and a Z all fit — is the I.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, None)
+        column = merge(self.STACK, self.COLUMN)
+        assert feed(tracker, column, "I") == []  # None -> I reports no deal
+        assert feed(tracker, column, "Z") == []  # I -> Z: the I is entering
+        assert feed(tracker, column, "Z") == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "I"
+
+    def test_a_flip_read_after_the_box_went_dark_names_nothing(self) -> None:
+        # The same flip, with the box dark across the frames it happened
+        # in. A flip only ever says "the piece that was here has been
+        # dealt" — it does not say WHEN, and across a dark burst long
+        # enough to cover a whole tenure the value has moved on twice, so
+        # the piece it names entered a deal ago and is already on the
+        # board. That is the "confused two pieces" failure, and the only
+        # thing that rules it out is having read the box on the frame
+        # before as well. Here the box shows the I, goes dark, and comes
+        # back showing a Z: nothing says whether the I or something after
+        # it is the column at the top edge, so nothing is named.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, None)
+        column = merge(self.STACK, self.COLUMN)
+        assert feed(tracker, column, "I") == []
+        assert feed(tracker, column, None, times=2) == []
+        assert feed(tracker, column, "Z", times=3) == []
+        assert tracker.committed.falling_piece is None
+
+    def test_a_hint_whose_own_deal_ended_under_it_names_no_later_fragment(self) -> None:
+        # A hint is evidence about ONE deal and expires with it. The
+        # preview reports a deal by changing at the moment the new piece
+        # spawns, which is the frame a lock commit is debouncing, so the
+        # hint of the deal now beginning is always the young one; a hint
+        # older than that debounce names the piece that has just LOCKED.
+        # Here the preview goes dark the moment the O is dealt, so no
+        # fresh hint arrives, and the fragment entering behind the O must
+        # not inherit the O's name.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        entering = merge(self.STACK, self.FRAGMENT)
+        feed(tracker, entering, "I", times=2)  # the O is dealt: preview O -> I
+        assert tracker.committed.falling_piece == "O"
+        # The O hard-drops and locks, with the next piece already at the
+        # top edge behind it.
+        dropped = merge(self.STACK, piece_cells("O", 0, 18, 4), self.FRAGMENT)
+        assert feed(tracker, dropped, "I", times=2) == [GameEvent.PIECE_LOCKED]
+        assert tracker.committed.stack_rows == merge(self.STACK, piece_cells("O", 0, 18, 4))
+        # Counting locks let this one through: exactly one lock has
+        # happened since the hint was set either way. Its AGE is what
+        # separates them.
+        assert feed(tracker, dropped, "I", times=3) == []
         assert tracker.committed.falling_piece is None
 
     def test_a_resync_drops_the_hint(self) -> None:

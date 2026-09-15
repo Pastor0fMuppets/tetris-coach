@@ -145,9 +145,15 @@ class GameStateTracker:
         # The last non-None preview reading, and the one it replaced.
         self._preview_piece: str | None = None
         self._entering_hint: str | None = None
-        # Verified locks the hint has outlived. A hint is evidence about ONE
-        # deal, so it must not outlive it (see update()).
-        self._hint_locks = 0
+        # Whether the PREVIOUS frame could read the preview box. A flip is
+        # only news of the deal happening NOW when the box was readable on
+        # both sides of it (see update()).
+        self._preview_read = False
+        # Frames since the hint was set. A hint is evidence about ONE deal,
+        # so it must not outlive it, and its age is how the rules below
+        # tell the flip reporting the deal now committing from a flip left
+        # over from a deal ago (see update()).
+        self._hint_age = 0
 
     @property
     def committed(self) -> Snapshot:
@@ -179,10 +185,26 @@ class GameStateTracker:
         # seconds. Only a change of a KNOWN preview counts: the preview
         # reading is None whenever the box is mid-animation or unreadable,
         # and None -> X says nothing about what was dealt.
+        # ...and only a flip the box is in a position to be REPORTING. A
+        # flip says "the piece that was here has been dealt"; it does not
+        # say WHEN. The box goes unreadable in bursts (mid-animation,
+        # mid-flash, a pale piece against a pale ground), and across a
+        # burst long enough to cover a whole tenure the box's value has
+        # moved on TWICE: X -> [Y never read] -> Z reads as a flip naming
+        # X, a whole deal after X entered — the "confused two pieces"
+        # failure, and it is refused. Two consecutive readable frames
+        # cannot straddle two deals (a tenure is ~14-22 frames here), so
+        # the flip is sound exactly when the previous frame read the box
+        # too. Measured on the spawn_latency window: the T dealt at 00198
+        # sat unread in the box for 18 frames, and the flip at 00216
+        # carried the I before it.
+        previously_read = self._preview_read
+        self._preview_read = next_piece is not None
+        self._hint_age += 1
         if next_piece is not None and next_piece != self._preview_piece:
-            if self._preview_piece is not None:
+            if self._preview_piece is not None and previously_read:
                 self._entering_hint = self._preview_piece
-                self._hint_locks = 0
+                self._hint_age = 0
             self._preview_piece = next_piece
         explanation = explain_grid(
             rows,
@@ -237,7 +259,6 @@ class GameStateTracker:
                 # attach). What the preview shows still holds, but which
                 # piece was dealt into THIS board does not.
                 self._entering_hint = None
-                self._hint_locks = 0
                 return [GameEvent.BOARD_RESET]
             # Pending is untouched: a torn frame between the confirmations
             # of a real transition must not restart its count.
@@ -295,20 +316,21 @@ class GameStateTracker:
             # The pre-lock piece is absorbed into the stack; from now on
             # the anchor is the residual spawn (or nothing).
             self._last_falling = explanation.falling
-            # ...and the deal the hint describes is over. A lock is the
-            # game dealing again, and the preview reports that deal by
-            # changing — one frame BEFORE this commit, since the flip and
-            # the spawn are the same event and the commit is debounced. So
-            # the hint of the deal now beginning has already been set (and
-            # the count reset with it); a hint that reaches a SECOND lock
-            # is one whose deal came and went without the preview ever
-            # being read, and it names a piece from a deal ago. Left
-            # standing it names every later fragment: the preview is
-            # unreadable in bursts (mid-animation, mid-flash), and one
-            # burst spanning a whole tenure would poison every top-edge
-            # naming after it.
-            self._hint_locks += 1
-            if self._hint_locks > 1:
+            # ...and the deal the hint describes is over unless the hint
+            # IS this deal's. A lock is the game dealing again, and the
+            # preview reports that deal by changing at the moment the new
+            # piece spawns — which is the frame this commit is debouncing,
+            # so the hint of the deal now beginning is already set and its
+            # age is at most the debounce (plus the one frame the flip may
+            # lead the lock becoming visible by). An OLDER hint is one
+            # whose own deal has just ended under it: it names the piece
+            # that locked, not the fragment now at the top edge, and left
+            # standing it would name every later fragment too — the
+            # preview is unreadable in bursts, and one burst spanning a
+            # whole tenure would poison every top-edge naming after it.
+            # Counting locks instead of frames could not tell the two
+            # apart: both show exactly one lock since the hint was set.
+            if self._hint_age > self._confirm_frames:
                 self._entering_hint = None
         return self._events(previous, candidate, kind)
 
