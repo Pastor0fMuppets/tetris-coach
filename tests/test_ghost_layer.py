@@ -638,3 +638,48 @@ def test_a_piece_sized_promotion_still_passes_the_budget() -> None:
     reading = _classify_scored(colors, BLACK_GROUND, frozenset(), None)
     assert reading.occupancy[grid([(7, 3), (7, 4), (7, 5), (6, 4)])].all()
     assert reading.confidence >= 0.15, f"a real pale piece read at {reading.confidence:.3f}"
+
+
+# --- The same default, on the branch with no threshold behind it --------
+#
+# With no cell reaching MIN_SPREAD there is no split to read the band
+# against: the band IS the reading, and it reports the flat structural
+# 0.5 a uniform-empty frame does. That is right for a pale piece spawning
+# onto a clear board — the frame a coach is most needed on — and wrong
+# for anything translucent drawn over one, which is the same phantom as
+# above at three times the gate instead of two.
+PANELS = {
+    # A pause or menu panel floating in the middle of the board.
+    "floating-panel": [(r, c) for r in range(3, 9) for c in range(1, 9)],
+    # One that reaches the floor, so nothing about it hangs.
+    "grounded-panel": [(r, c) for r in range(6, ROWS) for c in range(COLS)],
+    # A thin full-width banner: small, but over open board.
+    "banner": [(r, c) for r in (4, 5) for c in range(COLS)],
+}
+
+
+@pytest.mark.parametrize("name", sorted(PANELS))
+def test_a_translucent_panel_on_a_clear_board_is_refused(name: str) -> None:
+    colors = np.zeros((ROWS, COLS, 3), dtype=np.float32)
+    for r, c in PANELS[name]:
+        colors[r, c] = at_score(SHADE)
+    scores = _distance_scores(colors, BLACK_GROUND)
+    assert float(scores.max()) < MIN_SPREAD, f"{name}: this is not the band-only branch"
+    reading = _classify_scored(colors, BLACK_GROUND, frozenset(), None)
+    assert reading.confidence == 0.0, f"{name}: read as board content at {reading.confidence:.3f}"
+
+
+def test_a_pale_piece_spawning_on_a_clear_board_survives_the_same_guard() -> None:
+    """The case the branch exists for, which the guard must not cost.
+
+    A tetromino in the air is one piece in flight, four cells of a
+    hundred-odd, and completes no row — inside every bound — so it still
+    reads, and still says so with the structural number.
+    """
+    colors = np.zeros((ROWS, COLS, 3), dtype=np.float32)
+    for r, c in LOST_PIECE:
+        colors[r, c] = at_score(SHADE)
+    reading = _classify_scored(colors, BLACK_GROUND, frozenset(), None)
+    assert reading.occupancy[grid(LOST_PIECE)].all()
+    assert int(reading.occupancy.sum()) == len(LOST_PIECE)
+    assert reading.confidence == pytest.approx(_UNIFORM_EMPTY_CONFIDENCE)

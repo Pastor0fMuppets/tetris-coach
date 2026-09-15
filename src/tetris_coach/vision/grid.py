@@ -1274,6 +1274,21 @@ def _band_only_reading(
     The confidence is :data:`_UNIFORM_EMPTY_CONFIDENCE`, the number this
     branch already reports, and for the reason it reports it: the
     reading is structurally grounded rather than measured from a gap.
+
+    Which makes :func:`_content_budget` the whole of this branch's
+    defense, and it is needed here MORE than on the two-class path rather
+    than less. There the promotion is bounded first by the threshold —
+    only cells Otsu dropped are promoted — and the number the frame
+    reports is a measured gap that a shading can lose. Here there is no
+    threshold to drop anything and no gap to measure: the band IS the
+    reading and 0.5 is a flat structural number, so a translucent pause
+    or menu panel over a near-empty board would otherwise be reported as
+    board content at three times the frame gate and committed as stack.
+    The two guards the two-class path adds on top of the budget are both
+    no-ops here and are deliberately not written: nothing on the board
+    outscores the band, so :func:`_clearance_above` is ``inf`` by
+    construction, and :data:`_LAYER_CONFIDENCE_CEILING` is the number
+    this branch already reports.
     """
     # No cell reaches MIN_SPREAD here, so the solid class the badge test
     # consults is empty by construction.
@@ -1284,6 +1299,9 @@ def _band_only_reading(
     painted = _own_paint_cells(colors, background, unobservable, own_paint)
     if painted is not None and bool((band & painted).any()):
         return _Reading(empty, 0.0, None)
+    observable = _observable((int(band.shape[0]), int(band.shape[1])), unobservable)
+    if not _content_budget(band, band, observable, unobservable):
+        return _Reading(band.copy(), 0.0, None)
     return _Reading(band.copy(), _UNIFORM_EMPTY_CONFIDENCE, None)
 
 
