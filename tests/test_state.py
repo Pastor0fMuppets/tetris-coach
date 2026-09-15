@@ -890,6 +890,53 @@ class TestTheEnteringPieceHint:
         assert feed(tracker, merge(new_world, self.FRAGMENT), "I", times=3) == []
         assert tracker.committed.falling_piece is None
 
+    def test_a_resync_keeps_a_hint_from_inside_the_run_it_adopts(self) -> None:
+        # The clause the user's own window turns on: the game wipes the
+        # field, deals a piece, and the box flips as that piece's first
+        # cells reach the top edge — all inside the run of frames the
+        # resync is adopting. The flip reports THIS board's deal, so the
+        # hint survives the resync and names the fragment the strip held
+        # back, instead of leaving it nameless for a second.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        new_world = merge(rows_of(bottom_lines("#.#.#.#.#.")), self.FRAGMENT)
+        events = []
+        for _ in range(4):
+            events = feed(tracker, new_world, "I")
+        assert events == [GameEvent.BOARD_RESET]
+        assert feed(tracker, new_world, "I", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "O"
+
+    def test_a_resync_into_a_new_game_names_its_first_piece_from_the_old_one(self) -> None:
+        # ...and what that clause ASSUMES, pinned. "The deal it reports is
+        # this board's own" holds when the new world continues the same
+        # piece sequence — an end-of-round field wipe, rising garbage, a
+        # mid-game attach — and a genuine new game or restart is the one
+        # BOARD_RESET case where it does not: the departing name is the
+        # OLD game's preview content, and what the new game deals first
+        # has nothing to do with it (right about one time in seven).
+        # Nothing in the frames tells the two apart — both show a field
+        # replaced wholesale and a box that changed — so this is bounded,
+        # not prevented. Here the old game previewed an O and the new one
+        # deals an L.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        new_world = merge(rows_of(bottom_lines("#.#.#.#.#.")), self.FRAGMENT)
+        for _ in range(4):
+            feed(tracker, new_world, "I")
+        feed(tracker, new_world, "I", times=2)
+        assert tracker.committed.falling_piece == "O"  # the stale name
+        # The bound: the L's next row down fits no O, so the name goes on
+        # the frame that contradicts it and the piece names itself. The
+        # resync's own board is untouched throughout — a hinted name is
+        # never evidence, so it cannot have got into the stack.
+        stripped = tracker.committed.stack_rows
+        descending = merge(stripped, ((0, 4), (1, 4), (1, 5)))
+        events = feed(tracker, descending, "I") + feed(tracker, descending, "I")
+        assert events == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "L"
+        assert tracker.committed.stack_rows == stripped
+
     def test_a_piece_seen_whole_is_still_an_observation(self) -> None:
         # The other half of the rule: a name the frame's own structure
         # produced is evidence exactly as it always was.

@@ -407,6 +407,20 @@ class GameStateTracker:
                 # flips O -> I on 00158 as the O's first cells appear at
                 # the top edge, and the reset four frames later threw that
                 # away and left the O nameless until 00175.
+                #
+                # What that ASSUMES is that the new world continues the
+                # same piece sequence — true of a field wipe, of rising
+                # garbage and of a mid-game attach, and NOT true of a new
+                # game or a restart, where the departing name is the old
+                # game's preview content and what is dealt first has
+                # nothing to do with it (right about one time in seven).
+                # Nothing in the frames separates the two: both show a
+                # field replaced wholesale and a box that changed. So it
+                # is bounded rather than prevented — the kept hint is a
+                # hypothesis like any other, the first frame that
+                # contradicts it takes the name back (the retraction
+                # above), and it can decide nothing structural. Pinned
+                # both ways in test_state.py.
                 if self._hint_age >= run_length:
                     self._entering_hint = None
                 return [GameEvent.BOARD_RESET]

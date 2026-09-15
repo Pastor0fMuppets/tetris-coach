@@ -51,7 +51,15 @@ flips O -> I on 00158 — the same frame the O's first two cells appear at
 the top edge. Four frames later the resync fires on that same run of
 frames and dropped the hint naming the very piece it was resyncing onto.
 A resync now keeps a hint set INSIDE the run it is adopting, and drops
-only one from before it.
+only one from before it. That assumes the new world continues the same
+piece SEQUENCE, which is what a field wipe (this window), garbage and a
+mid-game attach all do. A new game or a restart does not: there the
+departing name is the old game's preview content and the first piece
+dealt has nothing to do with it. Nothing in the frames tells those apart
+— both show a field replaced wholesale and a box that changed — so the
+clause is bounded rather than safe: the kept hint is a hypothesis, the
+retraction below takes the name back on the first frame that contradicts
+it, and it decides nothing structural.
 
 Measured over this window (161 frames, 124 past the confidence gate):
 

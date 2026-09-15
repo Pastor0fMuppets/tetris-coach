@@ -843,7 +843,16 @@ vision/
                   # adopting — what the preview shows still holds, what was
                   # dealt into THIS board does not — but KEEPS one set
                   # inside the run of frames it is resyncing onto, which is
-                  # this board's own deal. That clause is the wait the user
+                  # this board's own deal. That last step assumes the new
+                  # world continues the same piece SEQUENCE: true of a
+                  # field wipe, of garbage and of a mid-game attach, false
+                  # of a new game or a restart, where the departing name
+                  # belongs to the old game and the first piece dealt has
+                  # nothing to do with it. No frame separates the two, so
+                  # the clause is bounded rather than safe: the kept hint
+                  # is a hypothesis, rule (4) takes the name back on the
+                  # first frame that contradicts it, and it decides nothing
+                  # structural. That clause is the wait the user
                   # reported: the game wipes the field, deals an O, the box
                   # flips O -> I on the frame the O's first two cells reach
                   # the top edge, and the reset four frames later threw
