@@ -384,6 +384,44 @@ class TestTheOracleOwesNothingToTheTracker:
             engine = compute_overlap_mask(Rect(*spec.board_rect), Rect(*spec.next_rect), spec.rows)
             assert overlap_mask(spec) == engine == frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
 
+    def test_the_paint_it_finds_is_the_paint_a_different_reader_finds(
+        self, truth: dict[str, Any]
+    ) -> None:
+        """A second opinion on the coach's own overlay, written years apart.
+
+        ``tests.layers.pen_stroked_cells`` was written for the shipped
+        classifier's own tests. It reads the RGB PNG rather than the BGR
+        array, at a different channel tolerance, and counts raw pen pixels
+        anywhere in a cell rather than distinguishing the hint's outline
+        from its rotation badge. Two independent measurements of the same
+        769 painted cells, over 542 frames, and they agree exactly.
+        """
+        from .layers import pen_stroked_cells
+
+        for window in truth["windows"]:
+            for frame in window["frames"]:
+                mine = {(r, c) for r, c in frame["own_paint"]}
+                mine |= {(r, c) for r, c in frame.get("badge", [])}
+                path = FIXTURES / window["window"] / f"board_{frame['frame']}.png"
+                assert mine == pen_stroked_cells(path, window["rows"]), (
+                    window["window"],
+                    frame["frame"],
+                )
+
+    def test_a_sampled_window_is_not_offered_as_a_film(self) -> None:
+        """``pale_preview`` is sampled, and the oracle reads windows as films.
+
+        A piece is named from whichever frame of its episode shows it
+        whole, and a resting piece is called settled because the frames
+        after it never move it. Neither sentence means anything across
+        frames 00273, 00280, 00290, 00300 -- so that window is marked and
+        left out rather than quietly derived into nonsense.
+        """
+        from tetris_coach.truth.windows import by_name
+
+        assert by_name("pale_preview").consecutive is False
+        assert "pale_preview" not in {spec.name for spec in CONSECUTIVE}
+
 
 class TestTheCommittedAnswerSheet:
     def test_it_is_what_deriving_it_again_produces(self, truth: dict[str, Any]) -> None:
