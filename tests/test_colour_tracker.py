@@ -129,6 +129,57 @@ def test_a_piece_dimmer_than_its_own_brightest_sighting_is_still_on_the_board() 
     assert track.palette.classes[0].peak == peak
 
 
+def test_a_frame_that_is_not_a_board_is_refused_whole() -> None:
+    """Nothing is read from it, and -- more importantly -- nothing written.
+
+    A design whose claim is that a bad frame costs one frame has to mean
+    it, and a palette class that only ever grows is the one place it did
+    not: reading a non-board frame interned junk colours permanently.
+    """
+    track = tracker()
+    board = {(11, c): BLUE_I for c in range(4)} | {(3, 6): GREEN_O, (3, 7): GREEN_O}
+    for _ in range(4):
+        good = track.update(render(board))
+    classes = len(track.palette.classes)
+    background = track.palette.background
+    assert good.board_visible and good.falling is not None
+
+    noise = np.random.default_rng(0).integers(0, 255, (ROWS * 20, COLS * 20, 3), dtype=np.uint8)
+    blind = track.update(noise)
+    assert not blind.board_visible
+    assert blind.falling is None, "no piece is invented out of a frame that is not a board"
+    assert blind.events == ()
+    assert len(track.palette.classes) == classes, "not one junk colour interned"
+    assert track.palette.background is background
+
+    # ...and the frame the board comes back reads as itself, not as a lock
+    # or a line clear caused by the gap.
+    back = track.update(render(board))
+    assert back.board_visible
+    assert back.stack_rows == good.stack_rows
+    assert Event.LINES_CLEARED not in back.events
+
+
+def test_a_blind_frame_holds_the_stack_so_the_board_returning_is_not_a_clear() -> None:
+    """The count carried across the gap is what stops a phantom event.
+
+    ``_events`` reads a line clear off a drop in the number of settled
+    cells. If a refused frame reported an empty board, the frame after it
+    would look like several rows vanishing at once.
+    """
+    track = tracker()
+    board = {(11, c): BLUE_I for c in range(10)} | {(10, c): BLUE_I for c in range(8)}
+    for _ in range(4):
+        before = track.update(render(board))
+    blank = np.random.default_rng(1).integers(0, 255, (ROWS * 20, COLS * 20, 3), dtype=np.uint8)
+    for _ in range(3):
+        blind = track.update(blank)
+    assert not blind.board_visible
+    assert blind.stack_rows == before.stack_rows, "the last real stack is what it still holds"
+    after = track.update(render(board))
+    assert after.events == () and after.cleared_rows == 0
+
+
 def test_cells_the_capture_cannot_see_are_not_content() -> None:
     """A UI panel floating over the board corner shows the NEXT piece."""
     hidden = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})

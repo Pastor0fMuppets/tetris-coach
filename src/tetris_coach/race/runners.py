@@ -11,12 +11,15 @@ square costs the user everything.
 
 Two honest asymmetries, stated here rather than buried:
 
-* The shipped engine has a CONFIDENCE GATE. A refused frame never reaches
-  its tracker and the previous hint stays on screen, so its state is
-  recorded on every frame -- including refused ones -- because that is
-  what the user is looking at. ``accepted`` says which frames it actually
-  digested. The prototype has no gate: it reads every frame, so every
-  frame is accepted.
+* Both trackers refuse frames, and they refuse them on different
+  evidence. The shipped engine has a CONFIDENCE GATE over its occupancy
+  reading; the prototype refuses a frame whose cells are not drawn flat,
+  which is the premise its colour reading rests on. A refused frame never
+  reaches either tracker, so state is recorded on EVERY frame, refused
+  ones included, because that is what the user is looking at.
+  ``accepted`` says which frames each one actually digested. What they do
+  with a refusal differs and is not evened out here: the shipped engine
+  leaves its last hint on screen, the prototype shows nothing.
 * The shipped engine solves on EVENTS and holds the hint in between. The
   prototype has no hint policy at all, so its hint is re-solved from each
   frame's own reading. That is the natural policy for a design with no
@@ -115,7 +118,7 @@ def run_shipped(root: Path, spec: WindowSpec) -> list[FrameOutput]:
 
 
 def run_prototype(root: Path, spec: WindowSpec) -> list[FrameOutput]:
-    """Replay a window through ``ColourTracker``, solving on every frame."""
+    """Replay a window through ``ColourTracker``, solving on every frame it reads."""
     tracker = ColourTracker(
         rows=spec.rows,
         cols=10,
@@ -131,7 +134,7 @@ def run_prototype(root: Path, spec: WindowSpec) -> list[FrameOutput]:
         out.append(
             FrameOutput(
                 frame=name,
-                accepted=True,
+                accepted=report.board_visible,
                 piece=piece,
                 stack_rows=report.stack_rows,
                 next_piece=report.next_piece,

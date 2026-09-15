@@ -415,12 +415,16 @@ def test_coverage_and_what_the_gate_costs() -> None:
     # flash-tinted cell a dim copy of the I. The oracle abstains there too.
     assert (shipped.hintless_frames, prototype.hintless_frames) == (25, 22)
     # 64 of the shipped tracker's 422 scored frames never reach it: the
-    # confidence gate refuses them and the previous hint stays up. The
-    # prototype has no gate, so it reads all 422 -- and 14 of its own 21
-    # blank frames are pale_piece's browser page, where the shipped gate
-    # refuses and it does not. See test_colour_tracker_sessions.py.
+    # confidence gate refuses them and the previous hint stays up.
     assert shipped.refused_frames == 64
-    assert prototype.refused_frames == 0
+    # The prototype refuses 14, all of them pale_piece's web page, where
+    # its premise -- cells drawn as flat rectangles -- does not hold. It
+    # used to accept those and report a stack read off the page. Where the
+    # two differ is what a refusal LOOKS like: the shipped engine leaves
+    # its last hint on the screen, the prototype draws nothing.
+    assert prototype.refused_frames == 14
+    assert part("pale_piece", "prototype").refused_frames == 14
+    assert sum(part(w, "prototype").refused_frames for w in WINDOWS if w != "pale_piece") == 0
 
 
 def test_the_table_renders() -> None:

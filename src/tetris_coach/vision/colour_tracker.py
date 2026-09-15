@@ -55,6 +55,7 @@ from .colour_palette import (
     EMPTY_DIST,
     Palette,
     board_colours,
+    board_readable,
     observable_mask,
     own_paint_states,
     piece_from_cells,
@@ -100,6 +101,7 @@ class FrameReport:
     next_piece: str | None
     events: tuple[Event, ...]
     cleared_rows: int
+    board_visible: bool = True  # False when the frame is not a board at all
 
 
 def _components(labels: NDArray[np.int16]) -> list[tuple[int, frozenset[Cell]]]:
@@ -185,6 +187,8 @@ class ColourTracker:
         self, board: NDArray[np.uint8], next_crop: NDArray[np.uint8] | None = None
     ) -> FrameReport:
         """Read one captured board (BGR) and its NEXT box crop."""
+        if not board_readable(board, self.rows, self.cols, self._observable):
+            return self._blind()
         colours = board_colours(board, self.rows, self.cols)
         painted = own_paint_states(board, self.rows, self.cols, self._paint)
         self.palette.update_background(colours, self._observable & (painted == CLEAN))
@@ -214,6 +218,37 @@ class ColourTracker:
             next_piece=self._next_piece,
             events=events,
             cleared_rows=cleared,
+        )
+
+    def _blind(self) -> FrameReport:
+        """The frame is not a board: read nothing from it, and say so.
+
+        Without this the tracker read whatever was on screen. Measured, the
+        fourteen frames of ``pale_piece`` where a web page has replaced the
+        game were reported as a stack of 0b11111111 / 0b1000 / 0b11111100
+        and interned six junk colour classes into the palette PERMANENTLY
+        -- and a palette class never shrinks, so one occluded frame is a
+        lasting corruption of the one memory this design does keep.
+
+        Nothing is read and nothing is written: not the palette, not the
+        background, not the cell ages, not the NEXT box. The stack count IS
+        carried across, so the frame the board comes back does not look
+        like a line clear to :meth:`_events`.
+
+        What is reported is silence, not the last hint. A tracker that
+        holds its advice over a board it cannot see is the frozen coach
+        this design exists to avoid, so the honest output for a frame that
+        says nothing is nothing -- and ``board_visible`` lets a caller that
+        would rather hold make that choice itself.
+        """
+        self._falling = None
+        return FrameReport(
+            falling=None,
+            stack_rows=self._stack_rows,
+            next_piece=self._next_piece,
+            events=(),
+            cleared_rows=0,
+            board_visible=False,
         )
 
     # -- pieces -------------------------------------------------------

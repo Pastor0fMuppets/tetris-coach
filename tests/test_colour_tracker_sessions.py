@@ -162,7 +162,7 @@ def test_the_pale_piece_is_seen_at_all() -> None:
     it: its DIRECTION is, and a pale colour has just as much of one.
     """
     numbers, reports = replay("pale_piece")
-    play = reports[: numbers.index("00687")]  # the window ends on a game-over panel
+    play = reports[: numbers.index("00687")]  # the window ends on a web page, not a board
     assert all(r.falling is not None and r.falling.piece == "T" for r in play)
 
 
@@ -269,6 +269,50 @@ def test_the_game_draws_a_ghost_and_it_is_an_outline() -> None:
     background = np.array([252.0, 252.0, 251.0])  # the same ground, in BGR
     for col in range(4, 8):
         assert float(np.linalg.norm(centres[11, col] - background)) < EMPTY_DIST
+
+
+def test_the_gate_refuses_the_web_page_and_nothing_else() -> None:
+    """Where the board is not on screen, and where the palette stops growing.
+
+    ``pale_piece`` 00687-00700 is not a game-over panel, which is what this
+    file used to call it: it is a web page over the whole capture region.
+    The prototype used to read it and report a stack of
+    0b11111111 / 0b1000 / 0b11111100 off the page's own layout, and intern
+    six junk colour classes into a palette that never shrinks -- so one
+    occluded second was a permanent corruption of the only cross-frame
+    memory this design has.
+
+    The test that separates them is the design's own premise rather than
+    anything about Tetris: are the cells drawn as flat rectangles. Every
+    real board frame in all six windows scores 0.89 or better; these
+    fourteen score 0.51.
+    """
+    refused = {}
+    classes = {}
+    for window in (
+        "spawn_latency",
+        "live_session",
+        "ghost_session",
+        "absorbed_piece",
+        "pale_piece",
+        "ghost_beside_stack",
+    ):
+        tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
+        names = []
+        for board in sorted((FIXTURES / window).glob("board_*.png")):
+            crop = board.with_name(board.name.replace("board_", "next_"))
+            report = tracker.update(load(board), load(crop) if crop.exists() else None)
+            if not report.board_visible:
+                names.append(board.stem.split("_")[1])
+        refused[window] = names
+        classes[window] = len(tracker.palette.classes)
+
+    assert refused["pale_piece"] == [f"00{n}" for n in range(687, 701)]
+    assert all(not names for window, names in refused.items() if window != "pale_piece")
+    # Two colours in pale_piece: the pale periwinkle T and the blue I. It
+    # was eight once the page had been read.
+    assert classes["pale_piece"] == 2
+    assert max(classes.values()) == 3  # spawn_latency, which shows a third piece
 
 
 def test_no_window_ever_loses_the_piece_for_long() -> None:

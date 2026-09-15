@@ -133,6 +133,21 @@ PAINT_PATCH_SOLID = 0.9
 # Fraction of each cell inset before sampling (skips gridlines and borders).
 CELL_MARGIN = 0.25
 
+# What "the board is on screen" means to a reader that assumes flat cells.
+# A cell is FLAT when this share of its sampled patch is within this many
+# uint8 units of the patch's own median, and the board is readable when
+# this share of observable cells is flat. Measured over the six committed
+# windows: every frame of the real board scores 0.89 or better (the worst
+# is spawn_latency's line-clear flash, and the median frame is 0.97-1.00),
+# while the fourteen frames where a web page has replaced the game score
+# 0.51. The threshold sits in the gap, a fifth of the range from either
+# side. This does not test "is this Tetris" -- it tests the premise this
+# whole module rests on, that the thing being read is drawn as flat
+# rectangles on a grid.
+UNIFORM_TOL = 6.0
+UNIFORM_SHARE = 0.98
+BOARD_FLAT_SHARE = 0.70
+
 EMPTY = -1  # cell label: no board content here
 
 CLEAN, PAINTED, OURS = 0, 1, 2  # per-cell paint states
@@ -334,6 +349,40 @@ class Palette:
 def board_colours(image: NDArray[np.uint8], rows: int, cols: int) -> NDArray[np.float32]:
     """Mean colour of every cell's central patch: ``(rows, cols, 3)``."""
     return cell_colors(image, rows, cols, CELL_MARGIN)
+
+
+def flat_cells(image: NDArray[np.uint8], rows: int, cols: int) -> NDArray[np.bool_]:
+    """True where a cell's sampled patch is one flat colour.
+
+    The mean this module reads off each cell is only meaningful if the cell
+    IS one colour; over a photograph, a web page or a paragraph of text the
+    same mean is an average of unrelated things and every rule downstream
+    is reading noise with confidence. This is the cheap check that the
+    premise holds, cell by cell.
+    """
+    img = np.asarray(image)
+    ys = np.linspace(0, img.shape[0], rows + 1).round().astype(int)
+    xs = np.linspace(0, img.shape[1], cols + 1).round().astype(int)
+    out = np.zeros((rows, cols), dtype=bool)
+    for r in range(rows):
+        y0, y1 = _inset(int(ys[r]), int(ys[r + 1]))
+        for c in range(cols):
+            x0, x1 = _inset(int(xs[c]), int(xs[c + 1]))
+            patch = img[y0:y1, x0:x1].astype(np.float64)
+            if patch.size == 0:
+                continue
+            median = np.median(patch.reshape(-1, patch.shape[-1]), axis=0)
+            spread = np.max(np.abs(patch - median), axis=-1)
+            out[r, c] = float(np.mean(spread <= UNIFORM_TOL)) >= UNIFORM_SHARE
+    return out
+
+
+def board_readable(
+    image: NDArray[np.uint8], rows: int, cols: int, observable: NDArray[np.bool_]
+) -> bool:
+    """Is enough of this frame drawn as flat cells to be read as a board?"""
+    flat = flat_cells(image, rows, cols)[observable]
+    return bool(flat.size) and float(np.mean(flat)) >= BOARD_FLAT_SHARE
 
 
 def own_paint_states(
