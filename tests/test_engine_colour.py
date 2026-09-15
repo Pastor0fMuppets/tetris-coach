@@ -144,6 +144,28 @@ def test_a_covered_cell_resting_on_the_stack_is_handed_over_as_filled() -> None:
     assert coach_without._solver_board(resting).rows == resting
 
 
+def test_the_debug_view_draws_the_piece_it_is_advising_about(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # This reader separates the piece from the stack as it reads, so a
+    # debug view that printed only the stack would leave the thing the
+    # coach is advising about out of the picture.
+    coach = engine(debug=True)
+    box = preview(O_CELLS, GREEN_O)
+    coach.process_frame(render({}), box)
+    capsys.readouterr()
+    coach.process_frame(render({(0, 4): GREEN_O, (0, 5): GREEN_O}), box)
+    out = capsys.readouterr().out
+    assert "[vision] frame 2" in out
+    assert "falling O (2 cells, floating)" in out
+    assert "next O" in out
+    assert "PIECE_SPAWNED" in out
+    assert "....oo...." in out  # the piece itself, where it is
+    # A quiet session says nothing until something changes.
+    coach.process_frame(render({(0, 4): GREEN_O, (0, 5): GREEN_O}), box)
+    assert capsys.readouterr().out == ""
+
+
 def test_a_lock_moves_the_hint_on_to_the_next_piece() -> None:
     coach = engine()
     box = preview(I_CELLS, BLUE_I)

@@ -38,7 +38,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..core.board import DEFAULT_HEIGHT, WIDTH, Board
-from .colour_tracker import ColourTracker
+from .colour_tracker import ColourTracker, FrameReport
 from .colour_tracker import Event as ColourEvent
 from .grid import HINT_PAINT, GridClassifier, OwnPaint
 from .pieces_vision import FallingPiece, identify_next
@@ -157,6 +157,31 @@ def render_debug_frame(
         f"falling: {falling_txt}  next: {committed.next_piece or '-'}  "
         f"confidence: {confidence:.2f}  events: {events_txt}"
     )
+
+
+def render_colour_frame(report: FrameReport, rows: int, cols: int) -> str:
+    """Terminal debug view of one frame as the colour reader saw it.
+
+    The counterpart of :func:`render_debug_frame`, and it has to draw the
+    piece ITSELF rather than an occupancy grid that happens to contain it:
+    this reader separates the piece from the stack as it reads, so a view
+    that printed only the stack would leave the thing the coach is advising
+    about off the picture. ``o`` is the piece in flight, ``#`` the settled
+    board, ``?`` a cell the capture cannot see.
+    """
+    falling = frozenset() if report.falling is None else report.falling.cells
+    lines = []
+    for r in range(rows):
+        line = ""
+        for c in range(cols):
+            if (r, c) in falling:
+                line += "o"
+            elif report.stack_rows[r] >> c & 1:
+                line += "#"
+            else:
+                line += "."
+        lines.append(line)
+    return "\n".join(lines)
 
 
 class ShapeVision:
@@ -375,18 +400,25 @@ class ColourVision:
         piece = None if report.falling is None else report.falling.piece
         notes: list[str] = []
         if self._debug:
+            # Reported on any change to what the engine acts on, and at
+            # least every 30 frames (~2 s), so a stream that says nothing
+            # is still diagnosable. Deliberately NOT on every frame: a
+            # piece being dragged about changes the picture without
+            # changing anything the coach would do about it.
             self._debug_frames += 1
             state = (report.board_visible, piece, report.next_piece, report.stack_rows)
             if state != self._debug_last or self._debug_frames % 30 == 0:
                 self._debug_last = state
+                floating = report.falling is not None and report.falling.floating
                 cells = 0 if report.falling is None else len(report.falling.cells)
                 events = ", ".join(event.name for event in report.events) or "-"
                 notes.append(
                     f"[vision] frame {self._debug_frames}: "
                     f"board {'read' if report.board_visible else 'UNREADABLE'}, "
-                    f"falling {piece or '-'} ({cells} cells), "
+                    f"falling {piece or '-'} ({cells} cells"
+                    f"{', floating' if floating else ''}), "
                     f"next {report.next_piece or '-'}, events {events}\n"
-                    f"{Board(report.stack_rows)}"
+                    f"{render_colour_frame(report, self.tracker.rows, self.tracker.cols)}"
                 )
         return FrameReading(
             accepted=report.board_visible,
@@ -405,6 +437,7 @@ __all__ = [
     "FrameVision",
     "ShapeVision",
     "VisionEvent",
+    "render_colour_frame",
     "render_debug_frame",
     "rows_from_cells",
 ]
