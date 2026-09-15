@@ -60,6 +60,11 @@ from .vision.state import GameStateTracker
 class CoachConfig:
     poll_rate: float = 15.0  # frames per second
     hint_color: str = "#00e5ff"
+    # The confidence floor the SHAPE reader's gate applies to its own
+    # occupancy reading (vision/grid.py). The colour reader gates on
+    # different evidence and ignores this: a frame whose cells are not
+    # drawn flat, or one with more than a tetromino hanging over the void,
+    # is not a board and is refused outright.
     min_confidence: float = 0.15
     # Board height in rows (width is always 10). The single source the
     # stateful components (classifier, tracker, overlay) are seeded from;
