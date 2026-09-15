@@ -4,7 +4,12 @@ import pytest
 
 from tetris_coach.core.board import HEIGHT, WIDTH
 from tetris_coach.vision.pieces_vision import FrameKind
-from tetris_coach.vision.state import GameEvent, GameStateTracker, Snapshot
+from tetris_coach.vision.state import (
+    MAX_PREVIEW_GAP,
+    GameEvent,
+    GameStateTracker,
+    Snapshot,
+)
 
 from .boards import EMPTY, bottom_lines, grid_of, merge, piece_cells, rows_of
 
@@ -615,18 +620,71 @@ class TestTheEnteringPieceHint:
         # dealt" — it does not say WHEN, and across a dark burst long
         # enough to cover a whole tenure the value has moved on twice, so
         # the piece it names entered a deal ago and is already on the
-        # board. That is the "confused two pieces" failure, and the only
-        # thing that rules it out is having read the box on the frame
-        # before as well. Here the box shows the I, goes dark, and comes
-        # back showing a Z: nothing says whether the I or something after
-        # it is the column at the top edge, so nothing is named.
+        # board. That is the "confused two pieces" failure. What rules it
+        # out is the LENGTH of the gap the flip is read across: a piece
+        # that came and went inside the gap held the box for the whole of
+        # it, so a gap shorter than a tenure cannot hide a deal. Here the
+        # box shows the I and goes dark for longer than the budget:
+        # nothing says whether the I or something after it is the column
+        # at the top edge, so nothing is named.
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, None)
         column = merge(self.STACK, self.COLUMN)
         assert feed(tracker, column, "I") == []
-        assert feed(tracker, column, None, times=2) == []
+        assert feed(tracker, column, None, times=MAX_PREVIEW_GAP + 1) == []
         assert feed(tracker, column, "Z", times=3) == []
         assert tracker.committed.falling_piece is None
+
+    def test_a_flip_read_across_a_short_dark_gap_still_names_the_piece(self) -> None:
+        # ...and the other side of that budget, which is the case the
+        # user's own window turns on: the box is unreadable for a few
+        # frames (the game wipes the field, and the wipe blanks the box
+        # along with the board), and comes back changed. No previewed
+        # piece can have come and gone in six frames — a tenure is an
+        # order longer — so the flip still names the piece that left, and
+        # the fragment the wipe dealt is hinted instead of sitting
+        # nameless for a second.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, None)
+        column = merge(self.STACK, self.COLUMN)
+        assert feed(tracker, column, "I") == []
+        assert feed(tracker, column, None, times=6) == []
+        assert feed(tracker, column, "Z", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "I"
+
+    def test_the_gap_is_counted_in_captures_the_board_gate_never_saw(self) -> None:
+        # The gap is in CAPTURES, not in frames the board's confidence
+        # gate liked — and the consumer returns before update() on every
+        # rejection, so without observe_preview the clock stops for
+        # exactly the events that make the box unreadable (a wipe, a
+        # flash, an animation: they reject the board too). A deal hidden
+        # inside such a burst would then be invisible and the flip on the
+        # far side would name a piece a deal stale. Here the box is read,
+        # a long burst of captures is rejected, and the flip that follows
+        # is refused on its age even though the tracker saw no frames in
+        # between.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, None)
+        column = merge(self.STACK, self.COLUMN)
+        assert feed(tracker, column, "I") == []
+        for _ in range(MAX_PREVIEW_GAP + 1):
+            tracker.observe_preview(None)  # rejected captures, box unreadable
+        assert feed(tracker, column, "Z", times=3) == []
+        assert tracker.committed.falling_piece is None
+
+    def test_a_readable_box_dates_the_flip_even_while_the_board_is_rejected(self) -> None:
+        # ...and the same burst with the box READABLE through it keeps the
+        # evidence: the rejection was about the board image, and the
+        # preview says the same piece throughout, so the flip on the far
+        # side is one capture old and names what left.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, None)
+        column = merge(self.STACK, self.COLUMN)
+        assert feed(tracker, column, "I") == []
+        for _ in range(30):
+            tracker.observe_preview("I")  # rejected captures, box still the I
+        assert feed(tracker, column, "Z", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "I"
 
     def test_a_hint_whose_own_deal_ended_under_it_names_no_later_fragment(self) -> None:
         # A hint is evidence about ONE deal and expires with it. The

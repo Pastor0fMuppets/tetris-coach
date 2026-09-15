@@ -71,6 +71,18 @@ from numpy.typing import NDArray
 from ..core.board import DEFAULT_HEIGHT, WIDTH
 from .pieces_vision import FallingPiece, FrameKind, explain_grid, strip_piece_in_flight
 
+# The longest gap, in CAPTURES, a preview flip may be dated across. A flip
+# read after a gap can only be a deal LATE if a whole previewed piece came
+# and went inside that gap — which needs the gap to be at least one tenure
+# long. The shortest tenure in the committed evidence is 18 captures (the
+# pale T, unread in the box on spawn_latency 00198-00215), and the longest
+# gap a flip has to survive to keep the win the window measures is 6 (the
+# end-of-round wipe hides the box on 00152-00157, and the flip on 00158
+# names the O that wipe dealt). Twelve sits between them with margin on
+# both sides: nothing shorter can straddle a deal, nothing longer than the
+# wipe's own blind spot is believed.
+MAX_PREVIEW_GAP = 12
+
 
 class GameEvent(Enum):
     PIECE_SPAWNED = auto()
@@ -145,10 +157,10 @@ class GameStateTracker:
         # The last non-None preview reading, and the one it replaced.
         self._preview_piece: str | None = None
         self._entering_hint: str | None = None
-        # Whether the PREVIOUS frame could read the preview box. A flip is
-        # only news of the deal happening NOW when the box was readable on
-        # both sides of it (see update()).
-        self._preview_read = False
+        # How many CAPTURES have gone by since the box was last readable.
+        # A flip is only news of the deal happening NOW when the gap it is
+        # dated across is too short to hide a whole tenure (see update()).
+        self._preview_gap = 0
         # Frames since the hint was set. A hint is evidence about ONE deal,
         # so it must not outlive it, and its age is how the rules below
         # tell the flip reporting the deal now committing from a flip left
@@ -168,6 +180,62 @@ class GameStateTracker:
         """
         return self._last_falling
 
+    def observe_preview(self, next_piece: str | None) -> None:
+        """Take one capture's preview reading with no board frame attached.
+
+        The confidence gate judges the BOARD image, and the consumer
+        returns before :meth:`update` whenever it rejects one — but the
+        preview box is a different region of the screen with its own
+        readability, and every rule below is about how many CAPTURES old
+        the evidence is, not about how many of them the board gate liked.
+        Feeding those captures here is what makes the dating rules mean
+        what they say: without it the tracker's clock stops for the whole
+        of a wipe or a flash, which is exactly the event that makes the
+        box unreadable AND the board unreadable, so the guard against a
+        flip straddling a deal is bypassed by the only thing that can
+        cause one. Measured on tests/fixtures/spawn_latency: the gate
+        rejects 00127-00157 (31 captures, ~2.1 s) and the headline flip on
+        00158 used to be dated against 00126, 32 captures earlier.
+        """
+        self._observe_preview(next_piece)
+
+    def _observe_preview(self, next_piece: str | None) -> None:
+        # The piece that LEAVES the preview is the piece entering the
+        # board: a game deals the previewed piece and shows the one after
+        # it. That is the only evidence anything has about the name of a
+        # piece the board region's top edge has cut in half — 1-3 cells at
+        # row 0 fit several tetrominoes, and this session's game parks
+        # them there for seconds. Only a change of a KNOWN preview counts:
+        # the preview reading is None whenever the box is mid-animation or
+        # unreadable, and None -> X says nothing about what was dealt.
+        # ...and only a flip the box is in a position to be REPORTING. A
+        # flip says "the piece that was here has been dealt"; it does not
+        # say WHEN. The box goes unreadable in bursts (mid-animation,
+        # mid-flash, a pale piece against a pale ground), and across a
+        # burst long enough to cover a whole tenure the box's value has
+        # moved on TWICE: X -> [Y never read] -> Z reads as a flip naming
+        # X, a whole deal after X entered — the "confused two pieces"
+        # failure, and it is refused. Two readings cannot straddle two
+        # deals when the gap between them is shorter than a tenure: the
+        # piece in between would have had to hold the box for the whole
+        # gap. So the flip is dated by the GAP it is read across, in
+        # captures, and MAX_PREVIEW_GAP is the budget (see its comment).
+        # Measured on tests/fixtures/spawn_latency: the T dealt at 00198
+        # sat unread in the box for 18 captures, and the flip at 00216
+        # carried the I before it — refused; the wipe at 00152-00157
+        # hides the box for 6, and the flip at 00158 names the O that the
+        # wipe dealt — accepted.
+        self._hint_age += 1
+        if next_piece is None:
+            self._preview_gap += 1
+            return
+        gap, self._preview_gap = self._preview_gap, 0
+        if next_piece != self._preview_piece:
+            if self._preview_piece is not None and gap <= MAX_PREVIEW_GAP:
+                self._entering_hint = self._preview_piece
+                self._hint_age = 0
+            self._preview_piece = next_piece
+
     def update(self, occupancy: NDArray[np.bool_], next_piece: str | None) -> list[GameEvent]:
         """Feed one frame's full occupancy grid; returns committed events."""
         # Whatever the capture read in an unobservable cell is not board
@@ -177,35 +245,7 @@ class GameStateTracker:
         rows = tuple(
             o & ~u for o, u in zip(_rows_from_grid(occupancy), self.unknown_rows, strict=True)
         )
-        # The piece that LEAVES the preview is the piece entering the board:
-        # a game deals the previewed piece and shows the one after it. That
-        # is the only evidence anything has about the name of a piece the
-        # board region's top edge has cut in half — 1-3 cells at row 0 fit
-        # several tetrominoes, and this session's game parks them there for
-        # seconds. Only a change of a KNOWN preview counts: the preview
-        # reading is None whenever the box is mid-animation or unreadable,
-        # and None -> X says nothing about what was dealt.
-        # ...and only a flip the box is in a position to be REPORTING. A
-        # flip says "the piece that was here has been dealt"; it does not
-        # say WHEN. The box goes unreadable in bursts (mid-animation,
-        # mid-flash, a pale piece against a pale ground), and across a
-        # burst long enough to cover a whole tenure the box's value has
-        # moved on TWICE: X -> [Y never read] -> Z reads as a flip naming
-        # X, a whole deal after X entered — the "confused two pieces"
-        # failure, and it is refused. Two consecutive readable frames
-        # cannot straddle two deals (a tenure is ~14-22 frames here), so
-        # the flip is sound exactly when the previous frame read the box
-        # too. Measured on the spawn_latency window: the T dealt at 00198
-        # sat unread in the box for 18 frames, and the flip at 00216
-        # carried the I before it.
-        previously_read = self._preview_read
-        self._preview_read = next_piece is not None
-        self._hint_age += 1
-        if next_piece is not None and next_piece != self._preview_piece:
-            if self._preview_piece is not None and previously_read:
-                self._entering_hint = self._preview_piece
-                self._hint_age = 0
-            self._preview_piece = next_piece
+        self._observe_preview(next_piece)
         explanation = explain_grid(
             rows,
             self._committed.stack_rows,

@@ -780,21 +780,33 @@ vision/
                   # deal, and three rules hold it there — a flip says "the
                   # piece that was here has been dealt" and never says
                   # WHEN, so all three are about DATING it.
-                  # (1) A flip counts only when the PREVIOUS frame read the
-                  # box too. The box is unreadable in bursts, and a burst
-                  # covering one previewed piece's whole tenure moves its
-                  # value on twice, so the next flip arrives a deal late
-                  # (X -> [Y never read] -> Z names X, which is by then on
-                  # the board — the "confused two pieces" failure the user
-                  # reported seeing once). Two CONSECUTIVE readable frames
-                  # cannot straddle two deals: a tenure is ~14-22 frames
-                  # here. Measured on tests/fixtures/spawn_latency: the T
-                  # dealt at 00198 sat unread in the box for 18 frames and
-                  # the flip at 00216 carried the I before it. (Residual:
-                  # the tracker only sees frames the confidence gate
-                  # accepted, so a deal hidden entirely inside a rejected
-                  # stretch is invisible to this test; rule (4) below is
-                  # what catches the hint it would mis-set.)
+                  # (1) A flip counts only when the GAP it is read across
+                  # is shorter than a tenure. The box is unreadable in
+                  # bursts, and a burst covering one previewed piece's
+                  # whole tenure moves its value on twice, so the next flip
+                  # arrives a deal late (X -> [Y never read] -> Z names X,
+                  # which is by then on the board — the "confused two
+                  # pieces" failure the user reported seeing once). A piece
+                  # that came and went inside the gap held the box for the
+                  # whole of it, so a gap shorter than one tenure cannot
+                  # hide a deal; MAX_PREVIEW_GAP (12 captures) is that
+                  # budget, set between the shortest tenure in evidence
+                  # (18 captures, the pale T on spawn_latency 00198-00215,
+                  # whose flip at 00216 is refused) and the longest gap the
+                  # win depends on (6 captures, the end-of-round wipe at
+                  # 00152-00157, whose flip at 00158 names the O it dealt).
+                  # The gap is counted in CAPTURES, not in frames the
+                  # board's confidence gate accepted: app.py returns before
+                  # tracker.update() on every rejection, so a clock running
+                  # on accepted frames alone stops for exactly the events
+                  # that blank the box (a wipe, a flash, an animation —
+                  # they reject the board too), and the flip on the far
+                  # side of one is dated against whatever was last
+                  # accepted, seconds earlier. GameStateTracker.
+                  # observe_preview takes the rejected captures for that
+                  # reason, and the hint's age (rule (2)) counts them too.
+                  # Measured: before it, the headline flip at 00158 was
+                  # dated against 00126, 32 captures and one deal earlier.
                   # (2) A hint survives a lock only while it is YOUNGER
                   # than that lock's own debounce. The preview reports a
                   # deal by changing as the new piece spawns, which is the

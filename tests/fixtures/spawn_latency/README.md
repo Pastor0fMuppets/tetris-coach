@@ -79,10 +79,16 @@ Three rules, all about DATING a flip rather than counting what it
 outlives, since a flip says "the piece that was here has been dealt" and
 never says when:
 
-- a flip counts only when the PREVIOUS frame read the box too. Two
-  consecutive readable frames cannot straddle two deals (a tenure here
-  is ~14-22 frames), which is exactly what the 18-frame gap at
-  00198-00215 did.
+- a flip counts only when the GAP it is read across is shorter than a
+  tenure: a piece that came and went inside the gap held the box for the
+  whole of it. The budget is 12 captures, between the 18-frame gap at
+  00198-00215 (refused: the pale T came and went inside it) and the
+  6-frame one at 00152-00157 (believed: the wipe blanks the box for its
+  last six frames, and the flip at 00158 names the O it dealt). Captures
+  the board's confidence gate REJECTED count here too — the box is a
+  different region of the screen, and a wipe rejects the board and blanks
+  the box together, so a gap measured in accepted frames alone would
+  have dated the flip at 00158 against 00126, 32 captures earlier.
 - a hint survives a lock only while it is younger than that lock's own
   debounce. The flip reporting a deal lands on the frame the lock commit
   is debouncing, so this deal's hint is the young one and an older hint

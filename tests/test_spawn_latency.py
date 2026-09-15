@@ -62,7 +62,7 @@ from tetris_coach.app import CoachConfig, CoachEngine, compute_overlap_mask
 from tetris_coach.capture.screen import Rect
 from tetris_coach.solver.search import Move
 from tetris_coach.vision.pieces_vision import FrameKind, identify_next
-from tetris_coach.vision.state import GameEvent
+from tetris_coach.vision.state import MAX_PREVIEW_GAP, GameEvent
 
 FIXTURES = Path(__file__).parent / "fixtures" / "spawn_latency"
 ROWS = 12
@@ -110,7 +110,7 @@ class Tick:
         self.stack_rows = stack_rows
         self.falling = falling
         self.next_piece = next_piece  # committed
-        self.read_next = read_next  # what the preview reader said this frame
+        self.read_next = read_next  # what the preview reader said this capture
         self.hint = hint
 
     @property
@@ -140,7 +140,16 @@ def replay() -> tuple[Tick, ...]:
         seen.extend(events)
         return events
 
+    observe = engine.tracker.observe_preview
+
+    def preview_spy(next_piece):  # type: ignore[no-untyped-def]
+        # The rejected captures: no board frame, but the box is still read
+        # and the tracker still dates its evidence by them.
+        read.append(next_piece)
+        observe(next_piece)
+
     engine.tracker.update = spy  # type: ignore[method-assign]
+    engine.tracker.observe_preview = preview_spy  # type: ignore[method-assign]
     ticks: list[Tick] = []
     for number in frame_numbers():
         board = load(f"board_{number}.png")
@@ -284,15 +293,38 @@ def test_the_wait_is_a_quarter_of_the_frames_the_gate_accepts() -> None:
     assert sum(1 for t in replay() if t.hint is not None) == 120  # was 108
 
 
+def test_the_flip_that_names_the_O_is_dated_across_the_wipe_that_dealt_it() -> None:
+    # The dating rule, on the capture sequence it has to survive. The gate
+    # rejects the whole end-of-round wipe (00127-00157), and the tracker
+    # used to see nothing at all through it: the flip on 00158 was dated
+    # against 00126, 32 captures and a whole deal earlier, which is the
+    # straddle the rule exists to refuse. The box is now read on every
+    # capture, so the same flip is dated against 00151 — the wipe blanks
+    # the box for its last six frames only, and six is far short of a
+    # tenure, so no previewed piece can have come and gone inside it.
+    assert [tick(f"00{n}").read_next for n in range(149, 160)] == [
+        *("O", "O", "O"),  # 00149-00151: rejected captures, box readable
+        *(None,) * 6,  # 00152-00157: the wipe blanks the box too
+        *("I", "I"),  # 00158: the flip, six captures after the last O
+    ]
+    assert 6 <= MAX_PREVIEW_GAP
+    # ...and the flip is believed: the O it names is the fragment the wipe
+    # dealt, hinted while two of its four cells are still off screen.
+    assert tick("00163").falling == "O"
+
+
 def test_the_preview_is_read_on_most_frames_and_never_on_the_pale_T() -> None:
-    # The signal's availability, and its measured ceiling. The tracker is
-    # handed a name on 101 of the 124 frames that reach it; the 18 it is
-    # not (00198-00215) are the frames the T sits in the box, drawn in a
-    # pale blue that scores 0.319 against the box's background — under the
-    # 0.35 uniformity floor the board reader and the preview reader share,
-    # so the mask keeps nothing and there is no shape to read. That gap is
-    # why the third episode's flip arrives a deal late.
-    assert sum(1 for t in replay() if t.read_next is not None) == 101
+    # The signal's availability, and its measured ceiling. The box is read
+    # on 132 of the window's 161 captures — 101 of the 124 the board gate
+    # accepts, plus 31 it rejects, which count for the dating rule just
+    # the same. The 18 nobody can read (00198-00215) are the frames the T
+    # sits in the box, drawn in a pale blue that scores 0.319 against the
+    # box's background — under the 0.35 uniformity floor the board reader
+    # and the preview reader share, so the mask keeps nothing and there is
+    # no shape to read. That gap is why the third episode's flip arrives a
+    # deal late.
+    assert sum(1 for t in replay() if t.read_next is not None) == 132
+    assert sum(1 for t in replay() if t.accepted and t.read_next is not None) == 101
     assert all(identify_next(load(f"next_00{n}.png")) is None for n in range(198, 216))
     assert identify_next(load("next_00197.png")) == "I"
     assert identify_next(load("next_00216.png")) == "O"

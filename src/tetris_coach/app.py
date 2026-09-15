@@ -323,6 +323,14 @@ class CoachEngine:
                     flush=True,
                 )
         if rejected:
+            # The gate judged the BOARD image. The preview box is a
+            # different region with its own readability, and the tracker's
+            # flip rules date a deal in CAPTURES — so a rejected capture
+            # still has to reach the preview clock, or a wipe (which
+            # rejects the board and blanks the box alike) stops that clock
+            # for its whole duration and the flip on the far side is dated
+            # against a frame seconds earlier. Board state is untouched.
+            self.tracker.observe_preview(self._identify_next_cached(next_image))
             return self.current_hint  # keep showing the last good hint
         # Drop what the capture read under the preview box: confidence above
         # was judged on the full grid, but neither the tracker nor the debug
