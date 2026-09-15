@@ -59,7 +59,9 @@ dealt has nothing to do with it. Nothing in the frames tells those apart
 — both show a field replaced wholesale and a box that changed — so the
 clause is bounded rather than safe: the kept hint is a hypothesis, the
 retraction below takes the name back on the first frame that contradicts
-it, and it decides nothing structural.
+it, the clock below takes it back when the new game's first piece PARKS
+and no frame ever contradicts anything, and it decides nothing
+structural.
 
 Measured over this window (161 frames, 124 past the confidence gate):
 
@@ -83,9 +85,10 @@ failure.
 
 ## What keeps the late flip from being believed
 
-One rule about believing the box at all, and three about DATING a flip
-rather than counting what it outlives, since a flip says "the piece that
-was here has been dealt" and never says when:
+One rule about believing the box at all, three about DATING a flip rather
+than counting what it outlives (since a flip says "the piece that was
+here has been dealt" and never says when), and one about how long a hint
+may go on naming things at all:
 
 - a reading is the box's content only once a second consecutive readable
   capture agrees with it. One misread frame is two flips, X -> W and
@@ -118,6 +121,18 @@ was here has been dealt" and never says when:
   which holds the committed state — a refuted name left there outlives
   its refutation by the piece's whole tenure at the top edge, 14-17
   frames in this game.
+- and a hint expires with its deal whether or not anything REVEALS that
+  deal. The three rules above all wait for an event (a lock, a resync, a
+  contradicting frame), and the cases nothing else can see are exactly
+  the ones where no event comes: the hold swap below, a restart, or a
+  piece simply PARKED at the top edge. Measured without a clock, that was
+  not a long wrong name but an unbounded one — 300 frames, twenty
+  seconds, and still standing. The budget is 24 captures, above the
+  longest a hint here legitimately holds a name up (15: 00159-00173) and
+  above the longest tenure in this evidence (18), so nothing measured
+  here is cut short; on this window the O's lock ends the hint first and
+  no frame changes. Expiring WITHDRAWS the name too, for the reason the
+  refutation rule already paid for.
 
 ## What the preview cannot see
 
@@ -129,8 +144,17 @@ its visible cells still fit the name, and position rules nothing out —
 this game drags pieces across the board rather than stepping them. The
 hold box is not captured at all, only the board and the preview.
 
-So it is bounded rather than solved: the first frame that CONTRADICTS the
-name takes it back (the retraction above), the piece names itself from
-shape as soon as it shows a row the hinted piece has not got, and nothing
-structural is ever decided on a hinted name — it never anchors a lock and
-never enters the committed stack.
+So it is bounded rather than solved, at both ends. The first frame that
+CONTRADICTS the name takes it back (the retraction above), and the piece
+names itself from shape as soon as it shows a row the hinted piece has
+not got. When no such frame ever comes — the swapped-in piece SITS at the
+top edge, which this game does and which a player thinking about a hold
+does longest — the hint's own clock takes it back: measured before that
+clock existed, 300 frames, twenty seconds, of a piece wearing the name of
+the one it replaced, and it would have held for the rest of the session.
+MAX_HINT_AGE is 24 captures, above the longest a hint here legitimately
+holds a name up (15: 00159-00173, the shape rule taking over on the 16th)
+and above the longest tenure in this evidence (18), so nothing measured
+here is cut short; the ceiling on an undetectable swap is 1.6 s. Nothing
+structural is ever decided on a hinted name either way — it never anchors
+a lock and never enters the committed stack.

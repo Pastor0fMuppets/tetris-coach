@@ -869,8 +869,10 @@ vision/
                   # nothing to do with it. No frame separates the two, so
                   # the clause is bounded rather than safe: the kept hint
                   # is a hypothesis, rule (4) takes the name back on the
-                  # first frame that contradicts it, and it decides nothing
-                  # structural. That clause is the wait the user
+                  # first frame that contradicts it, rule (5) takes it
+                  # back on the clock when the new game's first piece
+                  # PARKS and no frame ever contradicts anything, and it
+                  # decides nothing structural. That clause is the wait the user
                   # reported: the game wipes the field, deals an O, the box
                   # flips O -> I on the frame the O's first two cells reach
                   # the top edge, and the reset four frames later threw
@@ -893,7 +895,36 @@ vision/
                   # a claim is the safe direction. A name structure has
                   # produced — or confirmed — stops being a hypothesis and
                   # is never retracted.
-                  # What none of them can see is a HOLD swap: the held
+                  # (5) And a hint expires with the deal it reports
+                  # whether or not anything REVEALS that deal. Rules (2),
+                  # (3) and (4) all wait for an event — a lock, a resync,
+                  # a frame that contradicts the name — and the cases
+                  # nothing else can see are exactly the ones where no
+                  # event comes: a hold swap (below), a restart whose
+                  # first piece the old game's preview named (rule (3)),
+                  # or simply a piece PARKED at the top edge showing two
+                  # cells that fit the name whatever it really is. Without
+                  # a clock of its own the hint had no expiry at all in
+                  # those cases: measured, 300 frames — twenty seconds —
+                  # of a swapped-in piece wearing the previous piece's
+                  # name, and it would have held for the rest of the
+                  # session. MAX_HINT_AGE (24 captures) is that budget,
+                  # and like every other one here it is set between two
+                  # measurements: above the longest a hint has
+                  # legitimately held a name on screen (15 captures, the O
+                  # on spawn_latency 00159-00173, the shape rule taking
+                  # over on the 16th) and above the longest tenure in the
+                  # evidence (18), so no hint is ever cut short of the
+                  # window it exists to cover; and low enough that a name
+                  # nothing can contradict stands for 1.6 s instead of
+                  # forever. Expiring it WITHDRAWS the name too, by rule
+                  # (4)'s machinery and for rule (4)'s reason: the frame
+                  # under it is OCCLUDED, which holds the committed
+                  # snapshot, so dropping the hypothesis alone would leave
+                  # the name exactly where it was. It is a ceiling, not a
+                  # detector — where to stop believing a hint nothing has
+                  # confirmed, not how to notice the swap.
+                  # What none of them can SEE is a HOLD swap: the held
                   # piece comes out of the hold box, so the piece at the
                   # top edge changes with no lock to expire the hint and
                   # no preview flip to re-date it, and the swapped-in
@@ -905,13 +936,17 @@ vision/
                   # was measured on drags pieces rather than stepping
                   # them. The hold box is not captured at all, only the
                   # board and the preview, so there is no signal to read;
-                  # reading one would mean capturing a third region. What
-                  # bounds it is rule (4): the first frame that
-                  # contradicts the name takes it back, and nothing
-                  # structural was ever decided on it. Pinned in
+                  # reading one would mean capturing a third region, which
+                  # is a scope decision and not a patch. So the swap is
+                  # still not DETECTED, and what it costs is now bounded
+                  # at both ends: rule (4) takes the name back on the
+                  # first frame that contradicts it, rule (5) takes it
+                  # back after 1.6 s when no frame ever does, and nothing
+                  # structural was decided on it either way. Pinned in
                   # test_a_hold_swap_wears_the_hint_until_the_new_piece_
-                  # contradicts_it, as a measured residual and not a
-                  # solved case.
+                  # contradicts_it and test_a_hint_nothing_can_contradict_
+                  # expires_rather_than_stand, as a bounded residual and
+                  # not a solved case.
                   # Measured over tests/fixtures/spawn_latency (161 frames,
                   # 124 accepted): OCCLUDED 43 -> 31, frames with a hint on
                   # screen 108 -> 120, and the per-piece sighting -> hint
