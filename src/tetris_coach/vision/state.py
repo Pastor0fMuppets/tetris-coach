@@ -26,10 +26,13 @@ Events:
   the verification point, not at touchdown. A piece resting on the stack
   stays FALLING (and the hint stays up) until the lock is revealed.
 - ``PIECE_UNNAMED``: the committed falling piece's NAME came from the
-  preview hint and this frame ruled it out. The name is withdrawn (the
-  committed falling piece goes back to ``None``) and the consumer takes
-  its hint off the screen. The stack is untouched: a hinted name was
-  never evidence, so nothing structural was ever decided on it.
+  preview hint, and the hint is over — either this frame RULED IT OUT, or
+  it ran out of time (``MAX_HINT_AGE``) with no frame having confirmed or
+  contradicted it, which is the only thing that ends a hint on a piece
+  that just sits at the top edge. The name is withdrawn (the committed
+  falling piece goes back to ``None``) and the consumer takes its hint off
+  the screen. The stack is untouched: a hinted name was never evidence, so
+  nothing structural was ever decided on it.
 - ``BOARD_RESET``: ``reset_confirm_frames`` consecutive IDENTICAL
   unexplainable frames — a stable new world memory cannot explain (new
   game, garbage rising, mid-game attach). The tracker re-anchors on the

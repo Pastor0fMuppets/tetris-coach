@@ -353,11 +353,15 @@ class CoachEngine:
             self.current_hint = None
 
         if GameEvent.PIECE_UNNAMED in events:
-            # The preview named the piece entering, and this frame ruled
-            # that name out. Take the hint off the screen rather than
-            # leaving a placement for a piece the player does not have:
-            # showing nothing is what the coach does for any piece it
-            # cannot name, and the next frames name this one from shape.
+            # The preview named the piece entering, and that name is over:
+            # this frame ruled it out, or it stood unconfirmed for longer
+            # than a hint may (a hold swap or a restart puts a different
+            # piece under the name with nothing to contradict it, so the
+            # clock is the only thing that ends it). Take the hint off the
+            # screen rather than leaving a placement for a piece the
+            # player does not have: showing nothing is what the coach does
+            # for any piece it cannot name, and the frames after this name
+            # it from shape as soon as they can.
             # The precompute goes too — it was solved for a board that
             # assumed this hint would be followed.
             self.current_hint = None
