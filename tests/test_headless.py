@@ -187,19 +187,19 @@ class TestCoachEngine:
     def test_preview_vision_skipped_on_identical_frames(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         # F9: the preview image is byte-identical on most frames; the full
         # identify_next pass must run only when the pixels change.
-        import tetris_coach.app as app_module
+        import tetris_coach.vision.readers as readers_module
         from tetris_coach.app import CoachEngine
         from tetris_coach.core.pieces import ROTATIONS
 
         calls = 0
-        real = app_module.identify_next
+        real = readers_module.identify_next
 
         def counting(image, **kwargs):  # type: ignore[no-untyped-def]
             nonlocal calls
             calls += 1
             return real(image, **kwargs)
 
-        monkeypatch.setattr(app_module, "identify_next", counting)
+        monkeypatch.setattr(readers_module, "identify_next", counting)
         engine = CoachEngine()
         grid = np.zeros((20, 10), dtype=bool)
         for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):

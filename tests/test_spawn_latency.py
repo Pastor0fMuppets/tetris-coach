@@ -339,12 +339,12 @@ def test_a_preview_that_lies_costs_the_ambiguous_window_and_nothing_else(
     # anything structural: the same committed stack at the end of the
     # window, the same locks, the same resets. A hinted name is never
     # evidence, and this is the ceiling on what a wrong one can do.
-    import tetris_coach.app as app_module
+    import tetris_coach.vision.readers as readers_module
 
     honest = replay_window()
-    real = app_module.identify_next
+    real = readers_module.identify_next
     monkeypatch.setattr(
-        app_module,
+        readers_module,
         "identify_next",
         lambda image, **kwargs: "S" if real(image, **kwargs) == "O" else real(image, **kwargs),
     )

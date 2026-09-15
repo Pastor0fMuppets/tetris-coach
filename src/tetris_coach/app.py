@@ -20,6 +20,14 @@ followable. A target chosen for a piece is therefore HELD for as long as
 that piece is in flight, and the engine only solves again when an input
 actually changed — see :data:`HINT_SWITCH_MARGIN` and
 :meth:`CoachEngine._steady_hint` for the rule and the direction it errs in.
+
+Two trackers, one policy: WHAT is falling, over what board, is read by a
+:class:`~tetris_coach.vision.readers.FrameVision` — the colour-first
+tracker by default, the shipped shape-matching one behind
+``--tracker shape`` — and everything in this module that decides what the
+user SEES (the stability rule above, the stale-hint withdrawal, the board
+handed to the solver, the precompute) is written against the one
+:class:`~tetris_coach.vision.readers.FrameReading` both of them produce.
 """
 
 from __future__ import annotations
@@ -29,15 +37,23 @@ import traceback
 from dataclasses import dataclass
 
 import numpy as np
-from numpy.typing import NDArray
 
 from .capture.screen import FrameSource, Rect
 from .core.board import DEFAULT_HEIGHT, FULL_ROW, WIDTH, Board
 from .solver.evaluate import DELLACHERIE, evaluate_drop
 from .solver.search import TOP_OUT_SCORE, Move, best_move, enumerate_drops
+from .vision.colour_tracker import ColourTracker
 from .vision.grid import GridClassifier, OwnPaint
-from .vision.pieces_vision import FallingPiece, identify_next
-from .vision.state import GameEvent, GameStateTracker, Snapshot
+from .vision.readers import (
+    FRESH_EVENTS,
+    ColourVision,
+    FrameReading,
+    FrameVision,
+    ShapeVision,
+    VisionEvent,
+    render_debug_frame,
+)
+from .vision.state import GameStateTracker
 
 
 @dataclass
@@ -74,6 +90,12 @@ class CoachConfig:
     # committed one, so only a contiguous run can replay live tracking
     # offline. ~700 frames is ~47 s at the default 15 fps.
     dump_limit: int = 700
+    # Which tracker reads the frames: "shape" is the shipped one, which
+    # matches binary occupancy against one committed stack memory;
+    # "colour" names a piece by the colour it is drawn in, per cell and per
+    # frame. Both are wired through the same reading (vision/readers.py) so
+    # everything the user sees is decided by the same policy either way.
+    tracker: str = "shape"
 
 
 # The overlay loop exits after this many CONSECUTIVE failed ticks (~3 s at
@@ -131,33 +153,6 @@ def rescore(board: Board, move: Move, next_piece: str | None) -> Move | None:
             board=result.board,
         )
     return None
-
-
-def render_debug_frame(
-    occupancy: NDArray[np.bool_],
-    confidence: float,
-    committed: Snapshot,
-    falling: FallingPiece | None,
-    events: list[GameEvent],
-) -> str:
-    """Terminal debug view of one committed frame: what vision sees.
-
-    The rows x 10 grid is the raw observed occupancy; the falling piece and
-    next piece come from the tracker's committed view of the same frame.
-    (A graphical debug window is deferred to the live phase; see SPEC.md.)
-    """
-    grid = str(Board.from_grid(occupancy))
-    falling_txt = "-"
-    if falling is not None:
-        falling_txt = (
-            f"{falling.piece} rot{falling.rotation_index} @ (row {falling.row}, col {falling.col})"
-        )
-    events_txt = ", ".join(event.name for event in events) or "-"
-    return (
-        f"{grid}\n"
-        f"falling: {falling_txt}  next: {committed.next_piece or '-'}  "
-        f"confidence: {confidence:.2f}  events: {events_txt}"
-    )
 
 
 def compute_overlap_mask(
@@ -246,17 +241,52 @@ def selection_warning(
     return None
 
 
+def make_vision(
+    config: CoachConfig,
+    unobservable_cells: frozenset[tuple[int, int]],
+    own_paint: OwnPaint | None,
+) -> FrameVision:
+    """The tracker ``config.tracker`` names, wired for this session.
+
+    Both readers are handed the same three session facts, because both can
+    be got wrong in the same three ways: which board cells the game's own
+    NEXT panel floats over (they are unknown, not empty), what this tool's
+    own hint paint looks like coming back round through the capture, and
+    how tall the board is.
+    """
+    if config.tracker == "colour":
+        return ColourVision(
+            rows=config.rows,
+            unobservable_cells=unobservable_cells,
+            own_paint=own_paint,
+            debug=config.debug,
+        )
+    if config.tracker == "shape":
+        return ShapeVision(
+            rows=config.rows,
+            min_confidence=config.min_confidence,
+            unobservable_cells=unobservable_cells,
+            own_paint=own_paint,
+            debug=config.debug,
+        )
+    raise ValueError(f"unknown tracker {config.tracker!r} (expected 'colour' or 'shape')")
+
+
 class CoachEngine:
     """GUI-free part of the loop: frame in, hint (Move or None) out.
 
-    Owns the state tracker, the solver calls, and the precompute cache;
-    the runner (macOS overlay loop or a test harness) feeds it frames.
+    Owns the hint policy — which placement is on screen, when it may move
+    and when it comes down — plus the solver calls and the precompute
+    cache. What is falling and what the board is comes from a
+    :class:`~tetris_coach.vision.readers.FrameVision`; the runner (macOS
+    overlay loop or a test harness) feeds it frames.
     """
 
     def __init__(
         self,
         config: CoachConfig | None = None,
         unobservable_cells: frozenset[tuple[int, int]] | None = None,
+        vision: FrameVision | None = None,
     ) -> None:
         self.config = config or CoachConfig()
         # Board cells the next-piece preview floats over (see
@@ -265,61 +295,65 @@ class CoachEngine:
         # told they are unknown. Empty by default, so a headless engine and
         # the common non-overlapping next box are unchanged.
         self._unobservable_cells: frozenset[tuple[int, int]] = unobservable_cells or frozenset()
-        # The one place config.rows fans out to the stateful components;
-        # both hold board-shaped state before the first frame exists, so
-        # their row count cannot come from data.
-        self.tracker = GameStateTracker(
-            confirm_frames=2,
-            rows=self.config.rows,
-            unobservable_cells=self._unobservable_cells,
-        )
-        # Stateful board classifier: its background memory keeps boards
-        # readable when the stack legally reaches the visible top row
-        # (where the per-frame top-row estimate inverts) and gates solid
-        # overlays whose color is not the board's background (a bright
-        # pause panel on a dark theme must never read as a board wipe).
-        # The covered cells go in HERE as well as into the blanking below:
-        # the classifier estimates the board's background from the top row,
-        # and a preview box parked on two top-row cells otherwise poisons
-        # that estimate on every frame and — via the top-row cap — rejects
-        # every frame, so the memory never anchors and the session is
-        # deadlocked (the diagnosed ROAS Stacker failure).
-        # The hint color goes in too, because this tool's overlay is ON
-        # SCREEN when the next frame is captured: the coach reads its own
-        # paint back as board content unless the classifier is told what
-        # that paint looks like. It is the configured color, not the
-        # default, or a session run with --hint-color would paint one
-        # thing and look for another.
-        # ...and the preview reader is told the same thing, for the same
-        # reason: the box floats over the top corner of the playfield, so
-        # a hint drawn in that corner is drawn over the BOX, where a
-        # tetromino of our own paint would otherwise read as the piece
-        # the game is about to deal.
+        # This tool's overlay is ON SCREEN when the next frame is captured,
+        # so every reader has to be told what its own paint looks like or it
+        # reads the hint back as board content. It is the configured color,
+        # not the default, or a session run with --hint-color would paint
+        # one thing and look for another.
         self._own_paint = OwnPaint.for_hint_color(self.config.hint_color)
-        self.classifier = GridClassifier(
-            rows=self.config.rows,
-            min_confidence=self.config.min_confidence,
-            unobservable_cells=self._unobservable_cells,
-            own_paint=self._own_paint,
+        self.vision: FrameVision = vision or make_vision(
+            self.config, self._unobservable_cells, self._own_paint
         )
         self.current_hint: Move | None = None
         self._predicted_board: Board | None = None
         self._precomputed: Move | None = None
-        # True while current_hint came from the 1-ply precompute and should
-        # be refined to 2-ply once the upcoming piece is known.
-        self._hint_is_provisional = False
-        # Preview-vision cache: the preview image is byte-identical on most
-        # frames (a piece stays in the box ~15 frames), so identify_next
-        # only runs when the pixels actually change.
-        self._last_next_image: np.ndarray | None = None
-        self._last_next_piece: str | None = None
-        # Debug status-line throttling: (confidence, occupied, gate) of the
-        # last line printed, plus a frame counter for the periodic reprint.
-        self._debug_last_status: tuple[float, int, str] | None = None
-        self._debug_frames = 0
-        # Consecutive frames the gate has refused. The hint is withdrawn
+        # The (piece, stack, next piece) the standing hint was solved for.
+        # A frame whose reading matches it decided nothing new, so nothing
+        # is solved and — the point — the target on screen cannot move.
+        self._solved_for: tuple[str | None, tuple[int, ...], str | None] | None = None
+        # Consecutive frames vision has refused. The hint is withdrawn
         # once this passes config.max_stale_frames (see process_frame).
         self._stale_frames = 0
+
+    @property
+    def tracker(self) -> GameStateTracker | ColourTracker:
+        """The tracker reading this session's frames.
+
+        A :class:`~tetris_coach.vision.state.GameStateTracker` under
+        ``--tracker shape`` and a
+        :class:`~tetris_coach.vision.colour_tracker.ColourTracker` under
+        the default; they answer to different things, and code that reaches
+        past the engine for one of them is code that knows which it wants.
+        """
+        return self.vision.tracker
+
+    @property
+    def _hint_is_provisional(self) -> bool:
+        """Was the standing hint solved with less than the full 2-ply view?
+
+        True while it was computed without an upcoming piece — the instant
+        flip to a precompute, or a frame whose preview box said nothing.
+        Not a flag but a reading of :attr:`_solved_for`: the upcoming piece
+        recorded there is what the hint actually used, so the frame the box
+        becomes readable is a changed input and the refinement happens
+        through the ordinary re-solve (under the stability margin).
+        """
+        return (
+            self.current_hint is not None
+            and self._solved_for is not None
+            and self._solved_for[2] is None
+        )
+
+    @property
+    def classifier(self) -> GridClassifier:
+        """The shipped reader's occupancy classifier (``--tracker shape``)."""
+        vision = self.vision
+        if isinstance(vision, ShapeVision):
+            return vision.classifier
+        raise AttributeError(
+            "the colour tracker reads cells by colour and has no occupancy "
+            "classifier; construct the engine with CoachConfig(tracker='shape')"
+        )
 
     def process_frame(
         self,
@@ -327,35 +361,10 @@ class CoachEngine:
         next_image: np.ndarray | None,
     ) -> Move | None:
         """Digest one captured frame pair; return the hint to display."""
-        occupancy, confidence = self.classifier.classify(board_image)
-        rejected = confidence < self.config.min_confidence
-        if self.config.debug:
-            # Always-on compact status so a silently rejected or
-            # never-committing stream is still diagnosable: print on any
-            # change, and at least every 30 frames (~2 s).
-            self._debug_frames += 1
-            occupied = int(occupancy.sum())
-            gate = "REJECTED" if rejected else "ok"
-            status = (round(confidence, 2), occupied, gate)
-            if status != self._debug_last_status or self._debug_frames % 30 == 0:
-                self._debug_last_status = status
-                kind = self.tracker.last_kind
-                print(
-                    f"[vision] frame {self._debug_frames}: confidence {confidence:.2f} "
-                    f"(gate {gate} at {self.config.min_confidence}), "
-                    f"occupied {occupied}/{occupancy.size}, last frame kind "
-                    f"{kind.name if kind is not None else '-'}",
-                    flush=True,
-                )
-        if rejected:
-            # The gate judged the BOARD image. The preview box is a
-            # different region with its own readability, and the tracker's
-            # flip rules date a deal in CAPTURES — so a rejected capture
-            # still has to reach the preview clock, or a wipe (which
-            # rejects the board and blanks the box alike) stops that clock
-            # for its whole duration and the flip on the far side is dated
-            # against a frame seconds earlier. Board state is untouched.
-            self.tracker.observe_preview(self._identify_next_cached(next_image))
+        reading = self.vision.read(board_image, next_image)
+        for note in reading.notes:
+            print(note, flush=True)
+        if not reading.accepted:
             self._stale_frames += 1
             if self._stale_frames > self.config.max_stale_frames:
                 # Vision has not been able to justify this placement for
@@ -363,153 +372,123 @@ class CoachEngine:
                 # on. Take it down rather than let it sit there being
                 # confidently wrong; the tracker's own state is untouched,
                 # so a readable frame re-solves immediately.
-                self.current_hint = None
-                self._hint_is_provisional = False
-                self._predicted_board = None
-                self._precomputed = None
+                self._withdraw()
             return self.current_hint  # a brief hold rides out a glitch
         self._stale_frames = 0
-        # Drop what the capture read under the preview box: confidence above
-        # was judged on the full grid, but neither the tracker nor the debug
-        # view below may take the NEXT piece for board content. The tracker
-        # knows those cells are unknown rather than empty (unobservable_cells).
-        occupancy = self._blanked(occupancy)
-        next_piece = self._identify_next_cached(next_image)
+        self._update_hint(reading)
+        return self.current_hint
 
-        previous = self.tracker.committed
-        events = self.tracker.update(occupancy, next_piece)
-        committed = self.tracker.committed
-        if self.config.debug and (events or committed != previous):
-            print(
-                render_debug_frame(occupancy, confidence, committed, self.tracker.falling, events)
-            )
+    def _withdraw(self) -> None:
+        """Take the hint off the screen, and forget what was planned on it."""
+        self.current_hint = None
+        self._solved_for = None
+        self._predicted_board = None
+        self._precomputed = None
 
-        if GameEvent.BOARD_RESET in events:
-            self._predicted_board = None
-            self._precomputed = None
-            self.current_hint = None
+    def _update_hint(self, reading: FrameReading) -> None:
+        """Decide what is on screen after this frame.
 
-        if (
-            self.current_hint is None
-            and not events
-            and committed.falling_piece is not None
-            and committed == previous
-        ):
-            # A withdrawn hint has to be able to come BACK. Solving is
-            # otherwise driven by events, so once a long obscuration took
-            # the hint down (see max_stale_frames), an unchanged board
-            # produces no event and the coach would stay silent until the
-            # next piece - the overlay lifting would not bring it back.
-            # Same inputs as the ordinary solve, so it lands on the same
-            # placement; the stability rule then holds it as usual.
-            board = self._solver_board(committed.stack_rows)
-            self.current_hint = best_move(board, committed.falling_piece, committed.next_piece)
-            self._hint_is_provisional = committed.next_piece is None
-            self._precompute_next(committed.next_piece)
-
-        if GameEvent.PIECE_UNNAMED in events:
-            # The preview named the piece entering, and that name is over:
-            # this frame ruled it out, or it stood unconfirmed for longer
-            # than a hint may (a hold swap or a restart puts a different
-            # piece under the name with nothing to contradict it, so the
-            # clock is the only thing that ends it). Take the hint off the
-            # screen rather than leaving a placement for a piece the
-            # player does not have: showing nothing is what the coach does
-            # for any piece it cannot name, and the frames after this name
-            # it from shape as soon as they can.
-            # The precompute goes too — it was solved for a board that
-            # assumed this hint would be followed.
-            self.current_hint = None
-            self._hint_is_provisional = False
-            self._predicted_board = None
-            self._precomputed = None
-
-        if GameEvent.PIECE_LOCKED in events or GameEvent.PIECE_SPAWNED in events:
-            board = self._solver_board(committed.stack_rows)
-            piece = committed.falling_piece
-            if piece is None:
+        The whole hint policy, and it is short on purpose: solve when an
+        INPUT changed, hold otherwise, and let the target move only when
+        the piece it was drawn for is no longer the piece in play.
+        """
+        if reading.inputs == self._solved_for:
+            return  # nothing vision says has changed: the target stands
+        piece = reading.falling_piece
+        board = self._solver_board(reading.stack_rows)
+        if piece is None:
+            # No piece to advise on: a lock gap, a piece whose name has
+            # been withdrawn, a board just re-anchored. Showing a placement
+            # for a piece the player does not have is the failure this
+            # tool's own user reported, so the coach says nothing.
+            self._withdraw()
+            if VisionEvent.PIECE_LOCKED in reading.events and reading.next_piece is not None:
                 # Lock gap (piece locked, next spawn not yet visible):
                 # pre-solve the upcoming piece on the settled board so the
                 # spawn flips instantly through the validation guard below.
-                self.current_hint = None
-                self._hint_is_provisional = False
-                self._predicted_board = None
-                self._precomputed = None
-                if committed.next_piece is not None:
-                    self._predicted_board = board
-                    self._precomputed = best_move(board, committed.next_piece)
-            else:
-                if (
-                    self._precomputed is not None
-                    and self._predicted_board is not None
-                    and board == self._predicted_board
-                    and self._precomputed.piece == piece
-                ):
-                    # Prediction held: flip to the precomputed hint instantly.
-                    self.current_hint = self._precomputed
-                    self._hint_is_provisional = True
-                else:
-                    self.current_hint = best_move(board, piece, committed.next_piece)
-                    # Provisional means "computed with less than full 2-ply
-                    # information": refine once the preview becomes readable.
-                    self._hint_is_provisional = committed.next_piece is None
-                self._precompute_next(committed.next_piece)
-        elif (
-            self._hint_is_provisional
-            and self.current_hint is not None
-            and committed.falling_piece == self.current_hint.piece
-            and committed.next_piece is not None
+                self._predicted_board = board
+                self._precomputed = best_move(board, reading.next_piece)
+            self._solved_for = reading.inputs
+            return
+        # A hint is free to move when the piece it was chosen for is gone:
+        # there is nothing on screen the user is still being asked to
+        # follow. Everything else — the board shifting under the same
+        # piece, the preview becoming readable — is held to the margin.
+        fresh = (
+            self.current_hint is None
+            or self.current_hint.piece != piece
+            or bool(FRESH_EVENTS.intersection(reading.events))
+        )
+        solved_with = reading.next_piece
+        if (
+            fresh
+            and self._precomputed is not None
+            and self._predicted_board == board
+            and self._precomputed.piece == piece
         ):
-            # Quiet frame: upgrade the instant 1-ply hint to the full 2-ply
-            # answer now that the upcoming piece is known.
-            board = self._solver_board(committed.stack_rows)
-            refined = best_move(board, self.current_hint.piece, committed.next_piece)
-            if refined is not None:
-                self.current_hint = refined
-            self._hint_is_provisional = False
-            self._precompute_next(committed.next_piece)
-        return self.current_hint
+            # Prediction held: flip to the precomputed hint instantly.
+            self.current_hint = self._precomputed
+            # It was solved 1-ply (the piece after it was unknown when it
+            # was computed), so the reading is recorded as having named no
+            # upcoming piece: the next frame that can see one counts as a
+            # changed input and refines this to the full 2-ply answer —
+            # under the margin, which is exactly the near-tie that rule
+            # exists for.
+            solved_with = None
+        else:
+            self.current_hint = self._steady_hint(board, piece, reading.next_piece, fresh)
+        self._solved_for = (piece, reading.stack_rows, solved_with)
+        self._precompute_next(reading.next_piece)
 
-    def _blanked(self, occupancy: NDArray[np.bool_]) -> NDArray[np.bool_]:
-        """Occupancy with the unobservable cells cleared.
+    def _steady_hint(
+        self,
+        board: Board,
+        piece: str,
+        next_piece: str | None,
+        fresh: bool,
+    ) -> Move | None:
+        """The placement to show: the best one, unless the standing one is close.
 
-        Clearing is not a claim that those cells are empty — it discards a
-        reading that is about the game's UI, not the board. What they
-        actually hold is carried as a belief by the tracker, which is told
-        which cells they are.
+        A hint that moves while the learner is looking at it is worse than
+        useless — they cannot follow it, and the tool exists to build
+        placement intuition — so a challenger has to beat the target
+        already on screen by more than :data:`HINT_SWITCH_MARGIN` to take
+        its place. Both are judged on THIS board with THIS lookahead (see
+        :func:`rescore`), so the comparison is between two placements and
+        not between two moments.
 
-        Returns a copy when any cell is cleared so a cached classifier
-        output is never mutated in place; the array is returned unchanged
-        (no copy) when there is nothing to clear.
+        ``fresh`` says the piece on screen is no longer the piece in play,
+        and then there is nothing to be steady about: the new answer wins
+        outright.
         """
-        if not self._unobservable_cells:
-            return occupancy
-        blanked = occupancy.copy()
-        rows, cols = blanked.shape
-        for r, c in self._unobservable_cells:
-            if 0 <= r < rows and 0 <= c < cols:
-                blanked[r, c] = False
-        return blanked
+        candidate = best_move(board, piece, next_piece)
+        standing = self.current_hint
+        if fresh or candidate is None or standing is None or standing.piece != piece:
+            return candidate
+        held = rescore(board, standing, next_piece)
+        if held is None:
+            return candidate  # the standing placement is no longer legal
+        return candidate if candidate.score > held.score + HINT_SWITCH_MARGIN else held
 
     def _solver_board(self, stack_rows: tuple[int, ...]) -> Board:
         """The committed stack as the solver should see it.
 
-        For an unobservable cell the committed stack holds a belief, and
-        the way a wrong belief hurts is a hint planned INTO a cell the
-        coach cannot see — worse than useless, since the overlay would draw
-        it under the very panel that hides the board. A covered cell
-        resting directly on the stack (or on the floor) is exactly where
-        the stack plausibly continues up into the covered region, so the
-        solver is handed those filled and keeps out.
+        For an unobservable cell the reading holds no evidence, and the way
+        that hurts is a hint planned INTO a cell the coach cannot see —
+        worse than useless, since the overlay would draw it under the very
+        panel that hides the board. A covered cell resting directly on the
+        stack (or on the floor) is exactly where the stack plausibly
+        continues up into the covered region, so the solver is handed those
+        filled and keeps out.
 
-        Covered cells with air under them are handed over as believed.
-        Filling every covered cell instead would permanently fill the top
-        rows of the columns under the panel — and a column whose top row is
-        filled is one :meth:`Board.drop` rejects outright, which would cost
-        the user those columns for the entire session, in every board state,
-        to guard a case that only arises near top-out.
+        Covered cells with air under them are left empty. Filling every
+        covered cell instead would permanently fill the top rows of the
+        columns under the panel — and a column whose top row is filled is
+        one :meth:`Board.drop` rejects outright, which would cost the user
+        those columns for the entire session, in every board state, to
+        guard a case that only arises near top-out.
         """
-        unknown = self.tracker.unknown_rows
+        unknown = self.vision.unknown_rows
         if not any(unknown):
             return Board(stack_rows)
         rows = list(stack_rows)
@@ -517,18 +496,6 @@ class CoachEngine:
             support = rows[r + 1] if r + 1 < len(rows) else FULL_ROW  # the floor supports
             rows[r] |= unknown[r] & support
         return Board(tuple(rows))
-
-    def _identify_next_cached(self, next_image: np.ndarray | None) -> str | None:
-        """identify_next, skipped when the preview pixels did not change."""
-        if next_image is None:
-            return None
-        if self._last_next_image is not None and np.array_equal(next_image, self._last_next_image):
-            return self._last_next_piece
-        piece = identify_next(next_image, own_paint=self._own_paint)
-        # Copy: capture sources may reuse the frame buffer between grabs.
-        self._last_next_image = np.array(next_image, copy=True)
-        self._last_next_piece = piece
-        return piece
 
     def _precompute_next(self, next_piece: str | None) -> None:
         """Assume the current hint is followed; pre-solve the next piece."""
@@ -720,3 +687,19 @@ def run(
     timer.start(max(1, int(1000 / config.poll_rate)))
     app.exec()
     pool.waitForDone()
+
+
+__all__ = [
+    "HINT_SWITCH_MARGIN",
+    "MAX_CONSECUTIVE_TICK_FAILURES",
+    "CoachConfig",
+    "CoachEngine",
+    "FrameWorker",
+    "TickResult",
+    "compute_overlap_mask",
+    "make_vision",
+    "render_debug_frame",
+    "rescore",
+    "run",
+    "selection_warning",
+]

@@ -248,7 +248,7 @@ class TestRealFixtureFrames:
             # The raw reading has NEXT-preview cells in the covered corner ...
             if any(occupancy[r, c] for r, c in covered):
                 any_contaminated = True
-            blanked = engine._blanked(occupancy)
+            blanked = engine.vision._blanked(occupancy)
             # ... and none of those readings survives into the pipeline.
             for r, c in covered:
                 assert not blanked[r, c], f"{name}: cell ({r},{c}) not cleared"
