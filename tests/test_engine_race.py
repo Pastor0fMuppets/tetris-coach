@@ -5,15 +5,21 @@ windows replayed through :class:`~tetris_coach.app.CoachEngine` itself, so
 what is asserted here is what a user would have seen on screen. The
 numbers, scored from frame ``WARMUP`` of each window:
 
-    tracker  hints  MISNAMED  stale  latmed  latmax  moves  hintless
-    colour     418         0     21     0.0       0      0         4
-    shape      397         6     49     1.0       3      3        25
+    tracker  hints  MISNAMED  INVENTED  stale  latmed  latmax  moves  hintless
+    colour     418         0         0     21     0.0       0      0         4
+    shape      397         6         0     49     1.0       3      3        25
 
 MISNAMED is the one that matters: a placement drawn for a piece the player
 does not have walks them into a hole and looks exactly like a placement
 that is right. The colour tracker draws none in this corpus; the shipped
 tracker draws six, each on the frame a new piece arrives while its
 committed state still holds the piece that just locked.
+
+INVENTED covers the stretches MISNAMED cannot reach, because the oracle
+abstains on them: line clears and covered boards. It is not a measure this
+race always had, and it was added because the colour reader was drawing an
+``I`` over four frames of spawn_latency's line-clear flash and scoring a
+clean sheet on every other number here.
 
 ``stale`` is not a fault by itself -- it is the deliberate hold that rides
 out a glitch (``CoachConfig.max_stale_frames``), and every run of it here
@@ -30,8 +36,17 @@ from pathlib import Path
 import pytest
 
 from tetris_coach.app import CoachConfig
-from tetris_coach.race.engine import TRACKERS, Shown, overall, replay, run, score, table
-from tetris_coach.race.measures import WARMUP, load_truth
+from tetris_coach.race.engine import (
+    TRACKERS,
+    Shown,
+    ShownFrame,
+    overall,
+    replay,
+    run,
+    score,
+    table,
+)
+from tetris_coach.race.measures import WARMUP, TruthFrame, TruthWindow, load_truth
 from tetris_coach.truth.windows import CONSECUTIVE, by_name
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -55,23 +70,30 @@ def test_the_default_tracker_is_the_colour_one() -> None:
 
 
 @pytest.mark.parametrize(
-    ("tracker", "hints", "misnamed", "stale", "moves", "hintless"),
+    ("tracker", "hints", "misnamed", "invented", "stale", "moves", "hintless"),
     [
-        ("colour", 418, 0, 21, 0, 4),
-        ("shape", 397, 6, 49, 3, 25),
+        ("colour", 418, 0, 0, 21, 0, 4),
+        ("shape", 397, 6, 0, 49, 3, 25),
     ],
 )
 def test_what_each_tracker_puts_on_screen(
-    tracker: str, hints: int, misnamed: int, stale: int, moves: int, hintless: int
+    tracker: str,
+    hints: int,
+    misnamed: int,
+    invented: int,
+    stale: int,
+    moves: int,
+    hintless: int,
 ) -> None:
     total = totals(tracker)
-    assert (total.hinted, total.misnamed, total.stale, total.moves, total.hintless) == (
-        hints,
-        misnamed,
-        stale,
-        moves,
-        hintless,
-    )
+    assert (
+        total.hinted,
+        total.misnamed,
+        total.invented,
+        total.stale,
+        total.moves,
+        total.hintless,
+    ) == (hints, misnamed, invented, stale, moves, hintless)
     assert total.frames == 422
 
 
@@ -162,5 +184,42 @@ def test_the_score_is_read_off_the_scored_frames_only() -> None:
 def test_the_table_renders() -> None:
     text = table(scores())
     assert "MISNAMED" in text
+    assert "INVENTED" in text
     assert "colour" in text and "shape" in text
     assert text.count("ALL") == 2
+
+
+def _answer(name: str, piece: str | None) -> TruthFrame:
+    """One frame of an answer sheet: a named piece, or an abstention."""
+    verdict = "abstain" if piece is None else "confident"
+    cells = frozenset() if piece is None else frozenset({(0, 0)})
+    return TruthFrame(name, verdict, piece, cells, frozenset(), "shape")
+
+
+def _drawing(piece: str | None) -> ShownFrame:
+    hint = None if piece is None else (piece, ((11, 0),))
+    return ShownFrame(frame="x", accepted=True, piece=piece, hint=hint)
+
+
+def test_a_hint_invented_across_an_abstention_is_counted() -> None:
+    # The hole INVENTED closes. The oracle abstains for three frames --
+    # a line clear, say -- and says O on either side of them. A hint for
+    # an I in the middle is a piece the player never had, and no other
+    # measure in this table can see it: MISNAMED skips unanswered frames,
+    # and the coach was not blank, so hintless does not count it either.
+    frames = [_answer("1", "O"), *(_answer(str(n), None) for n in (2, 3, 4)), _answer("5", "O")]
+    truth = TruthWindow("synthetic", 12, 10, frozenset(), frames)
+    invented = [_drawing("O"), _drawing("I"), _drawing("I"), _drawing(None), _drawing("O")]
+    assert score("colour", invented, truth, warmup=0).invented == 2
+    assert score("colour", invented, truth, warmup=0).misnamed == 0
+
+    # Holding the hint the piece before and after the gap justifies is the
+    # patience the engine is designed to have, and is not counted.
+    held = [_drawing("O")] * 5
+    assert score("colour", held, truth, warmup=0).invented == 0
+
+    # Neither is reading the NEXT piece early: an abstention that ends in
+    # a T excuses a hint for a T inside it.
+    frames[-1] = _answer("5", "T")
+    early = TruthWindow("synthetic", 12, 10, frozenset(), frames)
+    assert score("colour", [_drawing("O"), *([_drawing("T")] * 4)], early, warmup=0).invented == 0
