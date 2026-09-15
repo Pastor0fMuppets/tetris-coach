@@ -6,12 +6,19 @@ from PIL import Image, ImageDraw
 
 from tetris_coach.core.pieces import PIECES, ROTATIONS
 from tetris_coach.vision.grid import (
+    _GHOST_SEPARATION,
+    HINT_PAINT,
     MIN_SPREAD,
     _distance_scores,
     classify_grid,
     otsu_threshold_hist,
 )
-from tetris_coach.vision.pieces_vision import _preview_blocks, identify_next, match_cells
+from tetris_coach.vision.pieces_vision import (
+    _piece_from_mask,
+    _preview_blocks,
+    identify_next,
+    match_cells,
+)
 
 from .synthetic import STYLES, label_color, render_board, render_next_preview, with_label
 
@@ -260,3 +267,166 @@ class TestIdentifyNextCaptionBar:
                 barred = image.copy()
                 barred[1 : 1 + bar[1], 1 : 1 + bar[0]] = label_color(style)
                 assert identify_next(barred) in (piece, None)
+
+
+PALE = FIXTURES / "pale_preview"
+PALE_BOARD = FIXTURES / "pale_piece"
+
+# The pale_preview window's frames, and what is in the box on each. The two
+# unnamed ones are the deal animation: the box is mid-swap, holding the
+# outgoing piece's panel sliding off over the incoming one (00273 and 00280
+# score their whole crop above the floor, background estimate included).
+PALE_WINDOW = [
+    ("00273", None),
+    ("00280", None),
+    *((f"00{n}", "T") for n in (290, 300, 477, 485, 495)),
+    *((f"00{n}", "T") for n in range(565, 605, 5)),
+]
+
+
+def pale_preview(number: str, window: Path = PALE) -> np.ndarray:
+    return np.asarray(Image.open(window / f"next_{number}.png"))[:, :, ::-1]
+
+
+def band_split(image: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """The band, and the level the band pass splits out of it."""
+    img = np.asarray(image)
+    background = np.median(img.reshape(-1, img.shape[2]), axis=0)
+    scores = _distance_scores(img, background)
+    band = (scores >= _GHOST_SEPARATION) & (scores < MIN_SPREAD)
+    level = otsu_threshold_hist(scores[band])
+    return scores, band, float(level)
+
+
+class TestIdentifyNextPalePiece:
+    """Bug 3, on the committed crops of the session that went blind.
+
+    A pale periwinkle piece in the box scores under the uniformity floor
+    the threshold is anchored at, so the mask kept nothing and the box
+    read as empty: measured over the 705-frame session behind
+    ``tests/fixtures/pale_preview``, ``identify_next`` returned None on
+    226 frames (32%), in runs up to 45. The same failure the BOARD had
+    until ``vision.grid`` stopped letting a threshold decide the
+    intermediate band.
+    """
+
+    def test_the_pale_previews_are_named(self) -> None:
+        # The headline, on the frames the README names: next_00580 plainly
+        # shows a T, and every readable frame of the window is a T.
+        assert identify_next(pale_preview("00580")) == "T"
+        assert [(n, identify_next(pale_preview(n))) for n, _ in PALE_WINDOW] == PALE_WINDOW
+
+    def test_the_pale_piece_window_is_named_too(self) -> None:
+        # The board-side window's own preview crops: 47 of 61, all T. The
+        # 14 that are not are the game's end-of-round panel (00687-00700),
+        # which covers the box as well as the board.
+        seen = [identify_next(pale_preview(f"00{n}", PALE_BOARD)) for n in range(640, 701)]
+        assert seen == ["T"] * 47 + [None] * 14
+
+    def test_it_is_the_band_that_names_them_not_the_threshold(self) -> None:
+        # The diagnosis, pinned. The thresholded mask is anchored at
+        # MIN_SPREAD and the piece is UNDER it: 69 of 10098 pixels
+        # survive, all of them caption, and the shape rules have nothing
+        # to read. The answer comes from the band instead.
+        image = pale_preview("00580")
+        mask = preview_mask(image)
+        assert mask is not None
+        assert int(mask.sum()) == 69
+        assert _piece_from_mask(mask) is None
+        assert identify_next(image) == "T"
+
+    def test_the_band_is_split_because_the_box_has_furniture_in_it(self) -> None:
+        # Why the band is not simply handed over whole. A board cell's
+        # patch mean never sees the box's own hairline border and
+        # gridlines; in the crop they score 0.179-0.250, under the piece
+        # at 0.254-0.349 and touching it. Taken whole the band merges the
+        # piece's cells through that border and nothing block-like is
+        # left; split at 0.252, the cells stand alone.
+        scores, band, level = band_split(pale_preview("00580"))
+        furniture, piece = band & (scores <= level), band & (scores > level)
+        assert 0.17 < float(scores[furniture].max()) < level < float(scores[piece].min())
+        assert _piece_from_mask(band) is None
+        assert _piece_from_mask(piece) == "T"
+
+    def test_the_caption_never_reaches_the_band_pass(self) -> None:
+        # The guard that survives the change, and why it does not need a
+        # rule of its own: the caption's core is SOLID class (0.586, well
+        # above the floor), so only its antialiased skirt is in the band —
+        # a hollow outline the block filter drops. The blocks the band
+        # pass reads are the piece's four cells and nothing else.
+        image = pale_preview("00580")
+        scores, band, level = band_split(image)
+        assert float(scores[:12, :40].max()) > MIN_SPREAD  # the caption, solid class
+        blocks = _preview_blocks(band & (scores > level))
+        assert blocks is not None
+        assert bbox(blocks) == (11, 14, 52, 73)  # the piece; the caption is at y < 8
+
+    def test_the_readable_frames_are_read_the_same_as_before(self) -> None:
+        # The band pass is asked only where the threshold came back
+        # empty-handed, so every crop that was readable is byte-identical.
+        # Measured over every committed preview crop: the band, read on
+        # its own, contradicts the threshold nowhere.
+        for window in ("live_session", "ghost_session", "absorbed_piece"):
+            for path in sorted((FIXTURES / window).glob("next_*.png")):
+                image = np.asarray(Image.open(path))[:, :, ::-1]
+                scores, band, level = band_split(image)
+                assert _piece_from_mask(band & (scores > level)) is None
+                assert identify_next(image) is not None
+
+
+class TestIdentifyNextOwnPaint:
+    """The one thing in the box that must never be read as a piece.
+
+    The coach paints its hint over the game and captures the screen
+    again, and the preview panel floats over the top corner of the
+    playfield — so a hint drawn in that corner is drawn over the BOX. It
+    is a tetromino of square cells, in the place a tetromino is expected,
+    and over a light box it composites INTO the band this pass reads.
+    """
+
+    @staticmethod
+    def box(cells: tuple[tuple[int, int], ...], color: tuple[int, int, int]) -> np.ndarray:
+        """A white preview box with ``cells`` painted in ``color``."""
+        image = np.full((96, 96, 3), 252, dtype=np.uint8)
+        image[:, :, 2] = 251
+        for r, c in cells:
+            top, left = 8 + r * 19 + 1, 12 + c * 19 + 1
+            image[top : top + 17, left : left + 17] = color
+        return image
+
+    @staticmethod
+    def composite() -> tuple[int, int, int]:
+        """What the shipped hint fill looks like over this box's ground."""
+        assert HINT_PAINT is not None
+        background = np.array([252.0, 252.0, 251.0])
+        paint = np.asarray(HINT_PAINT.color, dtype=np.float64)
+        composite = background + HINT_PAINT.opacity * (paint - background)
+        return tuple(round(float(v)) for v in composite)  # type: ignore[return-value]
+
+    def test_a_pale_piece_in_this_box_is_named(self) -> None:
+        # The control: the same box, the same geometry, the session's own
+        # periwinkle. The guard must not be what reads it.
+        assert identify_next(self.box(ROTATIONS["T"][0].cells, (251, 224, 206))) == "T"
+
+    def test_our_own_hint_is_refused_rather_than_named(self) -> None:
+        # Every rotation of every piece, painted in our own fill: the box
+        # is unreadable while our overlay is on it, and None is this
+        # module's word for that. Naming it would report the piece the
+        # coach is POINTING AT as the piece coming next.
+        for piece in PIECES:
+            for rot in ROTATIONS[piece]:
+                assert identify_next(self.box(rot.cells, self.composite())) is None
+
+    def test_it_is_the_paint_rule_and_not_the_shape_rules(self) -> None:
+        # Pinned: the shape rules find a perfectly good piece there. It is
+        # the color arithmetic that refuses it, and a session run with a
+        # different --hint-color (or none) gets the shape answer back.
+        image = self.box(ROTATIONS["J"][0].cells, self.composite())
+        assert identify_next(image, own_paint=None) == "J"
+
+    def test_the_composite_is_in_the_band_this_pass_reads(self) -> None:
+        # The measurement that makes the rule necessary: our own fill over
+        # a white box lands four thousandths from the session's pale
+        # piece, on the very scale the band is defined by.
+        scores, band, _level = band_split(self.box(((0, 0),), self.composite()))
+        assert _GHOST_SEPARATION <= float(scores[band].max()) < MIN_SPREAD

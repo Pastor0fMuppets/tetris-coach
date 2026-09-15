@@ -35,18 +35,24 @@ to work with, and what each costs now:
                         board reset four frames later: the game had
                         wiped the field, and the resync dropped the hint
                         that named the piece it was resyncing ONTO.
-    frames 00217-00232  the flip here is I -> O and it is a deal LATE:
-                        the T that was dealt sat in the preview box from
-                        00198 to 00215 unread (it is drawn in a pale blue
-                        that scores 0.319 against the box background,
-                        under the 0.35 uniformity floor), so the name the
-                        flip carries is the piece BEFORE it. Naming the
-                        fragment from it would be the "confused two
-                        pieces" failure: 16 frames, and 16 frames still.
+    frames 00217-00232  the flip here is T -> O, and it took the band
+                        pass to have it at all: the T that was dealt sat
+                        in the box from 00198 to 00215 drawn in a pale
+                        blue that scores 0.319, under the 0.35 floor the
+                        threshold is anchored at, so the box read EMPTY
+                        for 18 captures and the flip on the far side was
+                        dated across the whole deal and refused as a
+                        straddle. Read on every capture, the flip lands
+                        on the frame the T is dealt and names the
+                        fragment at the top edge: 16 frames -> 2, and the
+                        shape rule confirms the same T on 00233.
 
 So the accelerator pays where there is evidence and nowhere else, which
 is the point — it is an accelerator on a signal that is often present,
-not a new dependency.
+not a new dependency. What the band pass changed here is how often it is
+present: the box is read on 150 of the window's 161 captures, against
+132 before, and the 18 it gained are the whole of the third episode's
+evidence.
 """
 
 from __future__ import annotations
@@ -286,11 +292,16 @@ def test_no_hint_here_is_still_doing_its_job_when_the_budget_runs_out() -> None:
     # of the session. The clock's cost is a hint cut short, and the budget
     # has to clear the longest one that is still doing its job.
     #
-    # Here that is 15 captures: the flip on 00158 names the O, the name is
-    # on screen from 00163, and the shape rule takes over on 00174 at age
-    # 16. The budget clears it by nine.
+    # Here that is 15 captures, and TWICE: the flip on 00158 names the O,
+    # the name is on screen from 00163, and the shape rule takes over on
+    # 00174 at age 16; the flip on 00217 names the T, on screen from
+    # 00219, and the shape rule reaches it on 00232, again at age 16. The
+    # budget clears both by nine.
     holding = [t for t in hint_life() if t.holding is not None]
-    assert [t.number for t in holding] == [f"00{n}" for n in range(163, 174)]
+    assert [t.number for t in holding] == [
+        *(f"00{n}" for n in range(163, 174)),
+        *(f"00{n}" for n in range(219, 232)),
+    ]
     assert max(t.age for t in holding) == 15
     assert MAX_HINT_AGE > 15
     # ...and why the clock is worth having, on these same frames: a hint
@@ -303,7 +314,8 @@ def test_no_hint_here_is_still_doing_its_job_when_the_budget_runs_out() -> None:
     # swap or a restart provides none at all.
     alive = [t for t in hint_life() if t.alive is not None]
     assert max(t.age for t in alive) == MAX_HINT_AGE
-    assert alive[-1].number == "00182"  # was 00198, the lock
+    first = [t for t in alive if t.alive == "O"]
+    assert first[-1].number == "00182"  # was 00198, the lock
     # Costing nothing here: the name was the shape rule's own eight
     # captures before the budget ran out, so nothing is withdrawn.
     assert GameEvent.PIECE_UNNAMED not in replay_window().events
@@ -375,12 +387,12 @@ def test_the_piece_the_preview_can_name_is_hinted_while_still_half_off_screen() 
     #     sighting -> hint     before   after
     #     00086                    17      17   no flip has been seen
     #     00161                    14       2   the flip names the O
-    #     00217                    16      16   the flip is a deal late
+    #     00217                    16       2   the flip names the T
     #
     assert entering_episodes() == [
         ("00086", "00103", 17),
         ("00161", "00163", 2),
-        ("00217", "00233", 16),
+        ("00217", "00219", 2),
     ]
     # Two frames is the commit debounce, not a wait: the name is there on
     # 00162, the frame after the resync, and the tracker commits any
@@ -400,19 +412,37 @@ def test_the_piece_the_preview_can_name_is_hinted_while_still_half_off_screen() 
     assert all(tick(f"00{n}").falling == "O" for n in range(163, 199))
 
 
-def test_the_two_episodes_with_no_evidence_still_hold_rather_than_guess() -> None:
-    # The other half of the headline. Nothing about these two changed,
-    # and nothing about them should: the first has seen no flip at all,
-    # and the third's flip is a deal late (the T that was dealt sat
-    # unread in the box for 18 frames, so the flip carries the I before
-    # it). A hint withheld beats a hint confidently wrong.
-    waiting = [tick(f"00{n}") for n in range(218, 232)]
+def test_the_episode_with_no_evidence_still_holds_rather_than_guesses() -> None:
+    # The other half of the headline. Nothing about the first episode
+    # changed, and nothing about it should: the window opens on a piece
+    # already at the top edge, no preview CHANGE has been seen, and a box
+    # that has always held an O says nothing about what was dealt. A hint
+    # withheld beats a hint confidently wrong.
+    waiting = [tick(f"{n:05d}") for n in range(90, 102)]
     assert all(t.kind is FrameKind.OCCLUDED for t in waiting)
     assert all(t.falling is None and t.hint is None for t in waiting)
-    # Three cells of a T, sliding across the top edge as the player moves
-    # a piece he has been given nothing to move.
-    assert [t.entering_cells for t in waiting] == [[3, 4, 5]] * 14
+    assert [t.entering_cells for t in waiting] == [[4, 5]] * 12
+    assert {t.read_next for t in waiting} == {"O"}  # read, and still no flip
+
+
+def test_the_third_episode_is_named_by_a_flip_the_band_pass_made_readable() -> None:
+    # The episode this window was committed to measure and the band pass
+    # is what moved. Before, the box read empty from 00198 to 00215 while
+    # a pale T sat in it, the I -> O flip on 00216 was dated 19 captures
+    # back across the whole deal, the tracker refused it as a straddle,
+    # and these fourteen frames were OCCLUDED with nothing on them.
+    named = [tick(f"00{n}") for n in range(219, 232)]
+    assert all(t.kind is FrameKind.FALLING for t in named)
+    assert all(t.falling == "T" and t.hint is not None for t in named)
+    # Three cells of a T sliding across the top edge — the fragment the
+    # flip names, and a fragment an S, a Z, a J and an L fit as well.
+    assert [t.entering_cells for t in named] == [[3, 4, 5]] * 13
+    # The proof the name was right rather than merely early: the shape
+    # rule reaches the same T on 00233 and it holds to the end of the
+    # window — no second spawn, no hint changing target.
     assert tick("00233").falling == "T"
+    assert all(tick(f"00{n}").falling == "T" for n in range(219, 241))
+    assert {t.hint.piece for t in named if t.hint is not None} == {"T"}
 
 
 def test_the_wait_is_a_quarter_of_the_frames_the_gate_accepts() -> None:
@@ -423,8 +453,8 @@ def test_the_wait_is_a_quarter_of_the_frames_the_gate_accepts() -> None:
     accepted = [t for t in replay() if t.accepted]
     kinds = Counter(t.kind for t in accepted if t.kind is not None)
     assert len(accepted) == 124
-    assert kinds[FrameKind.OCCLUDED] == 31  # was 43
-    assert sum(1 for t in replay() if t.hint is not None) == 120  # was 108
+    assert kinds[FrameKind.OCCLUDED] == 17  # was 43, then 31
+    assert sum(1 for t in replay() if t.hint is not None) == 134  # was 108, then 120
 
 
 def test_the_flip_that_names_the_O_is_dated_across_the_wipe_that_dealt_it() -> None:
@@ -447,21 +477,26 @@ def test_the_flip_that_names_the_O_is_dated_across_the_wipe_that_dealt_it() -> N
     assert tick("00163").falling == "O"
 
 
-def test_the_preview_is_read_on_most_frames_and_never_on_the_pale_T() -> None:
-    # The signal's availability, and its measured ceiling. The box is read
-    # on 132 of the window's 161 captures — 101 of the 124 the board gate
-    # accepts, plus 31 it rejects, which count for the dating rule just
-    # the same. The 18 nobody can read (00198-00215) are the frames the T
-    # sits in the box, drawn in a pale blue that scores 0.319 against the
-    # box's background — under the 0.35 uniformity floor the board reader
-    # and the preview reader share, so the mask keeps nothing and there is
-    # no shape to read. That gap is why the third episode's flip arrives a
-    # deal late.
-    assert sum(1 for t in replay() if t.read_next is not None) == 132
-    assert sum(1 for t in replay() if t.accepted and t.read_next is not None) == 101
-    assert all(identify_next(load(f"next_00{n}.png")) is None for n in range(198, 216))
+def test_the_preview_is_read_on_most_frames_including_the_pale_T() -> None:
+    # The signal's availability. The box is read on 150 of the window's
+    # 161 captures — 119 of the 124 the board gate accepts, plus 31 it
+    # rejects, which count for the dating rule just the same.
+    #
+    # 18 of those 150 are the gap this window was committed to show: the
+    # T at 00198-00215 is drawn in a pale blue scoring 0.319 against the
+    # box's background, under the 0.35 uniformity floor the board reader
+    # and the preview reader share, so the threshold's mask kept nothing
+    # and the box read EMPTY. The band pass reads them, and the third
+    # episode's flip stops arriving a deal late.
+    assert sum(1 for t in replay() if t.read_next is not None) == 150  # was 132
+    assert sum(1 for t in replay() if t.accepted and t.read_next is not None) == 119
+    assert all(identify_next(load(f"next_00{n}.png")) == "T" for n in range(198, 216))
     assert identify_next(load("next_00197.png")) == "I"
     assert identify_next(load("next_00216.png")) == "O"
+    # The 11 still unread are the end-of-round wipe, which blanks the box
+    # along with the field: nothing is in it to read.
+    unread = [t.number for t in replay() if t.read_next is None]
+    assert unread == [f"00{n}" for n in (*range(121, 126), *range(152, 158))]
 
 
 def test_the_flip_that_names_the_second_piece_is_on_the_frame_it_enters() -> None:

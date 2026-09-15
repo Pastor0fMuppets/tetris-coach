@@ -46,7 +46,14 @@ from numpy.typing import NDArray
 
 from ..core.board import FULL_ROW, WIDTH, Board
 from ..core.pieces import PIECES, ROTATIONS
-from .grid import MIN_SPREAD, _distance_scores, otsu_threshold_hist
+from .grid import (
+    _GHOST_SEPARATION,
+    HINT_PAINT,
+    MIN_SPREAD,
+    OwnPaint,
+    _distance_scores,
+    otsu_threshold_hist,
+)
 
 Cell = tuple[int, int]
 
@@ -1052,13 +1059,15 @@ _MAX_BAND_SPREAD = 1.25
 # clear of the piece passes for a cell of its own.
 
 
-def identify_next(image: NDArray[np.uint8]) -> str | None:
+def identify_next(image: NDArray[np.uint8], own_paint: OwnPaint | None = HINT_PAINT) -> str | None:
     """Recognize the piece shown in a next-piece preview image.
 
     Thresholds the image, keeps the block-like connected components (the
     piece; not a label, a border or a gridline lattice), derives the cell
     grid from those blocks, and returns the piece whose shape matches
-    exactly — or ``None``.
+    exactly — or ``None``. A piece drawn too pale for that threshold is
+    read on a second pass, off the intermediate band (see
+    :func:`_band_piece`), by the same shape rules.
 
     Game-agnostic by construction: nothing here assumes the piece is
     centered, that it fills the crop, that the crop is square, or that the
@@ -1067,12 +1076,20 @@ def identify_next(image: NDArray[np.uint8]) -> str | None:
     reader works from.
 
     ``None`` is a first-class answer. A confidently WRONG piece is worse:
-    it feeds a 2-ply hint that plans around a piece the game never deals.
+    it feeds a 2-ply hint that plans around a piece the game never deals,
+    and it NAMES the half-visible piece entering the board (see
+    :func:`_partial_piece`), so one wrong reading of the box becomes a
+    wrong hint about a piece that is on screen.
 
     Scoring is per-pixel distance from the box's own background color,
     estimated as the per-channel median of ALL pixels: a preview box is
     majority-background (a piece is at most 4 cells of a >= 24-cell box),
     and an arbitrary crop has no meaningful top row to sample instead.
+
+    ``own_paint`` is the coach's own hint fill, for the one thing in the
+    box that must never be read as a piece however block-like it is: this
+    tool's own overlay, which lands on the preview panel whenever the
+    hint it draws is in the board corner the panel floats over.
     """
     img = np.asarray(image)
     if img.ndim == 2:
@@ -1080,19 +1097,136 @@ def identify_next(image: NDArray[np.uint8]) -> str | None:
     background = np.median(img.reshape(-1, img.shape[2]), axis=0)
     scores = _distance_scores(img, background)
     flat = scores.ravel()
-    if float(flat.max()) - float(flat.min()) < MIN_SPREAD:
-        return None  # empty preview box
-    # Histogram Otsu: the input is every pixel of the preview image, far
-    # too many for the exact small-N variant's per-sample loop. The mask
-    # is additionally floored at MIN_SPREAD: a pixel closer to the
-    # background than the uniformity floor is background by the pipeline's
-    # own definition. Without the floor, a dense gridline lattice (a mid
-    # class between background and piece, lifted by the sqrt compression)
-    # can tip pixel-scale Otsu into splitting background|(gridlines+piece)
-    # and ruin the bounding box; every real piece color sits well above
-    # the floor (see the measured anchors on MIN_SPREAD).
-    mask = scores > max(otsu_threshold_hist(flat), MIN_SPREAD)
-    return _piece_from_mask(mask)
+    if float(flat.max()) - float(flat.min()) >= MIN_SPREAD:
+        # Histogram Otsu: the input is every pixel of the preview image,
+        # far too many for the exact small-N variant's per-sample loop.
+        # The mask is additionally floored at MIN_SPREAD: a pixel closer
+        # to the background than the uniformity floor is background by
+        # the pipeline's own definition. Without the floor, a dense
+        # gridline lattice (a mid class between background and piece,
+        # lifted by the sqrt compression) can tip pixel-scale Otsu into
+        # splitting background|(gridlines+piece) and ruin the bounding
+        # box; every SOLID piece color sits well above the floor (see the
+        # measured anchors on MIN_SPREAD).
+        piece = _piece_from_mask(scores > max(otsu_threshold_hist(flat), MIN_SPREAD))
+        if piece is not None:
+            return piece
+    # ...and a piece that does NOT sit above the floor is the whole of
+    # what is left to read. Below the floor there is no spread to gate on
+    # either: a pale piece on a box with no caption in it moves the box's
+    # extremes not at all (measured on the live crops: 0.346 against a
+    # 0.35 floor), which is why the band is asked even where the old
+    # early return called the box empty.
+    return _band_piece(img, scores, background, own_paint)
+
+
+def _band_piece(
+    img: NDArray[np.uint8],
+    scores: NDArray[np.float32],
+    background: NDArray[np.float64],
+    own_paint: OwnPaint | None,
+) -> str | None:
+    """The piece drawn in the INTERMEDIATE band, or ``None``.
+
+    The band is ``[_GHOST_SEPARATION, MIN_SPREAD)`` — clear of the
+    background, below the color distance that makes a solid piece — and
+    it is where this game draws a pale periwinkle piece: measured on the
+    committed crops, 0.295-0.330 against a background cluster at
+    0.00-0.05, where a solid piece reads 0.53-0.76. ``vision.grid``
+    already refuses to let a threshold decide that band on the BOARD
+    (see :func:`~tetris_coach.vision.grid._classify_scored`); this is the
+    same refusal for the box. Measured before it, the box went blind for
+    as long as a pale piece sat in it: 226 of 705 frames of a real
+    session read as an empty box, in runs up to 45 frames.
+
+    The band is not simply handed to the shape rules, because a preview
+    crop is not a board: it carries furniture that scores in the band
+    too, which a board cell's patch mean never sees. On these crops the
+    box's own hairline border and its gridlines sit at 0.180-0.190 —
+    under the piece, inside the band, and touching it. Taken whole, the
+    band merges the piece's cells into one component through that border
+    and there are no blocks left to read (measured: 0 of 76 pale crops
+    readable). So the band is SPLIT, by the same method the frame is:
+    Otsu over the band's own pixels, and the upper class — the level
+    nearest a real piece color — is the candidate. Measured, that split
+    lands at 0.219-0.291 on every committed crop, between the furniture
+    and the piece every time.
+
+    What it CANNOT contain is the solid class, and that is what keeps the
+    caption out rather than a rule about captions: a "NEXT" caption's
+    core scores 0.586, above the floor entirely, so only its antialiased
+    skirt reaches the band — a hollow outline the block filter drops.
+    Admitted instead as a lowered threshold, the caption composes into
+    one solid blob that survives :func:`_preview_blocks` and drags the
+    bounding box off the piece (measured on next_00580: block-like at
+    area 79 against the piece's 357, three row bands where a T has two,
+    and no match at all).
+
+    A band with nothing to split — one flat level, no furniture in it and
+    no antialiasing around it — is taken whole: there is no upper class
+    when there is only one class, and a box that holds nothing but the
+    piece is the easy case, not a refusal.
+
+    Which way it errs: toward ``None``. A band this pass cannot resolve
+    into exactly one piece — furniture mixed into the level, a piece half
+    drawn, a box mid-wipe — gets the same silence the threshold gave it,
+    and the one thing it refuses outright is our own paint. It never
+    overrides a piece the threshold could read: it is only ever asked
+    after that reading came back empty-handed, so every frame that was
+    readable before is byte-identical, answer for answer.
+    """
+    band = (scores >= _GHOST_SEPARATION) & (scores < MIN_SPREAD)
+    if not bool(band.any()):
+        return None
+    candidate = band & (scores > otsu_threshold_hist(scores[band]))
+    if not bool(candidate.any()):
+        candidate = band
+    if _is_own_paint(img, background, candidate, own_paint):
+        return None
+    return _piece_from_mask(candidate)
+
+
+def _is_own_paint(
+    img: NDArray[np.uint8],
+    background: NDArray[np.float64],
+    candidate: NDArray[np.bool_],
+    paint: OwnPaint | None,
+) -> bool:
+    """Is the band's candidate level this tool's own hint fill?
+
+    The coach draws its hint over the game and captures the screen again,
+    so its own overlay comes back round as input — and the preview panel
+    floats over the top corner of the playfield, so a hint drawn in that
+    corner is drawn over the BOX. It is a tetromino, drawn as square
+    cells, in the one place a tetromino is expected: nothing in the shape
+    rules can tell it from the piece the game dealt, and believing it
+    would name the piece the coach is pointing at as the piece coming
+    next.
+
+    Its color, unlike the game's, is known in advance
+    (:class:`~tetris_coach.vision.grid.OwnPaint`), and over a light box
+    it composites to exactly the band this pass reads: the shipped cyan
+    at 0.18 over white scores 0.321, four thousandths from the pale piece
+    at 0.325. Distance from the composite separates them where the score
+    cannot — measured over every committed preview crop, the nearest real
+    band pixel to the composite stands 2.6x the tolerance clear of it
+    (the tolerance being 8.0 uint8 units, and the same one the board's
+    own paint rule is measured against).
+
+    A match REFUSES the band rather than deleting it, which is the answer
+    ``vision.grid`` gives its own unnameable paint: a box holding our
+    hint is a box whose real contents we cannot see, and ``None`` is
+    already this module's word for that. Majority rather than any pixel,
+    so a hint overlapping the box's edge cannot suppress a real piece
+    beside it.
+    """
+    if paint is None or len(paint.color) != int(img.shape[-1]):
+        return False
+    bg = np.asarray(background, dtype=np.float64)
+    composite = bg + paint.opacity * (np.asarray(paint.color, dtype=np.float64) - bg)
+    diff = np.asarray(img, dtype=np.float64) - composite
+    painted = np.sqrt(np.sum(diff * diff, axis=-1)) <= paint.tolerance
+    return int((painted & candidate).sum()) * 2 >= int(candidate.sum())
 
 
 def _piece_from_mask(mask: NDArray[np.bool_]) -> str | None:
@@ -1101,8 +1235,8 @@ def _piece_from_mask(mask: NDArray[np.bool_]) -> str | None:
     The half of :func:`identify_next` that works on shape alone: keep the
     block-like components, derive the cell grid from them, and accept a
     rotation only when every one of its cells is filled and every cell
-    outside it is not. Split out from the thresholding half so that a
-    mask arrived at any other way is read by exactly these rules.
+    outside it is not. Split out from the thresholding half so that the
+    band pass (:func:`_band_piece`) is read by exactly these rules.
     """
     blocks = _preview_blocks(mask)
     if blocks is None:
