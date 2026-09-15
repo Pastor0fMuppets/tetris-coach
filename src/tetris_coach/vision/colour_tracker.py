@@ -149,6 +149,11 @@ class FrameReport:
     events: tuple[Event, ...]
     cleared_rows: int
     board_visible: bool = True  # False when the frame is not a board at all
+    #: Why the frame was refused, in one phrase, or ``None`` when it was
+    #: read. A refusal is silence, and silence is the hardest thing to
+    #: diagnose in a live session -- the user sees a coach that has stopped
+    #: talking and nothing that says why.
+    refused_because: str | None = None
 
 
 def _components(labels: NDArray[np.int16]) -> list[tuple[int, frozenset[Cell]]]:
@@ -192,6 +197,20 @@ def _connected(cells: frozenset[Cell]) -> list[frozenset[Cell]]:
                     queue.append(step)
         parts.append(frozenset(part))
     return parts
+
+
+def _completed_row(labels: NDArray[np.int16]) -> int | None:
+    """The first row that is content edge to edge, or ``None``.
+
+    A completed row is never a resting state of a Tetris board: the game
+    takes it away. Seeing one means the clear is mid-animation, and what
+    the animation does to the pixels (this game recolours the row, then
+    flashes it) is not the board. A row holding a cell the capture cannot
+    see can never read as complete, which is the honest answer there --
+    the panel that hides it could be hiding a gap.
+    """
+    full = np.flatnonzero(np.all(labels != EMPTY, axis=1))
+    return int(full[0]) if full.size else None
 
 
 def _grounded(labels: NDArray[np.int16]) -> NDArray[np.bool_]:
@@ -253,10 +272,10 @@ class ColourTracker:
     ) -> FrameReport:
         """Read one captured board (BGR) and its NEXT box crop."""
         if not board_readable(board, self.rows, self.cols, self._observable):
-            return self._blind()
-        # Reading the frame writes to the palette, and the second premise
-        # below cannot be tested until the cells are labelled, so the whole
-        # read is taken back if it turns out not to have been a board.
+            return self._blind("the frame is not drawn as flat cells")
+        # Reading the frame writes to the palette, and the premises below
+        # cannot be tested until the cells are labelled, so the whole read
+        # is taken back if it turns out not to have been a board.
         mark = self.palette.checkpoint()
         colours = board_colours(board, self.rows, self.cols)
         painted = own_paint_states(board, self.rows, self.cols, self._paint)
@@ -265,7 +284,10 @@ class ColourTracker:
         grounded = _grounded(labels)
         if int(np.count_nonzero((labels != EMPTY) & ~grounded)) > PIECE_CELLS:
             self.palette.restore(mark)
-            return self._blind()
+            return self._blind("more than a tetromino is resting on nothing")
+        if _completed_row(labels) is not None:
+            self.palette.restore(mark)
+            return self._blind("a completed row is still on screen")
         # The box is read before the board's cells are NAMED, so a colour
         # the box names this frame already names the piece entering on it.
         # After the gate, so that a frame the gate refuses writes nothing
@@ -297,8 +319,8 @@ class ColourTracker:
             cleared_rows=cleared,
         )
 
-    def _blind(self) -> FrameReport:
-        """The frame is not a board: read nothing from it, and say so.
+    def _blind(self, reason: str) -> FrameReport:
+        """The frame cannot be read: take nothing from it, and say so.
 
         Without this the tracker read whatever was on screen. Measured, the
         fourteen frames of ``pale_piece`` where a web page has replaced the
@@ -308,7 +330,7 @@ class ColourTracker:
         occluded frame is a lasting corruption of the one memory this
         design does keep.
 
-        TWO PREMISES have to hold, and they fail on different covers.
+        THREE PREMISES have to hold, and they fail on different frames.
 
         (1) The board is drawn as flat cells (:func:`board_readable`). That
         is this module's own premise rather than anything about Tetris --
@@ -330,17 +352,33 @@ class ColourTracker:
         exactly one tetromino, never once more; the web page, fed past (1),
         shows 58 in a single component.
 
+        (3) No row is COMPLETE. A finished row does not stay on a Tetris
+        board -- it is taken away -- so a full row on screen means the
+        clear is still playing, and this game recolours the row while it
+        does. Nothing read off those frames is the board: the recoloured
+        cells count as having just changed, which is the evidence this
+        tracker names a piece from, so 1-2 cells of the row outranked
+        everything and became "the piece". Measured on ``spawn_latency``
+        before this premise existed, the coach drew ``I`` over four of the
+        seven flash frames while the player held an O, and raised
+        PIECE_SPAWNED/PIECE_LOCKED into the bargain. This is the oracle's
+        own rule (``truth/oracle.py``, "line-clear-animation") and over the
+        whole corpus it fires on exactly the seven frames the oracle
+        abstains from for that reason and on no others. A banner drawn
+        across the board's full width is refused by the same test, which is
+        the one thing that catches a flat card that reaches the floor.
+
         What is NOT covered, stated so nobody has to find out live: a cover
-        that is flat AND reaches the floor, or one that touches the stack,
-        is grounded and passes both. Closing that needs pixels of a real
-        one, which this corpus does not have.
+        that is flat, narrower than the board, and grounded -- one that
+        reaches the floor or touches the stack -- passes all three. Closing
+        that needs pixels of a real one, which this corpus does not have.
 
         Nothing is read and nothing is written: not the palette, not the
         background, not the NEXT box. (1) refuses the frame before any of
-        it; (2) cannot be asked until the cells are labelled, so the caller
-        takes a :meth:`Palette.checkpoint` first and restores it here. The
-        stack count IS carried across, so the frame the board comes back
-        does not look like a line clear to :meth:`_events`.
+        it; (2) and (3) cannot be asked until the cells are labelled, so
+        the caller takes a :meth:`Palette.checkpoint` first and restores it
+        here. The stack count IS carried across, so the frame the board
+        comes back does not look like a line clear to :meth:`_events`.
 
         The per-cell history is FORGOTTEN rather than carried, for the
         reason the constructor starts every cell settled: a cell's age is
@@ -373,6 +411,7 @@ class ColourTracker:
             events=(),
             cleared_rows=0,
             board_visible=False,
+            refused_because=reason,
         )
 
     # -- pieces -------------------------------------------------------

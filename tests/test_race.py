@@ -409,22 +409,39 @@ def test_coverage_and_what_the_gate_costs() -> None:
     """How often each coach has nothing on screen at all."""
     shipped = overall(scores(), "shipped")  # type: ignore[arg-type]
     prototype = overall(scores(), "prototype")  # type: ignore[arg-type]
-    # 14 of the prototype's 21 blank frames are pale_piece's web page,
-    # where it refuses and draws nothing; the other 7 are spawn_latency's
-    # line-clear animation. The oracle abstains on all 21, so none of them
-    # is a frame this race can say either tracker was wrong on.
-    assert (shipped.hintless_frames, prototype.hintless_frames) == (25, 21)
+    # 14 of the prototype's 25 blank frames are pale_piece's web page and
+    # the other 11 spawn_latency's line-clear animation and the four frames
+    # after it where the piece is parked entirely behind the NEXT panel; it
+    # refuses the first two stretches and draws nothing. The oracle abstains
+    # on all 25, so none of them is a frame this race can say either tracker
+    # was wrong on -- which cuts both ways, and is why four of them USED to
+    # carry a hint: the flash was read as an I arriving and nothing here
+    # could say otherwise (see
+    # ``test_colour_tracker_sessions.test_the_clear_animation_is_refused_rather_than_named``,
+    # and ``race.engine`` for the measure that can now see it).
+    assert (shipped.hintless_frames, prototype.hintless_frames) == (25, 25)
     # 64 of the shipped tracker's 422 scored frames never reach it: the
     # confidence gate refuses them and the previous hint stays up.
     assert shipped.refused_frames == 64
-    # The prototype refuses 14, all of them pale_piece's web page, where
-    # its premise -- cells drawn as flat rectangles -- does not hold. It
-    # used to accept those and report a stack read off the page. Where the
-    # two differ is what a refusal LOOKS like: the shipped engine leaves
-    # its last hint on the screen, the prototype draws nothing.
-    assert prototype.refused_frames == 14
+    # The prototype refuses 21: pale_piece's 14 frames of web page, where
+    # its premise that cells are drawn as flat rectangles does not hold,
+    # and spawn_latency's 7 frames of line-clear animation, where a
+    # completed row is still on screen. It used to accept the page and
+    # report a stack read off the page, and to accept the flash and name a
+    # piece off it. Where the two trackers differ is what a refusal LOOKS
+    # like at this boundary: the shipped engine leaves its last hint on the
+    # screen, the prototype draws nothing.
+    assert prototype.refused_frames == 21
     assert part("pale_piece", "prototype").refused_frames == 14
-    assert sum(part(w, "prototype").refused_frames for w in WINDOWS if w != "pale_piece") == 0
+    assert part("spawn_latency", "prototype").refused_frames == 7
+    assert (
+        sum(
+            part(w, "prototype").refused_frames
+            for w in WINDOWS
+            if w not in ("pale_piece", "spawn_latency")
+        )
+        == 0
+    )
 
 
 def test_the_table_renders() -> None:

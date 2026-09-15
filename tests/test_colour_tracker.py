@@ -349,14 +349,66 @@ def test_a_spawn_is_reported_once_per_piece() -> None:
 
 
 def test_a_line_clear_is_reported() -> None:
+    """The row is completed by a piece landing in it, as it is in a game.
+
+    The frames where the completed row is still on screen are refused (a
+    clear is playing over them, see the test below), so the clear is
+    reported on the frame the board comes back -- which is the frame the
+    coach has something to say about again. The arithmetic still works
+    because the tracker allows for the four cells the piece that completed
+    the row was carrying as the piece in flight.
+    """
     track = tracker()
-    full = {(11, c): BLUE_I for c in range(COLS)}
-    for _ in range(5):
-        track.update(render(full))
+    nearly = {(11, c): BLUE_I for c in range(6)}
+    piece = {(4, c): GREEN_O for c in range(6, 10)}
+    for _ in range(4):
+        track.update(render(nearly | piece))
+    landed = {(11, c): GREEN_O for c in range(6, 10)}
+    flash = track.update(render(nearly | landed))
+    assert not flash.board_visible, "a completed row on screen is a clear playing"
     report = track.update(render({}))
     assert Event.LINES_CLEARED in report.events
     assert report.cleared_rows == 1
     assert report.stack_rows == (0,) * ROWS
+
+
+def test_a_completed_row_still_on_screen_is_refused() -> None:
+    """The flash a clear plays over the row is not a board, and reads as one.
+
+    ROAS Stacker recolours a completed row and then flashes it. Every cell
+    that changes colour counts as having JUST changed, and a cell that has
+    just changed is the evidence this tracker names a piece from -- so a
+    couple of cells of a row that is being taken away outranked the real
+    piece and became "the piece" (measured on spawn_latency 00127-00133:
+    an ``I`` drawn over four of the seven frames while the player held an
+    O). A finished row is never a resting state of a Tetris board, so
+    seeing one is enough to know the frame is mid-animation.
+    """
+    track = tracker()
+    board = {(11, c): BLUE_I for c in range(COLS)}
+    report = track.update(render(board))
+    assert not report.board_visible
+    assert report.refused_because == "a completed row is still on screen"
+    assert report.falling is None
+
+    # One cell short of complete is an ordinary board and is read.
+    del board[(11, 4)]
+    assert track.update(render(board)).board_visible
+
+
+def test_a_row_the_panel_covers_can_never_read_as_complete() -> None:
+    """A row with a hidden cell is not known to be full: the panel could hide a gap.
+
+    The row here is drawn full, but two of its cells are behind the game's
+    own UI, so the frame is read as an ordinary board rather than refused
+    as a clear. Erring this way costs a frame of a real clear; erring the
+    other way would refuse every frame of a game whose panel sits over a
+    column that fills up.
+    """
+    track = tracker(unobservable_cells=frozenset({(11, 8), (11, 9)}))
+    report = track.update(render({(11, c): BLUE_I for c in range(COLS)}))
+    assert report.board_visible
+    assert report.stack_rows[11] == 0b11111111
 
 
 # -- the property the whole design is for -----------------------------
@@ -389,14 +441,18 @@ def test_the_background_memory_survives_a_board_that_fills_up() -> None:
     track = tracker()
     track.update(render({}))
     board: dict[tuple[int, int], tuple[float, ...]] = {}
+    # Every row one cell short of complete: a completed row would mean a
+    # clear is playing and the frame would be refused (see
+    # ``test_a_completed_row_still_on_screen_is_refused``). 72 of 120
+    # cells is still well past the half the median would trip over.
     for r in range(4, ROWS):
-        for c in range(COLS):
+        for c in range(COLS - 1):
             board[(r, c)] = BLUE_I
     for _ in range(5):
         report = track.update(render(board))
     assert track.palette.background is not None
     assert np.allclose(track.palette.background, np.array(WHITE), atol=2.0)
-    assert report.stack_rows[11] == (1 << COLS) - 1
+    assert report.stack_rows[11] == (1 << (COLS - 1)) - 1
     assert report.stack_rows[0] == 0
 
 

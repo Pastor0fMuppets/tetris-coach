@@ -6,7 +6,7 @@ what is asserted here is what a user would have seen on screen. The
 numbers, scored from frame ``WARMUP`` of each window:
 
     tracker  hints  MISNAMED  stale  latmed  latmax  moves  hintless
-    colour     415         0     14     0.0       0      0         7
+    colour     418         0     21     0.0       0      0         4
     shape      397         6     49     1.0       3      3        25
 
 MISNAMED is the one that matters: a placement drawn for a piece the player
@@ -57,7 +57,7 @@ def test_the_default_tracker_is_the_colour_one() -> None:
 @pytest.mark.parametrize(
     ("tracker", "hints", "misnamed", "stale", "moves", "hintless"),
     [
-        ("colour", 415, 0, 14, 0, 7),
+        ("colour", 418, 0, 21, 0, 4),
         ("shape", 397, 6, 49, 3, 25),
     ],
 )
