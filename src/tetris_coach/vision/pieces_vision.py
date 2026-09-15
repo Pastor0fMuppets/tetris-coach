@@ -1092,7 +1092,18 @@ def identify_next(image: NDArray[np.uint8]) -> str | None:
     # and ruin the bounding box; every real piece color sits well above
     # the floor (see the measured anchors on MIN_SPREAD).
     mask = scores > max(otsu_threshold_hist(flat), MIN_SPREAD)
+    return _piece_from_mask(mask)
 
+
+def _piece_from_mask(mask: NDArray[np.bool_]) -> str | None:
+    """The one piece whose shape the foreground ``mask`` draws, or ``None``.
+
+    The half of :func:`identify_next` that works on shape alone: keep the
+    block-like components, derive the cell grid from them, and accept a
+    rotation only when every one of its cells is filled and every cell
+    outside it is not. Split out from the thresholding half so that a
+    mask arrived at any other way is read by exactly these rules.
+    """
     blocks = _preview_blocks(mask)
     if blocks is None:
         return None
