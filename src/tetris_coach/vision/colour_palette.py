@@ -191,6 +191,21 @@ class Palette:
     and named later, from the NEXT box or from an unambiguous four-cell
     sighting on the board. Nothing here decides what is falling — this only
     answers "what colour is this cell, and whose colour is that".
+
+    This is the one GLOBAL memory in the colour-first design, and it is
+    worth being plain about, because :meth:`classify` mutates it once per
+    content cell per frame and three of its changes are one-way: a class is
+    never removed, :attr:`ColourClass.peak` never falls, and a name retired
+    by :meth:`witness` never returns. The background is the exception and
+    moves freely.
+
+    What keeps that from being the shipped design's problem in new clothes
+    is that nothing is DERIVED from the palette. It labels this frame's
+    cells; the board handed to the solver is then read off this frame. A
+    wrong class makes a cell the wrong colour, not the board the wrong
+    board. The peak in particular no longer gates anything (see the module
+    docstring on the ghost rule) — it only chooses which sighting aims a
+    class's ray.
     """
 
     def __init__(self, paint: OwnPaint | None = HINT_PAINT) -> None:

@@ -152,3 +152,42 @@ def test_the_palette_classifies_every_cell_of_a_frame() -> None:
     assert labels[0, 0] != EMPTY and labels[11, 9] != EMPTY
     assert labels[0, 0] != labels[11, 9]
     assert int((labels != EMPTY).sum()) == 2
+
+
+def test_the_palette_is_a_global_one_way_memory_and_the_docstring_says_so() -> None:
+    """The design's claim is about memory, so what memory exists is pinned.
+
+    "A misread frame costs exactly that frame" was the headline and it was
+    not true of this object: classify() interns from every content cell of
+    every frame, and three of its changes cannot be undone. That is now
+    written down rather than claimed away, and asserted here so it stays
+    true of the code and not only of the prose.
+    """
+    palette = Palette(paint=None)
+    palette.background = np.zeros(3)
+    bright = np.array([0.0, 0.0, 200.0])
+    index = palette.intern(bright)
+    palette.witness(index, "I")
+    assert palette.classes[index].peak == 200.0
+
+    # A class is never removed, and a peak never falls.
+    palette.intern(np.array([0.0, 0.0, 50.0]))
+    assert len(palette.classes) == 1, "the dimmer shade joins the same ray"
+    assert palette.classes[index].peak == 200.0
+    palette.intern(np.array([200.0, 0.0, 0.0]))
+    assert len(palette.classes) == 2, "and a new ray is a new class, for good"
+
+    # A retired name never returns.
+    palette.witness(index, "O")
+    assert palette.piece_of(index) is None
+    palette.witness(index, "I")
+    palette.name(index, "I")
+    assert palette.piece_of(index) is None
+
+    # But the peak no longer decides what is content, which is what made
+    # the one-way part dangerous: both shades of the one ray are content.
+    labels = palette.classify(
+        np.array([[bright, np.array([0.0, 0.0, 50.0])]], dtype=np.float32),
+        np.ones((1, 2), dtype=bool),
+    )
+    assert labels.tolist() == [[index, index]]

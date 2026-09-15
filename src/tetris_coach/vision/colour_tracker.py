@@ -21,10 +21,31 @@ over. This one keeps no such memory. Each frame is read on its own:
                 no longer a falling candidate
     clear     = the stack lost a row's worth of cells at once
 
-The only memory is per cell — the colour it shows and how many frames it has
-shown it — plus the colour->piece palette, which only ever grows. A misread
-frame therefore costs exactly that frame: the next one is read from scratch,
-so nothing can wedge, and there is no state a reset would have to rebuild.
+What memory there is, stated exactly, because the claim this design is sold
+on is about memory and the first version of this docstring overstated it:
+
+* Per cell: the colour class it showed last frame and how many frames it has
+  shown it. Bounded and self-healing — a cell that is misread is read again
+  next frame and its age restarts.
+* Last frame's report (the piece, the stack and its cell count), used ONLY to
+  name transitions: lock, spawn, clear. Nothing is derived from it.
+* The board background, re-estimated every frame from the cells currently
+  reading empty. It moves in both directions and forgets.
+* The colour->piece palette. THIS ONE IS GLOBAL AND IT IS ONE-WAY: a class is
+  never removed, its peak magnitude never falls, and a name retired as
+  ambiguous never comes back.
+
+So the reading is memoryless where it matters — the board handed to the
+solver is derived from this frame's pixels alone, never from a committed
+stack, which is why no error survives into the next frame and there is no
+state a reset would have to rebuild. But "a misread frame costs exactly
+that frame" is not true of the palette, and the palette's teeth have been
+pulled rather than its memory removed: peak no longer decides whether a
+cell is content (see :mod:`.colour_palette` on the ghost rule it used to
+serve), and a frame that is not a board is refused before it can intern
+anything (see :meth:`ColourTracker._blind`). What remains is that a stray
+colour on a real board frame becomes a class for the rest of the session.
+It costs a class, not a piece.
 
 Ordering is by evidence, not by history: a floating component is the falling
 piece however long it has hovered (this game has no gravity — a piece sits
