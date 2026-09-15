@@ -384,8 +384,10 @@ vision/
                   #     resolved is a frame that must not be
                   #     committed, and losing the confidence is how
                   #     it says so rather than guessing.
-                  #   EVERYTHING ELSE -> OCCUPIED. Board content until
-                  #     something says otherwise.
+                  #   EVERYTHING ELSE -> OCCUPIED, up to
+                  #     _content_budget. Board content until something
+                  #     says otherwise; past the budget, the FRAME is
+                  #     refused, exactly as for our own paint above.
                   # That last default is the flip, and the errors it
                   # trades between are NOT symmetric. A ghost read as a
                   # piece is a tetromino that teleports: a phantom lock,
@@ -397,6 +399,37 @@ vision/
                   # rules still get first refusal, so a preview they can
                   # name is still deleted; what moved is where the
                   # silence falls.
+                  # BOTH HALVES OF THAT ASYMMETRY ARE ABOUT ONE PIECE,
+                  # which is what _content_budget holds the default to.
+                  # At board scale there is no asymmetry left: a phantom
+                  # the size of the playfield is not held, it is a new
+                  # board, and four frames of it is a BOARD_RESET that
+                  # commits the phantom as stack. And board scale is
+                  # exactly what the band admits, since all it asks of a
+                  # level is a ~14 uint8 step clear of the background
+                  # cluster — which a playfield drawn in TWO BACKGROUND
+                  # SHADES clears by construction. Measured on 10x12
+                  # boards against a remembered background, every one of
+                  # them at 0.31, twice the gate: alternating column
+                  # shading over a deep stack, a top-out danger tint
+                  # over the top four rows, a half-dimmed board behind a
+                  # menu, shading drawn in full rows. Three bounds, each
+                  # catching a shading the other two do not — a quarter
+                  # of the playfield (the shadings that reach the
+                  # floor), _PIECE_CELLS cells over the void (the ones
+                  # that float), and no row the promotion completes (the
+                  # ones drawn in full rows over a stack). Costed on the
+                  # real pixels: over the five committed windows (767
+                  # readings) the band never exceeds 8 cells of ~118
+                  # observable and the only promotion in any of them is
+                  # pale_piece's 6, four times clear of the budget.
+                  # The budget is the WHOLE of the defense on the
+                  # band-only branch (a pale piece on an otherwise clear
+                  # board), where there is no threshold to have dropped
+                  # anything and no gap to measure: the band IS the
+                  # reading, at a flat 0.5, so a translucent pause or
+                  # menu panel over a near-empty board reported board
+                  # content at three times the gate.
                   # TWO MEASUREMENTS KEEP THE FLIP HONEST. A candidate is
                   # promoted only where the threshold actually DROPPED it,
                   # so every frame Otsu had already put with the pieces
@@ -410,7 +443,14 @@ vision/
                   # vertical gradient, which puts that frame back under
                   # the gate where it belongs. No new threshold: the
                   # weakest boundary the three-level reading rests on IS
-                  # the frame's confidence.
+                  # the frame's confidence. That air is looked for on the
+                  # BOARD and not on the frame — a named layer's cells
+                  # were just declared not to be there, so they cannot be
+                  # the next level up. On a black ground, where this
+                  # tool's own hint composites to 0.374, counting them
+                  # collapsed a correct pale-piece reading from 0.433 to
+                  # 0.035 and lost the piece at the gate instead of at
+                  # the split.
                   # The band is conditioned on standing clear of the
                   # background cluster by MIN_SPREAD/2 at BOTH ends of
                   # that reasoning, which is what refuses a CONTINUUM:
