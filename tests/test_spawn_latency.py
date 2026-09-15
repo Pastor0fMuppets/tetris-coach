@@ -64,7 +64,7 @@ from tetris_coach.app import CoachConfig, CoachEngine, compute_overlap_mask
 from tetris_coach.capture.screen import Rect
 from tetris_coach.solver.search import Move
 from tetris_coach.vision.pieces_vision import FrameKind, identify_next
-from tetris_coach.vision.state import MAX_PREVIEW_GAP, GameEvent
+from tetris_coach.vision.state import MAX_HINT_AGE, MAX_PREVIEW_GAP, GameEvent
 
 FIXTURES = Path(__file__).parent / "fixtures" / "spawn_latency"
 ROWS = 12
@@ -245,6 +245,47 @@ def replay_window() -> Replay:
         )
         hints.append((number, f"{hint.piece}@{hint.col}" if hint is not None else None))
     return Replay(hints, events, engine.tracker.committed.stack_rows)
+
+
+def hinted_ages() -> list[tuple[str, int, str | None]]:
+    """``(frame, hint age in captures, the name that hint is holding up)``.
+
+    One pass of the window recording the tracker's own hint clock, so the
+    budget that expires a hint is set against what a hint MEASURABLY does
+    here rather than against a description of it.
+    """
+    covered = compute_overlap_mask(SESSION_BOARD, SESSION_NEXT, rows=ROWS)
+    engine = CoachEngine(CoachConfig(rows=ROWS), unobservable_cells=covered)
+    out: list[tuple[str, int, str | None]] = []
+    for number in frame_numbers():
+        preview = FIXTURES / f"next_{number}.png"
+        engine.process_frame(
+            load(f"board_{number}.png"), load(preview.name) if preview.exists() else None
+        )
+        tracker = engine.tracker
+        out.append((number, tracker._hint_age, tracker._hinted_commit))
+    return out
+
+
+def test_no_hint_here_is_still_doing_its_job_when_the_budget_runs_out() -> None:
+    # The lower anchor on MAX_HINT_AGE, measured on the frames rather than
+    # argued. A hint expires on its own clock now, because every other
+    # rule that ends one waits for an event (a lock, a resync, a frame
+    # that contradicts it) and a HOLD swap or a restart produces none of
+    # them — so a name nothing can contradict used to stand for the rest
+    # of the session. The clock's cost is a hint cut short, and the budget
+    # has to clear the longest one that is still doing its job.
+    #
+    # Here that is 15 captures: the flip on 00158 names the O, the name is
+    # on screen from 00163, and the shape rule takes over on 00174 at age
+    # 16. The budget clears it by nine.
+    holding = [(number, age) for number, age, name in hinted_ages() if name is not None]
+    assert [number for number, _ in holding] == [f"00{n}" for n in range(163, 174)]
+    assert max(age for _, age in holding) == 15
+    assert MAX_HINT_AGE > 15
+    # ...and the whole window is unmoved by it: the hint is spent before
+    # the budget is, so nothing here is withdrawn for running out of time.
+    assert GameEvent.PIECE_UNNAMED not in replay_window().events
 
 
 def test_a_preview_that_lies_costs_the_ambiguous_window_and_nothing_else(

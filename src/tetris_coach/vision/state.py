@@ -88,6 +88,31 @@ from .pieces_vision import FallingPiece, FrameKind, explain_grid, strip_piece_in
 # wipe's own blind spot is believed.
 MAX_PREVIEW_GAP = 12
 
+# The longest a hint may go on naming things, in CAPTURES since the deal it
+# reports. A hint is evidence about ONE deal, and every other rule that says
+# so is attached to an EVENT — a lock, a resync, a frame that contradicts it.
+# When no such event arrives the hint has no expiry at all, and the cases
+# where none arrives are exactly the ones nothing else can see: a HOLD swap
+# (a new piece at the top edge with no lock and no flip), a restart whose
+# first piece the old game's preview named, a piece parked at the top edge
+# showing two cells that fit the name whatever it really is. Measured, that
+# was not a long wrong name but an unbounded one: 300 frames — twenty
+# seconds — of a swapped-in piece wearing the previous piece's name, and it
+# would have held for the rest of the session.
+#
+# So the hint expires on its own clock too, and the budget is one tenure with
+# margin: longer than the longest a hint has ever legitimately had a name on
+# screen (15 captures, the O at spawn_latency 00159-00173, structure taking
+# over on the 16th) and than the longest tenure in the committed evidence (18
+# captures, the pale T unread in the box on 00198-00215), so no hint is ever
+# cut short of the window it exists to cover; and short enough that a name
+# nothing can contradict stands for 1.6 s rather than forever — twice the
+# 0.80 s a consistently lying preview costs on a name the frames CAN
+# contradict (test_spawn_latency). This is a ceiling, not a detector: the
+# capture cannot see a hold swap, so the choice is where to stop believing a
+# hint nothing has confirmed, not whether to notice the swap.
+MAX_HINT_AGE = 24
+
 
 class GameEvent(Enum):
     PIECE_SPAWNED = auto()
@@ -296,6 +321,17 @@ class GameStateTracker:
             o & ~u for o, u in zip(_rows_from_grid(occupancy), self.unknown_rows, strict=True)
         )
         self._observe_preview(next_piece)
+        # The hint's own expiry, before the frame is read: a hint older than
+        # a tenure cannot still be naming the piece "entering from above",
+        # because the piece its deal dealt entered a tenure ago and has
+        # either been named by its own shape or gone. Dropped HERE so this
+        # frame is read from shape alone, and the name it already committed
+        # is taken back below — dropping the hypothesis without withdrawing
+        # the name leaves the name on screen, which is the lesson the
+        # refutation rule already paid for.
+        hint_expired = self._entering_hint is not None and self._hint_age > MAX_HINT_AGE
+        if hint_expired:
+            self._entering_hint = None
         explanation = explain_grid(
             rows,
             self._committed.stack_rows,
@@ -334,12 +370,23 @@ class GameStateTracker:
             # no longer the retraction rule's business (and a later,
             # unrelated fragment must not be read as contradicting it).
             self._hinted_commit = None
-        elif (
-            self._hinted_commit is not None
-            and explanation.entering_names
-            and self._hinted_commit not in explanation.entering_names
+        elif self._hinted_commit is not None and (
+            hint_expired
+            or (
+                explanation.entering_names and self._hinted_commit not in explanation.entering_names
+            )
         ):
-            # RETRACTION. Dropping the hypothesis is not enough on its own:
+            # RETRACTION, on either of the two things that end a hypothesis:
+            # a frame that CONTRADICTS it, or the hint behind it running out
+            # of time (above). The second exists because the first can only
+            # fire on a frame that says something: while a piece sits at the
+            # top edge showing two cells that fit the name, no frame
+            # contradicts anything, and a name a hold swap or a restart put
+            # on the wrong piece is never taken back at all. Both ends are
+            # the same act, and it is the WITHDRAWAL, not the drop, that
+            # the user sees.
+            #
+            # Dropping the hypothesis is not enough on its own:
             # by the time a frame contradicts it, the name it picked has
             # usually been committed and drawn — and the contradicting
             # frame is normally an OCCLUDED one (the piece has shown a

@@ -5,6 +5,7 @@ import pytest
 from tetris_coach.core.board import HEIGHT, WIDTH
 from tetris_coach.vision.pieces_vision import FrameKind
 from tetris_coach.vision.state import (
+    MAX_HINT_AGE,
     MAX_PREVIEW_GAP,
     GameEvent,
     GameStateTracker,
@@ -853,10 +854,12 @@ class TestTheEnteringPieceHint:
         # rules nothing out either. The hold box is not captured (only the
         # board and the preview are), so there is no signal to read.
         #
-        # What bounds it is the same thing that bounds any wrong hint: the
-        # first frame that CONTRADICTS the name takes it back, and the
-        # piece contradicts it as soon as it shows a row the hinted piece
-        # has not got. Nothing structural is ever decided on it.
+        # Two things bound it, and this is the first: the frame that
+        # CONTRADICTS the name takes it back, as soon as the piece shows a
+        # row the hinted piece has not got. The second is the clock, for
+        # the case where no such frame ever comes
+        # (test_a_hint_nothing_can_contradict_expires_rather_than_stand).
+        # Nothing structural is ever decided on it either way.
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
         entering = merge(self.STACK, self.FRAGMENT)
@@ -875,6 +878,54 @@ class TestTheEnteringPieceHint:
         assert events == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "L"
         assert tracker.committed.stack_rows == self.STACK
+
+    def test_a_hint_nothing_can_contradict_expires_rather_than_stand(self) -> None:
+        # The other end of the same residual, and the one that made it
+        # unbounded rather than merely long. Every other rule that ends a
+        # hint waits for an EVENT: a lock, a resync, a frame that
+        # contradicts it. A hold swap produces none of the three, and if
+        # the swapped-in piece then SITS at the top edge — this game parks
+        # spawns there, and a player thinking about a hold is exactly when
+        # it parks longest — nothing ever arrives to end it. Measured
+        # before the clock: 300 frames, twenty seconds, of a piece wearing
+        # the name of the one it replaced, and it would have held for the
+        # rest of the session.
+        #
+        # So a hint expires on its own clock too. The name is WITHDRAWN,
+        # not just dropped — the frame under it is OCCLUDED, which holds
+        # the committed snapshot, so dropping the hypothesis alone would
+        # leave the name exactly where it was.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=3)
+        assert tracker.committed.falling_piece == "O"
+        swapped = merge(self.STACK, ((0, 6), (0, 7)))  # the held piece, parked
+        events = [e for _ in range(MAX_HINT_AGE + 4) for e in feed(tracker, swapped, "I")]
+        assert events == [GameEvent.PIECE_UNNAMED]
+        assert tracker.committed.falling_piece is None
+        assert tracker._entering_hint is None
+        assert tracker.committed.stack_rows == self.STACK  # nothing structural
+        # ...and it stays withdrawn: an expired hint names no later
+        # fragment either, which is the poisoning the age rule exists for.
+        assert feed(tracker, swapped, "I", times=40) == []
+        assert tracker.committed.falling_piece is None
+
+    def test_a_hint_is_not_cut_short_of_the_tenure_it_covers(self) -> None:
+        # The other side of that budget, and the cost it must not pay. The
+        # window the hint exists to cover is a piece sitting at the top
+        # edge showing 1-3 cells, and in the committed evidence that lasts
+        # 14-18 captures (the longest a hinted name has legitimately stood
+        # there is 15: spawn_latency 00159-00173, structure taking over on
+        # the 16th). A budget at or under a tenure would blank the coach
+        # part-way through the very piece it was accelerating, so the
+        # name has to survive the whole of one with margin to spare.
+        assert MAX_HINT_AGE > 18  # the longest tenure in the evidence
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        parked = merge(self.STACK, self.FRAGMENT)
+        assert feed(tracker, parked, "I", times=3) == [GameEvent.PIECE_SPAWNED]
+        assert feed(tracker, parked, "I", times=18) == []
+        assert tracker.committed.falling_piece == "O"  # still named, correctly
 
     def test_a_wrong_preview_authorises_nothing_structural(self) -> None:
         # The cost ceiling on a wrong reading. A hinted name is never an
@@ -955,6 +1006,26 @@ class TestTheEnteringPieceHint:
         events = feed(tracker, descending, "I") + feed(tracker, descending, "I")
         assert events == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "L"
+        assert tracker.committed.stack_rows == stripped
+
+    def test_a_new_game_that_parks_its_first_piece_still_gets_the_name_back(self) -> None:
+        # ...and the same case when the new game's first piece does NOT
+        # descend. The contradiction above needs a frame that says
+        # something, and a piece parked at the top edge showing two cells
+        # says nothing: the old game's name sat on the new game's piece
+        # indefinitely. The clock ends it, at the same ceiling a hold swap
+        # gets, and the resync's stripped board is untouched throughout.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        new_world = merge(rows_of(bottom_lines("#.#.#.#.#.")), self.FRAGMENT)
+        for _ in range(4):
+            feed(tracker, new_world, "I")
+        feed(tracker, new_world, "I", times=2)
+        assert tracker.committed.falling_piece == "O"  # the old game's name
+        stripped = tracker.committed.stack_rows
+        events = [e for _ in range(MAX_HINT_AGE) for e in feed(tracker, new_world, "I")]
+        assert events == [GameEvent.PIECE_UNNAMED]
+        assert tracker.committed.falling_piece is None
         assert tracker.committed.stack_rows == stripped
 
     def test_a_piece_seen_whole_is_still_an_observation(self) -> None:
