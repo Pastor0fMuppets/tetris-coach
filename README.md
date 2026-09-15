@@ -39,17 +39,19 @@ Colour is the default on measurement, not taste. Replayed through the real engin
 over six captured windows of real play, judged against a pixel-derived answer sheet
 that no tracker takes part in building (`python -m tetris_coach.race`): over 422
 frames the colour reader drew no hint for the wrong piece where the shape reader
-drew 6, showed a hint the frame each piece appeared where the shape reader took up
-to 3 frames, never moved a target while its piece was in flight, and left the
-overlay blank on 7 frames against 25. Window by window it is better or equal on
-every one of those. `--tracker shape` is kept as an escape hatch: the two refuse
+drew 6, invented no piece over the stretches the answer sheet abstains on (line
+clears and covered boards), showed a hint the frame each piece appeared where the
+shape reader took up to 3 frames, never moved a target while its piece was in
+flight, and left the overlay blank on 4 frames against 25. Window by window it is
+better or equal on every one of those. `--tracker shape` is kept as an escape hatch: the two refuse
 frames on different evidence, so a game or theme the colour rules cannot read is a
 flag away rather than a rebuild.
 
 Both readers are written to stay game-agnostic — where colour says nothing (a
 monochrome theme, two pieces a game draws alike), the contradicted colour is retired
 from naming and the tracker names by shape, which is where a colour-blind reader
-always was — but the evidence above is one game, and the only pieces in those windows
+always was; where a contradiction is instead two colours the matching tolerance ran
+together, the class comes apart and both keep their names — but the evidence above is one game, and the only pieces in those windows
 are I, O and T.
 
 ## Status

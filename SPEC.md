@@ -55,10 +55,18 @@ and through the real `CoachEngine`, which is what the user actually sees
 (the second table of the same command, pinned in
 `tests/test_engine_race.py`), over 422 frames:
 
-| tracker | hints | MISNAMED | stale | latency p50/max | target moves | blank |
-| ------- | ----- | -------- | ----- | --------------- | ------------ | ----- |
-| shape   | 397   | 6        | 49    | 1 / 3 frames    | 3            | 25    |
-| colour  | 415   | 0        | 14    | 0 / 0 frames    | 0            | 7     |
+| tracker | hints | MISNAMED | INVENTED | stale | latency p50/max | target moves | blank |
+| ------- | ----- | -------- | -------- | ----- | --------------- | ------------ | ----- |
+| shape   | 397   | 6        | 0        | 49    | 1 / 3 frames    | 3            | 25    |
+| colour  | 418   | 0        | 0        | 21    | 0 / 0 frames    | 0            | 4     |
+
+MISNAMED can only be counted where the oracle answers, and what it abstains
+on is line clears and covered boards — which is exactly where a reader that
+hallucinates does it. INVENTED is the measure for that stretch: a hint on an
+abstained frame naming a piece that neither the answer before it nor the
+answer after it names. It was added because the colour reader was drawing an
+`I` over four frames of a line-clear flash and scoring a clean sheet on every
+other number in the table.
 
 Window by window, the colour reader is better or equal on every one of
 those measures; that, rather than a better average, is the condition the
@@ -67,10 +75,13 @@ and the piece didn't update for several turns") is in this corpus and it
 belongs to the shape reader.
 
 **Why the other one stays.** The two refuse frames on different evidence —
-the colour reader refuses a frame whose cells are not drawn flat and one
-where more than a tetromino hangs over the void, the shape reader refuses on
-its confidence gate — so a theme or a game the colour rules cannot read is a
-flag away from the old behaviour rather than a rebuild. `--tracker shape`
+the colour reader refuses a frame whose cells are not drawn flat, one where
+more than a tetromino rests on nothing, one carrying cells that are neither
+the board's ground nor content (a card drawn in nearly the board's own
+colour), and one showing a completed row (a clear is playing over it); the
+shape reader refuses on its confidence gate — so a theme or a game the colour
+rules cannot read is a flag away from the old behaviour rather than a
+rebuild. `--tracker shape`
 keeps working and its whole regression suite still runs against it.
 
 **What the corpus does not cover.** Every committed window is ROAS Stacker,

@@ -64,8 +64,9 @@ class CoachConfig:
     # The confidence floor the SHAPE reader's gate applies to its own
     # occupancy reading (vision/grid.py). The colour reader gates on
     # different evidence and ignores this: a frame whose cells are not
-    # drawn flat, or one with more than a tetromino hanging over the void,
-    # is not a board and is refused outright.
+    # drawn flat, one with more than a tetromino resting on nothing, one
+    # carrying cells that are neither the board's ground nor content, or
+    # one showing a completed row, is refused outright.
     min_confidence: float = 0.15
     # Board height in rows (width is always 10). The single source the
     # stateful components (classifier, tracker, overlay) are seeded from;
@@ -110,7 +111,7 @@ class CoachConfig:
     # wrong piece against the shipped reader's 6, was never late (median 0
     # frames from a piece appearing to its hint, against 1 and a worst case
     # of 3), never moved a target mid-flight against 3, and left the
-    # overlay blank on 7 frames against 25.
+    # overlay blank on 4 frames against 25.
     #
     # "shape" stays reachable as an escape hatch (--tracker shape). The two
     # fail on different evidence -- the colour reader refuses a frame whose

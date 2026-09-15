@@ -7,7 +7,7 @@ from a different representation. What the two put on screen through the
 real engine, over the six committed windows and 422 frames, is pinned in
 ``tests/test_engine_race.py``: no hint for the wrong piece against six, no
 wait from a piece appearing to its hint against one to three frames, no
-target moving mid-flight against three, 7 blank frames against 25.
+target moving mid-flight against three, 4 blank frames against 25.
 
 The older design keeps ONE authoritative memory — the committed stack —
 and derives the falling piece as a set difference against it. Every error is
@@ -21,8 +21,8 @@ over. This one keeps no such memory. Each frame is read on its own:
                 FLOATING (no chain of content joins it to the floor) or has
                 CHANGED in the last few frames
     stack     = all the other content
-    lock      = the piece that was falling last frame is still there and is
-                no longer a falling candidate
+    lock      = the piece that was falling last frame is still there and
+                something else has become the better candidate
     clear     = the stack lost a row's worth of cells at once
 
 What memory there is, stated exactly, because the claim this design is sold
@@ -58,7 +58,10 @@ not a piece.
 Ordering is by evidence, not by history: a floating component is the falling
 piece however long it has hovered (this game has no gravity — a piece sits
 at the top edge until the player drags it), and a piece that has come to
-rest becomes stack once it has held still for ``settle_frames``. Naming is
+rest stays the piece in flight until another candidate takes its place,
+which is the frame the lock is reported. Time alone does not settle a piece,
+because in a game with no gravity a piece parked on the stack is one the
+player is still holding. Naming is
 by colour from the FIRST VISIBLE CELL, so a piece clipped by the top edge is
 named the frame it appears. Shape is consulted on every COMPLETE four-cell
 sighting: it names a colour the palette has not seen, and it is allowed to
