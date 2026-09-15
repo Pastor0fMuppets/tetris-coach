@@ -255,8 +255,10 @@ vision/
                   # ticks apart, and caught in mid-air, unambiguously
                   # falling, in 00800). No threshold on this scale
                   # separates those; only where the cells SIT can. So a
-                  # candidate is dropped unless the whole structure of a
-                  # preview is there: clear of the background cluster by
+                  # candidate is not NAMED unless the whole structure of
+                  # a preview is there (and a candidate no rule names is
+                  # content, not background — see below): clear of the
+                  # background cluster by
                   # MIN_SPREAD/2 (the background's own spread is 0.02, a
                   # ghost's clearance 0.21-0.30), exactly one tetromino,
                   # RESTING on the floor or on a piece color, with no
@@ -325,7 +327,10 @@ vision/
                   # residual errors are the opposite corners — a ghost drawn
                   # opaque enough to leave the band, or resting in a well,
                   # stays content and the frame is simply held (the common
-                  # one, and the preferred direction); a real band-colored
+                  # one, and the preferred direction — and since the band
+                  # flip below, a GUARANTEED one rather than whichever
+                  # side of the split Otsu happened to put it); a real
+                  # band-colored
                   # piece freshly landed on a FLAT surface with open air
                   # beside and above it is deleted IF the piece now
                   # falling is the same type. The neighbour test alone
@@ -349,12 +354,86 @@ vision/
                   # reads 0.078 on live_session's fifteen REAL ghost
                   # frames, which is the pre-rule number that had them
                   # rejected. The rule is the defense.
-                  # TWO CLUSTERS BEHAVE EXACTLY AS BEFORE: past the
-                  # uniform-near branch the ordinary split already puts
-                  # every sub-floor cell in the empty class, and no cell of
-                  # any theme in the synthetic matrix reaches the band at
-                  # all (measured: 0 band cells over 840 random boards x 3
-                  # cell sizes x 7 styles).
+                  # WHAT HAPPENS TO A CANDIDATE NO RULE NAMES is the
+                  # other half of the band, and it used to be nothing:
+                  # the cells went back into the ordinary split and the
+                  # threshold decided them. That is the one thing the
+                  # threshold provably cannot do — it is why this band
+                  # exists — and on tests/fixtures/pale_piece it
+                  # decided wrong in the expensive direction. Otsu
+                  # maximizes between-class variance, the blue stack at
+                  # 0.815 dominates it, the cut lands above 0.346, and a
+                  # real pale periwinkle T spends 61 frames in the EMPTY
+                  # class: not misread, ABSENT. No falling piece, no
+                  # hint, 90 frames (~6 s). Two settled cells of the same
+                  # colour went with it, so the floor the solver was
+                  # handed read "#........#" for a board that is
+                  # "#....#..##".
+                  # So the band is resolved by structure end to end, and
+                  # every candidate gets one of three dispositions:
+                  #   NAMED a landing preview (by _own_paint_layer's
+                  #     arithmetic or _ghost_layer's structure) -> EMPTY,
+                  #     out of the split, nothing is there.
+                  #   OUR OWN PAINT that _own_paint_layer REFUSED to name
+                  #     (a widget the panel cut in half, or one under the
+                  #     rotation badge) -> the FRAME is refused, 0.0. It
+                  #     cannot be deleted (the badge above it would be
+                  #     stranded as an added cell nothing can explain)
+                  #     and it cannot be called content (it is this
+                  #     tool's own overlay). A band that cannot be
+                  #     resolved is a frame that must not be
+                  #     committed, and losing the confidence is how
+                  #     it says so rather than guessing.
+                  #   EVERYTHING ELSE -> OCCUPIED. Board content until
+                  #     something says otherwise.
+                  # That last default is the flip, and the errors it
+                  # trades between are NOT symmetric. A ghost read as a
+                  # piece is a tetromino that teleports: a phantom lock,
+                  # unexplainable frames, a BOARD_RESET, a jittering
+                  # hint — bad, and BOUNDED, because the tracker refuses
+                  # to explain it and holds. A piece read as background
+                  # is not on the board at all, and nothing downstream
+                  # can recover what it was never told. The structural
+                  # rules still get first refusal, so a preview they can
+                  # name is still deleted; what moved is where the
+                  # silence falls.
+                  # TWO MEASUREMENTS KEEP THE FLIP HONEST. A candidate is
+                  # promoted only where the threshold actually DROPPED it,
+                  # so every frame Otsu had already put with the pieces
+                  # reads byte-identically — roas_stacker's settled
+                  # periwinkle and the whole of absorbed_piece included.
+                  # And a promotion's confidence is clamped by the air
+                  # ABOVE the band as well as below it, because a level
+                  # has air on both sides and one slice of a lighting ramp
+                  # does not: measured, 0.469 over the pale piece against
+                  # 0.074 over a paper-white board under a 140-unit
+                  # vertical gradient, which puts that frame back under
+                  # the gate where it belongs. No new threshold: the
+                  # weakest boundary the three-level reading rests on IS
+                  # the frame's confidence.
+                  # The band is conditioned on standing clear of the
+                  # background cluster by MIN_SPREAD/2 at BOTH ends of
+                  # that reasoning, which is what refuses a CONTINUUM:
+                  # the game's own start screen is text antialiased over
+                  # white, climbing 0.174 to 0.196 with no gap anywhere,
+                  # a clearance of 0.022. Nothing there is a layer and
+                  # nothing there is content.
+                  # The uniform-near branch yields to the same test. With
+                  # no cell reaching MIN_SPREAD that branch calls the
+                  # frame an empty board at 0.5, which is right for a
+                  # board wipe and wrong for a pale piece spawning onto a
+                  # clear board — the frame a coach is most needed on. A
+                  # band standing clear of the background is what tells
+                  # those apart; there is no two-class gap to measure
+                  # there, so such a frame reports the uniform-empty
+                  # number for the uniform-empty reason.
+                  # TWO-LEVEL THEMES BEHAVE EXACTLY AS BEFORE, and that
+                  # is a measurement rather than an assumption: no cell
+                  # of any theme in the synthetic matrix reaches the band
+                  # at all (0 band cells over 840 readings — 7 styles x 3
+                  # cell sizes x 40 random boards — every one of which
+                  # also reads exactly or falls under the gate), so the
+                  # whole apparatus is unreachable on an ordinary skin.
                   # Measured after: ghost_session 0 UNEXPLAINED, 0 resets,
                   # 93 of 95 frames hinted (8 of 95 before), longest gap 2
                   # (the bootstrap); gate rejections across both committed
@@ -376,6 +455,31 @@ vision/
                   # phantom lock on absorbed_piece 296-297 (LOCKED 4 -> 2,
                   # FALLING 53 -> 55, the hint no longer jumping off the
                   # piece the player is holding).
+                  # MEASURED FOR THE BAND FLIP, every committed window
+                  # replayed through CoachEngine, before -> after
+                  # (frames hinted / LOCKED / BOARD_RESET / rejected at
+                  # the gate / piece-episodes whose hint changes target
+                  # mid-flight):
+                  #   pale_piece          0->45 / 0->0 / 1->1 / 14->14 / 0->0
+                  #   ghost_beside_stack  31 / 0 / 1 / 5 / 0    (identical)
+                  #   ghost_session       93 / 3 / 0 / 1 / 1    (frame 150
+                  #     alone moves, 0.096 -> 0.0, rejected either way)
+                  #   live_session        75 / 4 / 0 / 17 / 1   (frames
+                  #     121-135 alone move, 0.078 -> 0.0, likewise)
+                  #   absorbed_piece      59->66 / 1->1 / 3->1 / 0->5 / 0->0
+                  # pale_piece's T is seen on all 47 accepted frames,
+                  # tracked as one falling T from 00656 and hinted to the
+                  # end of the window on one target; its floor row reads
+                  # "#....#..##" rather than "#........#". The three
+                  # windows in the middle are frame-for-frame what they
+                  # were, apart from badge frames now refused on purpose
+                  # instead of by four hundredths of an accident.
+                  # absorbed_piece IMPROVES, and by that same rule: its
+                  # four badge frames read 0.372 — above the gate — and
+                  # went UNEXPLAINED, which tripped a BOARD_RESET whose
+                  # resync adopted the widget as stack rows 8-9 and lost
+                  # the T for seven frames. Refusing those frames holds
+                  # the piece instead (UNEXPLAINED 14 -> 4).
   pieces_vision.py# explain_grid: diff the observed board against the tracker's
                   # committed stack memory and classify the frame (QUIET, FALLING,
                   # LOCKED, OCCLUDED, UNEXPLAINED). The falling piece is the
