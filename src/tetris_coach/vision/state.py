@@ -215,6 +215,17 @@ class GameStateTracker:
             entering_hint=self._entering_hint,
         )
         self.last_kind = explanation.kind
+        if explanation.hint_refuted:
+            # A preview reading is a HYPOTHESIS, and this frame falsified
+            # it: the piece coming in from above showed cells no placement
+            # of the hinted piece fits. Dropped here, before anything is
+            # decided on it, so the rest of this frame — and every frame
+            # until the next flip — reads from shape alone. A piece two
+            # cells wide fits an O as well as an L, but its next row down
+            # does not, so a misnamed piece contradicts itself within a
+            # frame or two of descending and costs a briefly withheld
+            # hint rather than a confidently wrong one.
+            self._entering_hint = None
 
         if explanation.kind is FrameKind.OCCLUDED:
             # Coherent: the covered region is hiding a piece. Hold the

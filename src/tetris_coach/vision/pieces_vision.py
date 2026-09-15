@@ -106,6 +106,13 @@ class Explanation:
     # become evidence itself (see
     # :meth:`~tetris_coach.vision.state.GameStateTracker.update`).
     hinted_name: bool = False
+    # True when the cells on screen RULE OUT the entering hint: the
+    # fragment is a piece coming in from above, and no placement of the
+    # hinted piece fits it. The preview named a hypothesis and the piece
+    # has now shown enough of itself to contradict it, so the tracker
+    # drops the hypothesis and goes back to naming from shape alone (see
+    # :meth:`~tetris_coach.vision.state.GameStateTracker.update`).
+    hint_refuted: bool = False
 
 
 def match_cells(cells: frozenset[Cell] | set[Cell] | tuple[Cell, ...]) -> tuple[str, int] | None:
@@ -300,8 +307,8 @@ def _partial_piece(
     stack_rows: tuple[int, ...],
     unknown_rows: tuple[int, ...],
     entering_hint: str | None = None,
-) -> tuple[bool, FallingPiece | None, bool]:
-    """``(the fragment is a partly seen piece, its name when unique, hinted)``.
+) -> tuple[bool, FallingPiece | None, bool, bool]:
+    """``(is a partly seen piece, name when unique, hinted, hint refuted)``.
 
     Ambiguity is reported as ``(True, None, False)``: the frame is
     coherent — some piece is there — but two horizontally adjacent cells at
@@ -326,17 +333,36 @@ def _partial_piece(
     by the ordinary rules the moment it descends into full view. The third
     element says the name came from the hint rather than from structure,
     so the tracker can refuse to treat a guess as an observation.
+
+    The fourth says the cells REFUTE the hint: they are a piece entering
+    from above and no placement of the hinted piece fits them. A preview
+    reading is a hypothesis, and this is the frame that falsifies it — a
+    piece two cells wide fits an O as well as a T, but its next row down
+    does not, so a misnamed piece contradicts itself within a frame or
+    two of descending. The hypothesis is then dropped rather than carried
+    to the end of the deal, and the piece names itself from shape as
+    usual. Refuted and named are not exclusive: the fragment can rule the
+    hint out and have exactly one completion of its own.
     """
     completions = _partial_completions(fragment, stack_rows, unknown_rows)
     if not completions:
-        return False, None, False
+        return False, None, False, False
+    entering = [piece for piece in completions if piece.row < 0]
+    # Only a fragment coming in from above is evidence about the hint: a
+    # piece sliding under a UI panel was named from its own earlier
+    # frames, and the hint says nothing about it either way.
+    refuted = (
+        entering_hint is not None
+        and bool(entering)
+        and not any(piece.piece == entering_hint for piece in entering)
+    )
     if len(completions) == 1:
-        return True, next(iter(completions)), False
+        return True, next(iter(completions)), False, refuted
     if entering_hint is not None:
         hinted = [piece for piece in completions if piece.piece == entering_hint]
         if len(hinted) == 1 and hinted[0].row < 0:
-            return True, hinted[0], True
-    return True, None, False
+            return True, hinted[0], True, False
+    return True, None, False, refuted
 
 
 # The most content a single frame is ever allowed to hold back as "in
@@ -538,7 +564,7 @@ def _explains(
     # The spawn may still be entering from above the board region, showing
     # only its bottom cells: a clearing lock must not go UNEXPLAINED (and
     # eventually reset the board) because the next piece is half off-grid.
-    coherent, partial_piece, _ = _partial_piece(residual, s2_rows, unknown_rows)
+    coherent, partial_piece, _, _ = _partial_piece(residual, s2_rows, unknown_rows)
     if coherent:
         return True, partial_piece
     return False, None
@@ -597,7 +623,7 @@ def _lock_reveal(
             # the fragment — panel and top-edge hypotheses counted together,
             # since both are hypotheses about the same cells — and its cells
             # are never merged, only ``lock_cells`` are.
-            coherent, spawn_piece, _ = _partial_piece(spawn_cells, stack_rows, unknown_rows)
+            coherent, spawn_piece, _, _ = _partial_piece(spawn_cells, stack_rows, unknown_rows)
             if not coherent:
                 continue
         elif spawn_piece.row >= SPAWN_ROWS:
@@ -808,6 +834,7 @@ def _carried_piece(
                         rest,
                         explanation.falling,
                         hinted_name=explanation.hinted_name,
+                        hint_refuted=explanation.hint_refuted,
                     )
     return None
 
@@ -876,10 +903,10 @@ def explain_grid(
         # SAME cells, so they are counted together: asking the panel first
         # and answering from it alone reads a fragment three pieces could
         # be entering as a confident fourth (see :func:`_partial_piece`).
-        coherent, piece, hinted = _partial_piece(added, stack_rows, unknown, entering_hint)
+        coherent, piece, hinted, refuted = _partial_piece(added, stack_rows, unknown, entering_hint)
         if coherent:
             kind = FrameKind.FALLING if piece is not None else FrameKind.OCCLUDED
-            return Explanation(kind, stack_rows, piece, hinted_name=hinted)
+            return Explanation(kind, stack_rows, piece, hinted_name=hinted, hint_refuted=refuted)
 
     # Step 2 — lock revealed by the next spawn, no clears. A reveal whose
     # locked piece is partly hidden — or whose SPAWN is still cut by the top

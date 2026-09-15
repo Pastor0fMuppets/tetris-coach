@@ -653,6 +653,52 @@ class TestTheEnteringPieceHint:
         assert feed(tracker, dropped, "I", times=3) == []
         assert tracker.committed.falling_piece is None
 
+    def test_a_preview_that_disagrees_with_the_descending_piece_is_dropped(self) -> None:
+        # A preview reading is a HYPOTHESIS, not an observation, and this
+        # is what happens when it is wrong: the box is misread as an O,
+        # and an L is what actually comes in. Its first two cells fit an
+        # O, so for one commit the coach says O — and its next row down
+        # does not fit an O at all, which falsifies the hypothesis. It is
+        # dropped on that frame and the fragment names itself from shape,
+        # so a wrong reading costs two frames of a wrong name rather than
+        # a whole deal of one.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        two = merge(self.STACK, ((0, 4), (0, 5)))
+        assert feed(tracker, two, "I", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "O"  # the hypothesis, shown
+        three = merge(self.STACK, ((0, 4), (1, 4), (1, 5)))
+        assert feed(tracker, three, "I", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "L"
+        # Dropped, not merely out-voted: nothing named from it again.
+        assert tracker._entering_hint is None
+        # ...and the whole piece, when it arrives, agrees with the frame
+        # that corrected it, with no second correction.
+        whole = merge(self.STACK, piece_cells("L", 1, 0, 4))
+        assert feed(tracker, whole, "I", times=2) == []
+        assert tracker.committed.falling_piece == "L"
+
+    def test_a_wrong_preview_authorises_nothing_structural(self) -> None:
+        # The cost ceiling on a wrong reading. A hinted name is never an
+        # observation, so it can vouch for no lock; and a frame it cannot
+        # name is OCCLUDED, which never counts toward the reset debounce.
+        # The whole sequence above, held long enough to trip both, moves
+        # neither the committed stack nor anything structural.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        events = []
+        for rows in (
+            merge(self.STACK, ((0, 4), (0, 5))),
+            merge(self.STACK, ((0, 4), (1, 4), (1, 5))),
+            merge(self.STACK, piece_cells("L", 1, 0, 4)),
+        ):
+            for _ in range(6):
+                events += feed(tracker, rows, "I")
+        assert GameEvent.PIECE_LOCKED not in events
+        assert GameEvent.BOARD_RESET not in events
+        assert tracker.committed.stack_rows == self.STACK
+        assert tracker.falling is None or tracker.falling.piece != "O"
+
     def test_a_resync_drops_the_hint(self) -> None:
         # A board reset is a new world (a new game, garbage, a mid-game
         # attach). What the preview shows still holds; which piece was
