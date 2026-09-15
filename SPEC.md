@@ -704,16 +704,25 @@ vision/
                   # anything else contradicts the hypothesis and is refused
                   # rather than guessed. A cell read out of ONE band is
                   # then measured EDGE TO EDGE rather than at its center,
-                  # since flush is exactly what that hypothesis claimed:
-                  # measured over the style matrix every occupied cell of
-                  # every flush reading fills its rectangle 1.000, while a
-                  # DISC fills 0.72-0.77 — and the disc is not
-                  # hypothetical, it is this tool's own rotation badge,
-                  # which lands in the box the same way the hint does and
-                  # read as a confident 'O' at every radius on every
-                  # theme. It is the one part of our overlay the color
-                  # arithmetic below cannot catch, being opaque rather
-                  # than a composite, so it is refused on shape or not at
+                  # since flush is exactly what that hypothesis claimed,
+                  # and the central sample is blind to a cell's edges on
+                  # purpose: measured over the style matrix, 1128 of 1169
+                  # flush readings fill their cell rectangles >= 0.90 and
+                  # 688 fill them exactly, while 407 round blobs (every
+                  # radius and ratio, aliased and antialiased, noisy, with
+                  # and without a digit) reach 0.847 at most. The disc is
+                  # not hypothetical: it is this tool's own rotation
+                  # badge, which lands in the box the same way the hint
+                  # does and read as a confident 'O' at every radius on
+                  # every theme — and being opaque rather than a
+                  # composite, it is the one part of our overlay the color
+                  # arithmetic below cannot catch, so it is refused on
+                  # shape or not at all. The floor costs the other 41
+                  # readings: small cells under a caption, where the
+                  # caption's class lifts the threshold and the mask loses
+                  # the seam between two cells (a vertical S of 14 px
+                  # cells on a flush skin, which reads at 18 px and with
+                  # no caption). No committed crop is read this way at
                   # all. Those bands ARE the cells, so they
                   # must look like cells: all the same size (within the same
                   # 25%; measured, they agree exactly on every style and

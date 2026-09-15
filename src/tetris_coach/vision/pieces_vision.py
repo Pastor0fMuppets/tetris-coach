@@ -1061,10 +1061,23 @@ _MAX_BAND_SPREAD = 1.25
 # ...and where cells are read out of ONE band (:func:`_axis_grid`'s flush
 # case), the hypothesis is precisely that they are drawn edge to edge, so
 # an occupied cell fills its whole rectangle rather than only the central
-# window the ordinary sample reads. Measured over the style matrix, every
-# occupied cell of every flush reading fills 1.000 of it; a disc — the
-# rotation badge this tool draws on its own hint, which lands in the box —
-# fills 0.72-0.77 at every radius and used to be read as a confident 'O'.
+# window the ordinary sample reads. That window is blind to a cell's
+# edges on purpose (an inset skin puts its gap there), which is what let a
+# ROUND blob pass for four square ones — the rotation badge this tool
+# draws on its own hint, which lands in the box.
+#
+# Measured over the style matrix (1169 flush readings: 7 styles x every
+# rotation x 8 cell sizes x caption or none), 1128 fill their rectangle
+# 0.90 or better and 688 fill it exactly 1.000, while 407 round blobs
+# (every radius and ellipse ratio, aliased and antialiased, noisy, with
+# and without the renderer's digit, on light, dark and mid grounds) reach
+# 0.847 at most. The floor stands 0.05 clear of the nearest blob, and
+# what it costs is the other 41: small cells under a caption, where the
+# caption's own class lifts the threshold and the mask loses the seam
+# between two cells (a vertical S of 14 px cells on a flush skin reads
+# None where it read S; the same box at 18 px still reads, as does the
+# same box with no caption). None of the committed crops is read this way
+# at all, so the cost there is zero.
 _MIN_FLUSH_CELL_FILL = 0.9
 
 # How many pixels the own-paint rule estimates a background LEVEL from
@@ -1552,13 +1565,13 @@ def _drawn_flush(
     every radius, on every theme, and (unlike the hint's translucent
     fill) it is OPAQUE, so no color arithmetic can recognize it.
 
-    Measured edge to edge instead: over the whole synthetic style matrix,
-    every occupied cell of every reading carried by this hypothesis fills
-    its rectangle 1.000 — the gridline that merged the cells into one
-    band is foreground too, so there is nothing else in there — while a
-    disc of any radius fills 0.72-0.77. The floor sits between them, with
-    a tenth of slack for a skin that rounds its corners or antialiases
-    its edge.
+    Measured edge to edge instead (see :data:`_MIN_FLUSH_CELL_FILL` for
+    both populations): a flush reading's cells fill their rectangles —
+    the gridline that merged them into one band is foreground too, so
+    there is nothing else in there — and a round blob does not, whatever
+    its radius, aliasing or digit. It is not a free rule: it also refuses
+    the flush readings whose mask loses a seam, which is the cost written
+    against the constant.
     """
     means = _cell_means(
         crop, down.whole if down.flush else down, across.whole if across.flush else across

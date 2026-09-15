@@ -630,6 +630,26 @@ class TestIdentifyNextRoundBadge:
         image = self.badge((252, 252, 252), (2 * radius, 2 * radius), color=(232, 232, 232))
         assert identify_next(image) is None
 
+    @pytest.mark.parametrize("style", [STYLES[0], STYLES[2], STYLES[4]], ids=lambda s: s.name)
+    def test_what_the_floor_costs(self, style) -> None:  # type: ignore[no-untyped-def]
+        # The rule is not free, and this is the bill. On a skin whose
+        # cells merge into one band, a caption raises the threshold
+        # enough to cost the mask a seam between two cells, and a small
+        # piece then fills its rectangle under the floor: it read as
+        # itself before and reads as None now. It is the trade this
+        # module makes everywhere — silence over a name that might be our
+        # own badge — and it is bounded: the same box reads at 18 px
+        # cells, reads with no caption, and no committed crop is read by
+        # this hypothesis at all.
+        cells = ROTATIONS["S"][1].cells
+        for cell in (10, 14):
+            assert identify_next(render_next_preview(cells, style, cell_size=cell)) == "S"
+            captioned = render_next_preview(cells, style, cell_size=cell, label="NEXT")
+            assert identify_next(captioned) is None
+        for cell in (18, 22):
+            captioned = render_next_preview(cells, style, cell_size=cell, label="NEXT")
+            assert identify_next(captioned) == "S"
+
     def test_a_square_block_of_the_same_size_is_still_read(self) -> None:
         # The control: the rule refuses ROUND, not small. The same box
         # with square cells drawn flush in it reads as the piece it draws.

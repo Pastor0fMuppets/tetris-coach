@@ -93,10 +93,12 @@ measurements behind them are in `tests/test_pieces_vision.py`:
   of 540 geometries. It costs a flush skin its PALE O and I; of the 530
   crops named across every committed window, none is named that way.
 - a cell read out of one band is measured edge to edge, because that is
-  what flush claims. A flush reading fills its cell rectangle 1.000
-  across the style matrix; a DISC fills 0.72-0.77, and the disc is this
-  tool's own rotation badge, which lands in the box and read as an 'O' at
-  every radius, on every theme, in both passes.
+  what flush claims. Across the style matrix 1128 of 1169 flush readings
+  fill their cell rectangles >= 0.90 (688 exactly); 407 round blobs reach
+  0.847 at most, and the disc is this tool's own rotation badge, which
+  lands in the box and read as an 'O' at every radius, on every theme, in
+  both passes. It costs the 41 flush readings under the floor: small
+  cells under a caption, none of them a committed crop.
 - our own hint fill is refused in BOTH readings of the box and over the
   box's own levels, not its average: the composite is a distance from the
   ground, so over a black box it scores 0.374 and arrives as a solid
