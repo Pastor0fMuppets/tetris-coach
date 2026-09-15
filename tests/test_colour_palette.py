@@ -236,3 +236,98 @@ def test_a_palette_can_be_put_back_exactly_as_it_was() -> None:
     palette.intern(np.array([120.0, -30.0, 90.0]))
     palette.restore(mark)
     assert len(palette.classes) == 1
+
+
+# -- one colour or two ------------------------------------------------
+
+
+def off_ray(colour: tuple[float, ...], perpendicular: float, magnitude: float) -> tuple[float, ...]:
+    """A colour ``perpendicular`` units off ``colour``'s ray, at ``magnitude``."""
+    ray = np.array(colour, dtype=np.float64) - np.array(WHITE, dtype=np.float64)
+    unit = ray / np.linalg.norm(ray)
+    side = np.cross(unit, np.array([1.0, 0.0, 0.0]))
+    side = side / np.linalg.norm(side)
+    along = float(np.sqrt(max(0.0, magnitude**2 - perpendicular**2)))
+    return tuple(np.array(WHITE, dtype=np.float64) + unit * along + side * perpendicular)
+
+
+def test_a_pale_colour_near_a_learned_ray_is_its_own_class() -> None:
+    """The gate a faint colour used to walk through.
+
+    Perpendicular distance is |v| * sin(angle), so a tolerance in units
+    alone opens WIDER the fainter the colour -- and the live game deals at
+    least two pale ones. A new colour of magnitude 60 sitting 8 units off
+    the blue I's ray is 7.7 degrees away from it, five times the worst
+    spread any real colour shows, and it used to be interned INTO the I's
+    class: a two-cell sighting of it was then reported as a falling I,
+    with a full I hint drawn for it. The mirror pairs S/Z and J/L are
+    where a merge like that is likeliest and where shape cannot help an
+    entering piece, which is the case the whole switch to colour was
+    justified on.
+    """
+    track = tracker()
+    piece = {(4, 3): BLUE_I, (4, 4): BLUE_I, (4, 5): BLUE_I, (4, 6): BLUE_I}
+    for _ in range(2):
+        report = track.update(render(piece))
+    assert report.falling is not None and report.falling.piece == "I"
+    classes = len(track.palette.classes)
+
+    stranger = off_ray(BLUE_I, perpendicular=8.0, magnitude=60.0)
+    clipped = track.update(render({(0, 4): stranger, (0, 5): stranger}))
+    assert len(track.palette.classes) == classes + 1, "a new colour, not a dim I"
+    assert clipped.falling is not None
+    assert clipped.falling.piece is None, "unnamed until something names it"
+
+
+def test_a_colour_the_tolerance_merged_comes_apart_instead_of_going_dark() -> None:
+    """What a contradiction means, and what it should cost.
+
+    Two colours near enough to share a class disagree the moment one of
+    them is seen whole: the palette says I, the shape says O. Retiring the
+    class answers that by taking the name off BOTH colours for the rest of
+    the session -- which is the shipped tracker's spawn latency, twice,
+    from one bad merge. When the sighting sits measurably off the class's
+    ray it is not one colour the game draws two pieces in; it is two
+    colours, and they come apart.
+    """
+    track = tracker()
+    piece = {(4, 3): BLUE_I, (4, 4): BLUE_I, (4, 5): BLUE_I, (4, 6): BLUE_I}
+    for _ in range(2):
+        track.update(render(piece))
+    assert track.palette.piece_of(0) == "I"
+
+    # A second colour a whisker off the I's ray: the gate lets it in.
+    twin = off_ray(BLUE_I, perpendicular=3.0, magnitude=250.0)
+    assert track.palette.match(np.array(twin) - np.array(WHITE)) == 0
+
+    square = {(7, 3): twin, (7, 4): twin, (8, 3): twin, (8, 4): twin}
+    seen = track.update(render(square))
+    assert seen.falling is not None and seen.falling.piece == "O"
+
+    # Both names survive, and each colour is named from a partial sighting.
+    for colour, piece_name in ((BLUE_I, "I"), (twin, "O")):
+        report = track.update(render({(0, 1): colour, (0, 2): colour}))
+        assert report.falling is not None
+        assert report.falling.piece == piece_name
+
+
+def test_a_colour_the_game_really_draws_two_pieces_in_still_retires() -> None:
+    """The other cause of a contradiction, and it wants the opposite answer.
+
+    A sighting dead on the class's ray is the same rendered colour, so the
+    colour genuinely does not determine the piece and naming by colour has
+    to stop for it. Splitting there would make a second class for a colour
+    that is not a second colour, and go on naming both wrongly.
+    """
+    track = tracker()
+    bar = {(4, 3): BLUE_I, (4, 4): BLUE_I, (4, 5): BLUE_I, (4, 6): BLUE_I}
+    for _ in range(2):
+        track.update(render(bar))
+    assert track.palette.piece_of(0) == "I"
+
+    classes = len(track.palette.classes)
+    square = {(7, 3): BLUE_I, (7, 4): BLUE_I, (8, 3): BLUE_I, (8, 4): BLUE_I}
+    track.update(render(square))
+    assert len(track.palette.classes) == classes, "one colour, not two"
+    assert track.palette.piece_of(0) is None
+    assert track.palette.classes[0].ambiguous

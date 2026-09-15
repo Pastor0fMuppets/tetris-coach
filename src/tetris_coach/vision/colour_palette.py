@@ -31,14 +31,29 @@ is (220, 77, 76), 44 uint8 units apart, but the two directions differ by
 piece; a direction already knows. The same identity covers a landing-preview
 ghost (a weak blend, same direction) and this tool's own hint fill.
 
-Matching is by PERPENDICULAR distance to a class's ray from the background
-(:data:`LINE_TOL`), which is |v| * sin(angle): a faint colour gets the loose
-angular tolerance its noise deserves, a vivid one a tight one. Measured on
-the committed fixtures, the five rendered piece colours are 70+ units apart
-and a piece's own cells have ZERO spread (every cell of a piece samples to
-the same value to the unit), so the tolerance has two orders of magnitude of
-headroom; the nearest pair of DIRECTIONS is the pale periwinkle T and the
-blue I at 15 degrees, which puts the T 13.7 units off the I's ray.
+Matching is by ANGLE to a class's ray from the background
+(:data:`ANGLE_TOL`), capped in absolute units by the PERPENDICULAR distance
+to it (:data:`LINE_TOL`), and both have to hold.
+
+The angle is the one that decides a pale colour, and the perpendicular
+distance on its own gets that backwards. Perpendicular distance is
+|v| * sin(angle), so a tolerance in units is an angular gate that opens
+WIDER the fainter the colour -- and two of the five colours this game
+deals are pale (a lavender and a mint, measured on a live session). An
+earlier version of this docstring called the margin "two orders of
+magnitude" of headroom; that was the separation between the colours, which
+is not the quantity the gate compares. The quantity the gate compares was
+measured over every cell of the six committed windows: the worst angle any
+cell sits off its own class's ray is 1.15 degrees (0.90 units
+perpendicular), while the closest two DIFFERENT colours -- the pale
+periwinkle T and the blue I -- are 14.5 degrees apart, which puts that T
+13.2 units off the I's ray. Ten units of perpendicular tolerance left 3.2
+units of margin there; five degrees of angular tolerance leaves 9.5, and
+still admits the NEXT box's rendering of a piece, which is 0.3 degrees off
+the board's and 44 units away in magnitude.
+
+A colour on the far side of the background is never a match however small
+its perpendicular distance: the ray is a RAY.
 
 Three classes of cell are not board content
 -------------------------------------------
@@ -96,6 +111,7 @@ threshold that erases real pieces is not worth keeping on speculation.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import cv2
@@ -125,8 +141,24 @@ EMPTY_DIST = 12.0
 # three units clear of the content floor. See :func:`off_ground`.
 GROUND_TOL = 4.0
 
-# Perpendicular distance, in uint8 units, from a colour class's ray.
+# A cell joins a colour class when it is within BOTH of these of the class's
+# ray: an angle in degrees, and a perpendicular distance in uint8 units.
+# See the module docstring for what each is for and what the measured
+# margins are.
 LINE_TOL = 10.0
+ANGLE_TOL = 5.0
+
+# How far off a class's ray a COMPLETE four-cell sighting has to sit before
+# a contradiction is read as two colours this tolerance merged rather than
+# one colour the game draws two pieces in. Above the 0.90 units of spread a
+# single rendered colour shows anywhere in the corpus, and far below the
+# 13.2 the nearest genuinely different pair sits at. See
+# :meth:`Palette.witness`.
+SAME_COLOUR_TOL = 2.0
+
+# tan(ANGLE_TOL): the angular gate, as the perpendicular distance allowed
+# per unit ALONG the ray, which is the form :meth:`Palette.match` needs.
+_ANGLE_SLOPE = math.tan(math.radians(ANGLE_TOL))
 
 # How near a pixel must sit to the hint colour to BE the hint's own outline,
 # and the share of a cell rect that ring must cover for the cell to be under
@@ -289,17 +321,31 @@ class Palette:
 
     # -- colour classes -----------------------------------------------
 
-    def _perpendicular(self, vec: NDArray[np.float64], unit: NDArray[np.float64]) -> float:
+    def _offset(self, vec: NDArray[np.float64], unit: NDArray[np.float64]) -> tuple[float, float]:
+        """``vec`` resolved along ``unit`` and perpendicular to it."""
         along = float(vec @ unit)
-        return float(np.sqrt(max(0.0, float(vec @ vec) - along * along)))
+        return along, float(np.sqrt(max(0.0, float(vec @ vec) - along * along)))
+
+    def _perpendicular(self, vec: NDArray[np.float64], unit: NDArray[np.float64]) -> float:
+        return self._offset(vec, unit)[1]
 
     def match(self, vec: NDArray[np.float64]) -> int | None:
-        """Index of the class whose ray ``vec`` lies on, or ``None``."""
+        """Index of the class whose ray ``vec`` lies on, or ``None``.
+
+        Near the ray in ANGLE and within :data:`LINE_TOL` of it in units,
+        and on the ray's own side of the background. A colour that fails
+        either becomes a class of its own, which is the safe direction to
+        err in: a class too many costs a cold start on one colour, and a
+        class too few names every later piece of a colour after the first
+        piece that ever wore it.
+        """
         best, best_dist = None, LINE_TOL
         for index, klass in enumerate(self.classes):
-            dist = self._perpendicular(vec, klass.unit)
-            if dist < best_dist:
-                best, best_dist = index, dist
+            along, perp = self._offset(vec, klass.unit)
+            if along <= 0.0:
+                continue  # the far side of the background is a different colour
+            if perp < best_dist and perp <= along * _ANGLE_SLOPE:
+                best, best_dist = index, perp
         return best
 
     def intern(self, vec: NDArray[np.float64]) -> int:
@@ -330,30 +376,49 @@ class Palette:
         if klass.piece is None and not klass.ambiguous:
             klass.piece = piece
 
-    def witness(self, index: int, piece: str) -> None:
+    def witness(self, index: int, piece: str, vec: NDArray[np.float64] | None = None) -> int:
         """Record a COMPLETE four-cell sighting of class ``index``.
 
         The strongest naming evidence there is, and the only evidence that
-        can contradict the palette. A contradiction is not a tie to break
-        by preferring one sighting: it is proof that this colour does not
-        determine the piece -- a monochrome theme, two tetrominoes the game
-        renders alike, a piece recoloured by level. So the class stops
-        naming anything at all and shape takes over for it, which is where
-        a colour-blind tracker always was.
+        can contradict the palette. Returns the class that owns the
+        sighting afterwards, which is ``index`` unless the contradiction
+        was resolved by splitting.
 
-        This is a one-way door, and deliberately a narrow one: what it
-        costs when it fires wrongly is naming by shape, and what it costs
-        when it does not fire is every later piece of that colour named
-        wrong for the rest of the session.
+        A contradiction has two possible causes and they want opposite
+        answers. Either this colour really does not determine the piece --
+        a monochrome theme, two tetrominoes the game renders alike, a piece
+        recoloured by level -- and the class must stop naming anything, or
+        two DIFFERENT colours were merged by :meth:`match`'s tolerance and
+        the class must come apart.
+
+        ``vec``, the colour actually sighted, is what tells them apart. A
+        colour the game really uses for two pieces lands on the class's ray
+        exactly: a single rendered colour's spread over the whole corpus is
+        0.90 units. One that merely passed the gate sits measurably off it,
+        and splitting is then strictly better than retiring -- retiring
+        costs BOTH colours their names for the rest of the session, which
+        is the shipped tracker's spawn latency twice over, and it is the
+        mirror pairs (S/Z, J/L) that a merge is likeliest to hit, which is
+        exactly where shape cannot help an entering piece.
+
+        Retiring is still a one-way door, and deliberately a narrow one:
+        what it costs when it fires wrongly is naming by shape, and what it
+        costs when it does not fire is every later piece of that colour
+        named wrong for the rest of the session.
         """
         klass = self.classes[index]
         if klass.ambiguous:
-            return
+            return index
         if klass.piece is not None and klass.piece != piece:
+            if vec is not None and self._perpendicular(vec, klass.unit) > SAME_COLOUR_TOL:
+                magnitude = float(np.linalg.norm(vec))
+                self.classes.append(ColourClass(unit=vec / magnitude, peak=magnitude, piece=piece))
+                return len(self.classes) - 1
             klass.ambiguous = True
             klass.piece = None
-            return
+            return index
         klass.piece = piece
+        return index
 
     def piece_of(self, index: int) -> str | None:
         """The piece this class names, or ``None`` if it names none."""
@@ -402,14 +467,25 @@ class Palette:
                 state = CLEAN if paint_states is None else int(paint_states[r, c])
                 if not observable[r, c] or state == OURS:
                     continue
-                vec = colours[r, c].astype(np.float64) - self.background
-                if state == PAINTED:
-                    vec = self._unpainted(vec)
-                magnitude = float(np.linalg.norm(vec))
-                if magnitude < EMPTY_DIST:
+                vec = self.vector(colours[r, c], state)
+                if float(np.linalg.norm(vec)) < EMPTY_DIST:
                     continue
                 labels[r, c] = self.intern(vec)
         return labels
+
+    def vector(self, colour: NDArray[np.float32], state: int = CLEAN) -> NDArray[np.float64]:
+        """One cell's colour as a vector away from the background.
+
+        What :meth:`classify` compares, exposed because a caller that wants
+        to know WHICH colour a cell was (rather than which class it fell
+        into) must ask the same question the same way -- see
+        :meth:`witness`, which decides whether a contradiction is one
+        colour or two.
+        """
+        if self.background is None:
+            raise ValueError("background not estimated yet")
+        vec = colour.astype(np.float64) - self.background
+        return self._unpainted(vec) if state == PAINTED else vec
 
 
 def board_colours(image: NDArray[np.uint8], rows: int, cols: int) -> NDArray[np.float32]:

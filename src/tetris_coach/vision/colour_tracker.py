@@ -61,11 +61,14 @@ at the top edge until the player drags it), and a piece that has come to
 rest becomes stack once it has held still for ``settle_frames``. Naming is
 by colour from the FIRST VISIBLE CELL, so a piece clipped by the top edge is
 named the frame it appears. Shape is consulted on every COMPLETE four-cell
-sighting: it names a colour the palette has not seen, and where it
-contradicts a colour the palette has named, that colour is retired from
-naming altogether and shape takes over for it — a monochrome theme, or two
-tetrominoes a game renders alike, then degrade to naming by shape rather
-than naming every later piece after the first.
+sighting: it names a colour the palette has not seen, and it is allowed to
+contradict a colour the palette has named. A contradiction means one of two
+things and the sighting's own colour says which. Dead on the class's ray, it
+is one colour the game draws two pieces in — a monochrome theme, two
+tetrominoes rendered alike — and the class is retired from naming, so the
+reading degrades to naming by shape. Measurably off it, it is two colours
+the matching tolerance merged, and the class comes apart instead: retiring
+there would cost BOTH colours their names for the rest of the session.
 
 What NEITHER signal covers, said plainly because it is the one hole in the
 naming: a piece whose colour is unknown AND whose sighting is incomplete.
@@ -330,7 +333,7 @@ class ColourTracker:
 
         falling = self._pick_falling(labels, grounded)
         if falling is not None:
-            falling = self._named(falling)
+            falling = self._named(falling, colours, painted)
 
         stack_rows, stack_count = self._stack(labels, falling)
         events, cleared = self._events(falling, stack_rows, stack_count)
@@ -475,7 +478,12 @@ class ColourTracker:
 
     # -- pieces -------------------------------------------------------
 
-    def _named(self, falling: FallingPiece) -> FallingPiece:
+    def _named(
+        self,
+        falling: FallingPiece,
+        colours: NDArray[np.float32],
+        painted: NDArray[np.int8],
+    ) -> FallingPiece:
         """Attach a name, letting a complete sighting overrule the palette.
 
         Shape is consulted on EVERY complete four-cell sighting, not only
@@ -483,19 +491,44 @@ class ColourTracker:
         of evidence that can contradict the palette, and a palette that
         cannot be contradicted is a palette that is right forever after the
         first piece -- which on a monochrome theme means naming every later
-        piece after the first one. When shape and colour disagree the class
-        is retired from naming (:meth:`Palette.witness`) and this tracker
-        degrades to naming by shape, exactly where a colour-blind one lives.
+        piece after the first one.
+
+        The sighting's own colour goes with it, because what the palette
+        does about a contradiction depends on it: a colour the game really
+        draws two pieces in is retired from naming and shape takes over,
+        but two colours this class merged are split apart instead (see
+        :meth:`Palette.witness`). Either way the class that comes back is
+        the one that owns this sighting, and it is the one the name is read
+        off.
         """
         shape = piece_from_cells(falling.cells)
+        label = falling.colour_class
         if shape is not None:
-            self.palette.witness(falling.colour_class, shape)
-        named = self.palette.piece_of(falling.colour_class)
+            label = self.palette.witness(label, shape, self._sighted(falling, colours, painted))
+        named = self.palette.piece_of(label)
         if named is None:
             named = shape  # the colour says nothing; this frame still can
         if named == falling.piece:
             return falling
         return FallingPiece(named, falling.cells, falling.colour_class, falling.floating)
+
+    def _sighted(
+        self,
+        falling: FallingPiece,
+        colours: NDArray[np.float32],
+        painted: NDArray[np.int8],
+    ) -> NDArray[np.float64] | None:
+        """The colour this piece was actually drawn in, as one vector.
+
+        The mean over its cells, which is the cells' common value: a piece
+        of this game is drawn in one flat colour and its cells sample to
+        the same value to the unit. Cells under this tool's own paint are
+        un-composited first, like everywhere else.
+        """
+        vectors = [self.palette.vector(colours[r, c], int(painted[r, c])) for r, c in falling.cells]
+        if not vectors:
+            return None
+        return np.mean(np.stack(vectors), axis=0)
 
     def _read_preview(self, crop: NDArray[np.uint8]) -> None:
         """Name the NEXT piece, and teach the palette its colour.
