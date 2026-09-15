@@ -252,3 +252,35 @@ def test_the_preview_teaches_the_palette_a_colour_it_has_not_seen() -> None:
     track.update(render({}), preview([(0, 1), (1, 0), (1, 1), (1, 2)], blend(PALE_T, 0.87)))
     report = track.update(render({(0, 7): PALE_T}))
     assert report.falling is not None and report.falling.piece == "T"
+
+
+# -- a theme where colour says nothing --------------------------------
+
+
+def test_a_monochrome_theme_falls_back_to_shape() -> None:
+    """Game-agnosticism: one colour for every piece is still trackable.
+
+    Colour is the identity when the game gives it; when it does not, the
+    tracker is back where the shipped one always is, naming a complete
+    sighting by its shape. What survives the loss of colour is everything
+    structural: the piece is still the floating component, the settled
+    board is still re-derived every frame, and a piece resting on the
+    stack still settles into it.
+    """
+    grey = (120.0, 120.0, 120.0)
+    track = tracker()
+    stack = {(11, c): grey for c in range(6)}
+    flying = {(7, 8): grey, (8, 8): grey, (8, 9): grey, (9, 9): grey}  # an S, upright
+    for _ in range(4):
+        report = track.update(render(stack | flying))
+    assert len(track.palette.classes) == 1
+    assert report.falling is not None
+    assert report.falling.piece == "S"
+    assert report.falling.cells == frozenset(flying)
+    assert report.stack_rows[11] == 0b111111
+
+    landed = {(9, 8): grey, (10, 8): grey, (10, 9): grey, (11, 9): grey}
+    for _ in range(5):
+        report = track.update(render(stack | landed))
+    assert report.falling is None
+    assert report.stack_rows[11] == 0b1000111111
