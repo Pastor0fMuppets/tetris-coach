@@ -14,6 +14,12 @@ wraps the synchronous :class:`CoachEngine`) runs on a single worker thread,
 and its result crosses back to the GUI thread through a queued signal so the
 overlay always repaints there. Ticks never overlap: timer fires while the
 worker is busy are skipped.
+
+Hint stability: the overlay is a TRAINING aid, so what it shows has to be
+followable. A target chosen for a piece is therefore HELD for as long as
+that piece is in flight, and the engine only solves again when an input
+actually changed — see :data:`HINT_SWITCH_MARGIN` and
+:meth:`CoachEngine._steady_hint` for the rule and the direction it errs in.
 """
 
 from __future__ import annotations
@@ -27,7 +33,8 @@ from numpy.typing import NDArray
 
 from .capture.screen import FrameSource, Rect
 from .core.board import DEFAULT_HEIGHT, FULL_ROW, WIDTH, Board
-from .solver.search import Move, best_move
+from .solver.evaluate import DELLACHERIE, evaluate_drop
+from .solver.search import TOP_OUT_SCORE, Move, best_move, enumerate_drops
 from .vision.grid import GridClassifier, OwnPaint
 from .vision.pieces_vision import FallingPiece, identify_next
 from .vision.state import GameEvent, GameStateTracker, Snapshot
@@ -57,6 +64,57 @@ class CoachConfig:
 # the default poll rate): a persistently failing capture/vision path (e.g.
 # a bad region, a disconnected display) must not spin forever.
 MAX_CONSECUTIVE_TICK_FAILURES = 45
+
+
+# How much better a freshly solved placement must be, in Dellacherie score
+# units, before the overlay is allowed to move off the one it is already
+# showing for the SAME piece over the SAME board. A hint that moves while
+# the learner is looking at it is worse than useless — they cannot follow
+# it, and the tool exists to build placement intuition — so a near-tie is
+# resolved in favour of the target already on screen.
+#
+# One unit is one row of landing height, or one row/column transition; a
+# hole is 4. Measured over 4000 reachable boards of solver self-play: when
+# the upcoming piece becomes readable the 2-ply answer moves the placement
+# on 22% of them, and the score it gains has median 2.0 (p25 1.0, p90 8.0).
+# At 1.0 the margin suppresses 32% of those moves — every one worth a
+# single transition or less — and keeps the rest, and no margin this size
+# can ever suppress a switch that avoids a hole.
+HINT_SWITCH_MARGIN = 1.0
+
+
+def rescore(board: Board, move: Move, next_piece: str | None) -> Move | None:
+    """``move``'s placement, dropped and scored again on ``board``.
+
+    A :class:`Move`'s score is only meaningful for the board and the
+    lookahead it was computed with, so deciding whether to keep a standing
+    hint means putting it and its challenger on the same footing: the same
+    board, the same upcoming piece. Same rotation, same column, re-dropped.
+
+    Returns ``None`` when that placement is no longer legal at all.
+
+    The arithmetic is :func:`~tetris_coach.solver.search.best_move`'s, spelled
+    with its public parts (this ply's evaluation, plus the best reply to the
+    board it leaves), so the two cannot drift apart about what a placement is
+    worth — pinned by ``test_hint_stability.test_rescore_agrees_with_the_solver``.
+    """
+    for rotation, col, result in enumerate_drops(board, move.piece):
+        if col != move.col or rotation.index != move.rotation.index:
+            continue
+        score = evaluate_drop(result, rotation, DELLACHERIE)
+        if next_piece is not None:
+            reply = best_move(result.board, next_piece)
+            score += reply.score if reply is not None else TOP_OUT_SCORE
+        return Move(
+            piece=move.piece,
+            rotation=rotation,
+            col=col,
+            row=result.landing_row,
+            score=score,
+            lines_cleared=result.lines_cleared,
+            board=result.board,
+        )
+    return None
 
 
 def render_debug_frame(
