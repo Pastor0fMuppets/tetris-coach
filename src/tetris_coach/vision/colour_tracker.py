@@ -586,16 +586,11 @@ class ColourTracker:
         # The piece the player is holding still, inside a component it has
         # aged into: young says nothing about it any more, and
         # :meth:`_rank` is where it is decided on.
-        held = self._held
+        held = self._falling  # what was in flight last frame
         inside = held is not None and held.colour_class == label and held.cells <= cells
         if inside and held is not None and held.cells not in parts:
             parts.append(held.cells)
         return parts
-
-    @property
-    def _held(self) -> FallingPiece | None:
-        """The piece that was in flight last frame, if there was one."""
-        return self._falling
 
     def _is_held(self, label: int, cells: frozenset[Cell]) -> bool:
         """Is this exactly the piece that was in flight last frame, unmoved?
@@ -626,7 +621,7 @@ class ColourTracker:
         while they hold it, which is the case this is for; the tracker
         cannot tell the two apart and this is the side worth erring on.
         """
-        was = self._held
+        was = self._falling
         return was is not None and was.colour_class == label and was.cells == cells
 
     def _pick_falling(
