@@ -89,6 +89,29 @@ At the default 15 fps poll rate the vision stages cost ~5 ms per frame
 worst case (~2 ms in the cache-hit steady state) against the ~67 ms frame
 budget.
 
+# Engine tick, per tracker
+
+What a live tick costs end to end, everything but the screen grab: the
+reading, the transitions it reports, and the solves the hint policy asks
+for. Measured by replaying the 96 frames of `tests/fixtures/live_session`
+through `CoachEngine` the way `app.run` drives it (`python -m
+tests.bench_vision`), same machine as above.
+
+| Tracker                   | p50    | p95    | max    |
+| ------------------------- | ------ | ------ | ------ |
+| `--tracker colour` (default) | 6.3 ms | 7.2 ms | 9.2 ms |
+| `--tracker shape`            | 1.2 ms | 2.3 ms | 2.8 ms |
+
+The colour reader costs about 5 ms more per frame: it classifies every
+cell against a palette and walks the board's connected components in
+Python, where the shipped reader thresholds an array and diffs against a
+committed stack. Against the ~67 ms frame budget at the default 15 fps
+that is ~7x of headroom, and the tick runs on the worker thread rather
+than the GUI thread, so the difference is not something a session can
+feel. It is worth saying which way the trade goes, though: what the extra
+5 ms buys is in `tests/test_engine_race.py` -- no hint for the wrong
+piece, and none of the waiting.
+
 For history: the original pipeline scored the whole board image per frame
 (35.0/75.4 ms p50/p95 grid, 14.5/15.3 ms preview) before patch-only
 sampling and histogram Otsu brought it to the "before" column above.

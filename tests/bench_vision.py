@@ -44,6 +44,42 @@ def timeit(fn, n: int = 100) -> tuple[float, float, float]:  # type: ignore[no-u
     return float(np.percentile(arr, 50)), float(np.percentile(arr, 95)), float(arr.max())
 
 
+def engine_tick() -> None:
+    """Per-frame cost of a whole engine tick, one line per tracker.
+
+    Not a synthetic frame but a real one: the ``live_session`` window
+    replayed through ``CoachEngine`` exactly as ``app.run`` drives it, so
+    what is timed is everything a live tick does except the screen grab --
+    the reading, the events, and the solves the policy actually asks for.
+    """
+    from pathlib import Path
+
+    from tetris_coach.app import CoachConfig, CoachEngine
+    from tetris_coach.race.runners import next_crops
+    from tetris_coach.truth.windows import by_name, load_window
+
+    root = Path(__file__).parent / "fixtures"
+    spec = by_name("live_session")
+    names, boards = load_window(root, spec)
+    crops = next_crops(root, spec, names)
+    for tracker in ("colour", "shape"):
+        engine = CoachEngine(
+            CoachConfig(rows=spec.rows, tracker=tracker),
+            unobservable_cells=spec.geometry().unobservable,
+        )
+        times = []
+        for board, crop in zip(boards, crops, strict=True):
+            t0 = time.perf_counter()
+            engine.process_frame(board, crop)
+            times.append((time.perf_counter() - t0) * 1000.0)
+        arr = np.array(times)
+        print(
+            f"{'engine tick: --tracker ' + tracker:45s} "
+            f"p50 {np.percentile(arr, 50):7.3f} ms  "
+            f"p95 {np.percentile(arr, 95):7.3f} ms  max {arr.max():7.3f} ms"
+        )
+
+
 def main() -> None:
     style = STYLES[0]  # classic-dark: gridlines + per-pixel noise
     board = render_board(sample_grid(), style, cell_size=60)  # 600x1200, Retina-scale
@@ -66,6 +102,7 @@ def main() -> None:
     ):
         p50, p95, mx = timeit(fn, n)
         print(f"{label:45s} p50 {p50:7.3f} ms  p95 {p95:7.3f} ms  max {mx:7.3f} ms")
+    engine_tick()
 
 
 if __name__ == "__main__":
