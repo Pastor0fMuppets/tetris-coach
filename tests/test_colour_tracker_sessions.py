@@ -32,7 +32,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from tetris_coach.vision.colour_palette import EMPTY_DIST, board_colours
+from tetris_coach.race.measures import load_truth
+from tetris_coach.vision.colour_palette import EMPTY_DIST, board_colours, flat_cells
 from tetris_coach.vision.colour_tracker import ColourTracker, Event, FrameReport
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -65,7 +66,7 @@ def named(reports: tuple[FrameReport, ...]) -> int:
 @pytest.mark.parametrize(
     ("window", "frames", "with_piece"),
     [
-        ("spawn_latency", 161, 153),
+        ("spawn_latency", 161, 154),
         ("live_session", 96, 96),
         ("ghost_session", 95, 94),
         ("ghost_beside_stack", 48, 48),
@@ -78,7 +79,9 @@ def test_every_window_names_the_falling_piece(window: str, frames: int, with_pie
 
     The two windows short of their frame count are short for reasons that
     are not the tracker's: ``spawn_latency`` spends 7 frames inside a
-    line-clear animation, ``pale_piece`` ends on 14 frames of a game-over
+    line-clear animation (and what it says across those 7 is not to be
+    trusted either -- see
+    ``test_the_clear_animation_is_a_gap_in_the_evidence``), ``pale_piece`` ends on 14 frames of a game-over
     panel, and ``absorbed_piece`` opens cold on a colour no NEXT box in the
     window ever shows (see the cold-start test below).
     """
@@ -104,7 +107,7 @@ def test_a_piece_is_named_the_frame_it_appears() -> None:
         if pending is not None and report.falling is not None and report.falling.piece:
             latency.append(index - pending)
             pending = None
-    assert latency == [0] * 7
+    assert latency == [0] * 8
 
 
 def test_the_entering_piece_is_named_from_two_cells() -> None:
@@ -313,6 +316,52 @@ def test_the_gate_refuses_the_web_page_and_nothing_else() -> None:
     # was eight once the page had been read.
     assert classes["pale_piece"] == 2
     assert max(classes.values()) == 3  # spawn_latency, which shows a third piece
+
+
+def test_the_clear_animation_is_a_gap_in_the_evidence() -> None:
+    """What this tracker says during a line clear is not worth reading.
+
+    Recorded rather than fixed, because it is a hole in the RACE as much as
+    in the tracker: the oracle abstains on exactly these frames, so nothing
+    either tracker does here is scored, and the head-to-head result is
+    silent about a stretch the user is looking at.
+
+    spawn_latency 00127-00133 is ROAS Stacker's row-clear flash. The row
+    animates through a pale tint that happens to lie along the blue I's ray
+    from the background, so the prototype reads cells that are not a piece
+    and names them -- at 00127 an "I" at (10,4)-(10,5), which is flash, not
+    tetromino. Four of the seven frames are non-flat enough for the
+    board-visible gate to notice (10 to 15 cells fail the flatness test
+    against 4 on an ordinary frame) but nowhere near enough to refuse.
+
+    Refusing per CELL rather than per frame would catch it, and must not be
+    done: on this very window (0,4) and (0,5) are non-flat on 00134 and
+    00100 too, and there they are the real falling O, clipped by the top
+    edge. The rule that would silence the flash would delete every entering
+    piece -- which is the one thing this design is for.
+
+    The shipped tracker goes quiet here instead. That is the better
+    behaviour and it is not a difference the race can see.
+    """
+    numbers, reports = replay("spawn_latency")
+    flash = [reports[numbers.index(f"00{n}")] for n in range(127, 134)]
+    named_in_flash = [r.falling.piece for r in flash if r.falling is not None]
+    assert named_in_flash, "the tracker does speak during the flash"
+    assert reports[numbers.index("00127")].falling is not None
+    assert reports[numbers.index("00127")].falling.cells == frozenset({(10, 4), (10, 5)})
+
+    # An ordinary frame is flat but for the clipped piece and the panel;
+    # a flash frame is not -- and the clipped piece is why per-cell
+    # refusal is not available as a fix.
+    def rough(frame: str) -> set[tuple[int, int]]:
+        flat = flat_cells(load(FIXTURES / "spawn_latency" / f"board_{frame}.png"), ROWS, COLS)
+        return {(r, c) for r in range(ROWS) for c in range(COLS) if not flat[r, c]}
+
+    assert rough("00100") == {(0, 4), (0, 5), (0, 8), (0, 9)}
+    assert len(rough("00130")) > 12
+    truth = load_truth()["spawn_latency"]
+    at_100 = next(f for f in truth.frames if f.frame == "00100")
+    assert {(0, 4), (0, 5)} <= at_100.cells, "the non-flat cells of 00100 ARE the falling piece"
 
 
 def test_no_window_ever_loses_the_piece_for_long() -> None:

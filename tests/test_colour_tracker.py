@@ -68,6 +68,66 @@ def test_an_unknown_colour_is_still_tracked_unnamed() -> None:
     assert report.falling.cells == frozenset({(0, 4), (0, 5)})
 
 
+def test_a_piece_landing_beside_settled_cells_of_its_own_colour() -> None:
+    """The absorbed-piece failure, arriving by the colour road.
+
+    Colour separates a piece from the stack -- except from stack of its own
+    colour, which is one 4-connected component with it and cannot be told
+    apart by the one signal this design is built on. This game deals three
+    I pieces in a row in two of the committed windows, so it is not exotic.
+
+    Before the fix the arriving I was reported as NO PIECE and swallowed
+    into the stack with no event raised at all: the coach would have gone
+    on hinting for the piece before it.
+
+    What separates them is time, not colour. The arriving cells changed in
+    the last few frames and the ones they touch did not.
+    """
+    track = tracker()
+    settled = {(11, c): BLUE_I for c in range(4)}
+    for _ in range(5):
+        before = track.update(render(settled))
+    assert before.falling is None and before.stack_rows[11] == 0b1111
+
+    arrived = settled | {(11, c): BLUE_I for c in range(4, 8)}
+    report = track.update(render(arrived))
+    assert report.falling is not None
+    assert report.falling.piece == "I"
+    assert report.falling.cells == frozenset({(11, 4), (11, 5), (11, 6), (11, 7)})
+    assert report.stack_rows[11] == 0b1111, "the stack is what was there before it"
+    assert Event.PIECE_SPAWNED in report.events
+
+    # It settles when it has held still, exactly as any resting piece does.
+    for _ in range(3):
+        report = track.update(render(arrived))
+    assert report.falling is None
+    assert report.stack_rows[11] == 0b11111111
+    assert Event.PIECE_LOCKED in report.events
+
+
+def test_a_piece_coming_to_rest_on_its_own_colour_keeps_its_settling_grace() -> None:
+    """It used to vanish on the frame it landed, ahead of its own grace."""
+    track = tracker()
+    settled = {(11, c): BLUE_I for c in range(4)}
+    for _ in range(5):
+        track.update(render(settled))
+    for row in (7, 8, 9):
+        report = track.update(render(settled | {(row, c): BLUE_I for c in range(4)}))
+        assert report.falling is not None and report.falling.floating
+
+    landed = settled | {(10, c): BLUE_I for c in range(4)}
+    for _ in range(3):
+        report = track.update(render(landed))
+        assert report.falling is not None, "still the piece, resting"
+        assert report.falling.piece == "I"
+        assert not report.falling.floating
+        assert report.stack_rows[10] == 0
+    report = track.update(render(landed))
+    assert report.falling is None
+    assert report.stack_rows[10] == 0b1111
+    assert Event.PIECE_LOCKED in report.events
+
+
 # -- what is not board content ---------------------------------------
 
 

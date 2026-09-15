@@ -129,6 +129,24 @@ def _components(labels: NDArray[np.int16]) -> list[tuple[int, frozenset[Cell]]]:
     return out
 
 
+def _connected(cells: frozenset[Cell]) -> list[frozenset[Cell]]:
+    """Split a set of cells into its four-connected parts."""
+    remaining = set(cells)
+    parts: list[frozenset[Cell]] = []
+    while remaining:
+        queue = deque([remaining.pop()])
+        part = []
+        while queue:
+            cr, cc = queue.popleft()
+            part.append((cr, cc))
+            for step in ((cr - 1, cc), (cr + 1, cc), (cr, cc - 1), (cr, cc + 1)):
+                if step in remaining:
+                    remaining.discard(step)
+                    queue.append(step)
+        parts.append(frozenset(part))
+    return parts
+
+
 def _grounded(labels: NDArray[np.int16]) -> NDArray[np.bool_]:
     """Content cells joined to the floor by a chain of content of ANY colour.
 
@@ -291,27 +309,70 @@ class ColourTracker:
             return
         self.palette.name(self.palette.intern(vector), reading.piece)
 
+    def _candidates(self, label: int, cells: frozenset[Cell]) -> list[frozenset[Cell]]:
+        """The cell-sets within one colour component that could be a piece.
+
+        Usually the component itself. But a piece touching settled cells of
+        its OWN colour is one component with the stack it landed on, and
+        colour cannot separate them because it is the same colour -- which
+        is the absorbed-piece failure this design was meant to leave
+        behind, arriving by a different road. Verified before the fix: an I
+        landing beside a settled I was reported as no piece at all and
+        silently swallowed into the stack, with no event raised, and an I
+        descending onto one vanished on the frame it came to rest.
+
+        What separates them is not colour but TIME, which this tracker
+        already keeps per cell: the arriving piece changed in the last few
+        frames and what it landed on did not. So an oversized component is
+        split on age, and each young part is offered on its own. When the
+        piece has held still for ``settle_frames`` its cells age out, no
+        young part remains, and the whole thing is stack -- which is the
+        settling this design already promised, now reached by pieces that
+        happen to match what is under them.
+        """
+        if len(cells) <= 4:
+            return [cells]
+        young = frozenset(
+            cell for cell in cells if int(self._age[cell[0], cell[1]]) < self.settle_frames
+        )
+        return [part for part in _connected(young) if len(part) <= 4]
+
     def _pick_falling(self, labels: NDArray[np.int16]) -> FallingPiece | None:
         """The one component that is in flight, if any."""
         grounded = _grounded(labels)
         best: tuple[tuple[int, int, int], FallingPiece] | None = None
-        for label, cells in _components(labels):
-            if len(cells) > 4:
-                continue  # more than a tetromino: settled board, not a piece
-            floating = not any(grounded[r, c] for r, c in cells)
-            youth = min(int(self._age[r, c]) for r, c in cells)
-            if not floating and youth >= self.settle_frames:
-                continue
-            candidate = FallingPiece(
+        for label, component in _components(labels):
+            for cells in self._candidates(label, component):
+                best = self._rank(best, label, cells, grounded)
+        return None if best is None else best[1]
+
+    def _rank(
+        self,
+        best: tuple[tuple[int, int, int], FallingPiece] | None,
+        label: int,
+        cells: frozenset[Cell],
+        grounded: NDArray[np.bool_],
+    ) -> tuple[tuple[int, int, int], FallingPiece] | None:
+        """Keep whichever of ``best`` and ``cells`` is the better candidate.
+
+        Floating beats resting, younger beats older, higher beats lower.
+        """
+        floating = not any(grounded[r, c] for r, c in cells)
+        youth = min(int(self._age[r, c]) for r, c in cells)
+        if not floating and youth >= self.settle_frames:
+            return best  # resting and old: settled board, not a piece
+        rank = (0 if floating else 1, youth, min(r for r, _ in cells))
+        if best is not None and rank >= best[0]:
+            return best
+        return (
+            rank,
+            FallingPiece(
                 piece=self.palette.piece_of(label),
                 cells=cells,
                 colour_class=label,
                 floating=floating,
-            )
-            rank = (0 if floating else 1, youth, min(r for r, _ in cells))
-            if best is None or rank < best[0]:
-                best = (rank, candidate)
-        return None if best is None else best[1]
+            ),
+        )
 
     def _stack(
         self, labels: NDArray[np.int16], falling: FallingPiece | None
