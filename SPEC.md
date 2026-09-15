@@ -730,7 +730,90 @@ vision/
                   # and on squareness. Returning None is a first-class
                   # answer here; a confident WRONG piece is worse, since it
                   # feeds a 2-ply hint planning around a piece the game
-                  # never deals.
+                  # never deals — and, since the preview now NAMES the
+                  # half-visible piece entering the board, a wrong reading
+                  # of the box becomes a wrong hint about a piece that is
+                  # on screen.
+                  # The threshold is anchored at MIN_SPREAD, so a piece
+                  # drawn too PALE to reach it is not misread but absent:
+                  # the mask keeps nothing, the box reads empty, and the
+                  # coach has no lookahead for as long as that piece sits
+                  # there (measured on a real session: None on 226 of 705
+                  # frames, 32%, in runs up to 45 — the same failure the
+                  # BOARD had until grid.py stopped letting a threshold
+                  # decide the intermediate band). So when the thresholded
+                  # reading names nothing, the band [MIN_SPREAD/2,
+                  # MIN_SPREAD) is read on its own and handed to the SAME
+                  # shape rules above. Three things make that safe in a
+                  # box, which is not a playfield:
+                  #  - the band is SPLIT first, by the same Otsu the frame
+                  #    is: a crop carries furniture a board cell's patch
+                  #    mean never sees — the box's hairline border and
+                  #    gridlines, measured at 0.179-0.250 against the pale
+                  #    piece at 0.254-0.349, and touching it — and taken
+                  #    whole the band merges the piece's cells through
+                  #    that border (0 of 76 pale crops readable; 60 with
+                  #    the split). A band with nothing to split (one flat
+                  #    level) is taken whole.
+                  #  - the band's CEILING is what keeps the caption out,
+                  #    rather than a rule about captions: a caption's core
+                  #    is solid class (0.586 on the live crops), so only
+                  #    its antialiased skirt is in the band, and a hollow
+                  #    outline is not block-like. Admitted instead as a
+                  #    lowered threshold it composes into one solid blob
+                  #    that survives the block filter and drags the
+                  #    bounding box off the piece.
+                  #  - our OWN hint fill is refused outright. The box
+                  #    floats over the top corner of the playfield, so a
+                  #    hint drawn there is drawn over the box — a
+                  #    tetromino of square cells, in the place a tetromino
+                  #    is expected, which no shape rule can tell from the
+                  #    piece the game dealt. Over a light box it
+                  #    composites INTO this band (0.321, four thousandths
+                  #    from the session's pale piece), so it is named the
+                  #    way grid.py names it: by the color arithmetic of
+                  #    OwnPaint, whose tolerance the nearest real band
+                  #    pixel stands 2.6x clear of. A match refuses the
+                  #    box (None), the answer grid.py gives its own
+                  #    unnameable paint.
+                  # The pass is asked only where the threshold came back
+                  # empty-handed, so every crop that was readable before is
+                  # byte-identical. Measured over the committed windows:
+                  # 530 of 557 crops named against 452, no crop's name
+                  # changed, and on tests/fixtures/spawn_latency the
+                  # entering-piece accelerator gains an episode it had no
+                  # evidence for (16 frames to hint -> 2).
+                  # WHICH WAY IT ERRS is the same way the rest of this
+                  # module does, and the 27 crops still unread are the
+                  # evidence: a box mid-deal with the outgoing piece's
+                  # panel sliding over the incoming one, and a box under
+                  # the game's end-of-round summary. Neither holds a
+                  # piece, and a band a rule cannot resolve into exactly
+                  # one tetromino keeps the silence the threshold gave
+                  # it. That direction is not a preference here: a
+                  # preview feeds the 2-ply lookahead AND names the
+                  # half-visible piece entering the board, so a
+                  # confident wrong box is a confident wrong hint about
+                  # a piece the user is watching.
+                  # MEASURED END TO END, every committed window replayed
+                  # through CoachEngine, before -> after (frames hinted /
+                  # PIECE_LOCKED / BOARD_RESET / rejected at the gate /
+                  # frames hinting a piece other than the committed
+                  # falling one):
+                  #   absorbed_piece      66 / 1 / 1 /  5 / 0  (identical)
+                  #   ghost_beside_stack  31 / 0 / 1 /  5 / 0  (identical)
+                  #   ghost_session       93 / 3 / 0 /  1 / 0  (identical)
+                  #   live_session        75 / 4 / 0 / 17 / 0  (identical)
+                  #   pale_piece          45 / 0 / 1 / 14 / 0  (identical)
+                  #   spawn_latency      120->134 / 2 / 2 / 37 / 0
+                  # Only the window whose box the band pass opened moves,
+                  # and only by carrying a hint on 14 more frames
+                  # (OCCLUDED 31 -> 17). Sighting -> hint distances are
+                  # unchanged elsewhere (absorbed_piece 15, ghost_session
+                  # 2, live_session 2), and the extra pass costs ~1 ms,
+                  # on the frames the threshold could not read and
+                  # nowhere else — app.py reads the box only when its
+                  # pixels change.
   state.py        # GameState tracker: keeps the committed stack as the one
                   # authoritative memory (never None), feeds explain_grid, and
                   # debounces (2 consistent frames) before committing. UNEXPLAINED
