@@ -31,9 +31,11 @@ on is about memory and the first version of this docstring overstated it:
   name transitions: lock, spawn, clear. Nothing is derived from it.
 * The board background, re-estimated every frame from the cells currently
   reading empty. It moves in both directions and forgets.
-* The colour->piece palette. THIS ONE IS GLOBAL AND IT IS ONE-WAY: a class is
-  never removed, its peak magnitude never falls, and a name retired as
-  ambiguous never comes back.
+* The colour->piece palette. THIS ONE IS GLOBAL AND IT IS ONE-WAY across
+  the frames it accepts: a class is never removed, its peak magnitude never
+  falls, and a name retired as ambiguous never comes back. The only thing
+  that ever moves backwards is a REFUSED frame, which is rolled back whole
+  (:meth:`Palette.checkpoint`) to a state the palette really held.
 
 So the reading is memoryless where it matters — the board handed to the
 solver is derived from this frame's pixels alone, never from a committed
@@ -60,6 +62,15 @@ contradicts a colour the palette has named, that colour is retired from
 naming altogether and shape takes over for it — a monochrome theme, or two
 tetrominoes a game renders alike, then degrade to naming by shape rather
 than naming every later piece after the first.
+
+What NEITHER signal covers, said plainly because it is the one hole in the
+naming: a piece whose colour is unknown AND whose sighting is incomplete.
+Shape cannot name 1-3 cells (they fit several tetrominoes — that is the
+whole reason this design exists), so such a piece is tracked and reported
+with ``piece=None`` until it is whole or the NEXT box names its colour. It
+costs a cold start per colour and nothing after it: measured over the
+committed windows, every colour is named by its first complete sighting or
+by the box, and the one window that pays it pays 7 frames.
 """
 
 from __future__ import annotations

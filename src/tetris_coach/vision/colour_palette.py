@@ -208,7 +208,10 @@ class Palette:
     content cell per frame and three of its changes are one-way: a class is
     never removed, :attr:`ColourClass.peak` never falls, and a name retired
     by :meth:`witness` never returns. The background is the exception and
-    moves freely.
+    moves freely. So is a frame the tracker REFUSES, which is put back
+    exactly as it stood (:meth:`checkpoint`) rather than left interned --
+    the one way anything here goes backwards, and it never reaches a state
+    the palette did not really hold.
 
     What keeps that from being the shipped design's problem in new clothes
     is that nothing is DERIVED from the palette. It labels this frame's
