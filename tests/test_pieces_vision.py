@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -430,3 +431,63 @@ class TestIdentifyNextOwnPaint:
         # piece, on the very scale the band is defined by.
         scores, band, _level = band_split(self.box(((0, 0),), self.composite()))
         assert _GHOST_SEPARATION <= float(scores[band].max()) < MIN_SPREAD
+
+
+class TestIdentifyNextOwnPaintOnADarkBox:
+    """The same hint fill, on a box dark enough to make it a SOLID class.
+
+    The band is where the composite lands over a LIGHT box. It is not
+    where it lands over a dark one: the composite is a distance from the
+    box's own ground, and over black the shipped fill scores 0.374 —
+    above MIN_SPREAD, so the box is read by the THRESHOLD, which used to
+    name it. That named the placement the coach is pointing at as the
+    piece coming next, on every dark theme.
+    """
+
+    GROUNDS: ClassVar = [(0, 0, 0), (4, 4, 6), (8, 8, 10), (12, 12, 16), (20, 20, 24)]
+
+    @staticmethod
+    def box(ground: tuple[int, int, int], cells: tuple[tuple[int, int], ...]) -> np.ndarray:
+        """A dark preview box with ``cells`` painted in our own hint fill."""
+        assert HINT_PAINT is not None
+        background = np.asarray(ground, dtype=np.float64)
+        paint = np.asarray(HINT_PAINT.color, dtype=np.float64)
+        fill = background + HINT_PAINT.opacity * (paint - background)
+        image = np.full((96, 96, 3), ground, dtype=np.uint8)
+        for r, c in cells:
+            top, left = 8 + r * 19 + 1, 12 + c * 19 + 1
+            image[top : top + 17, left : left + 17] = np.round(fill).astype(np.uint8)
+        return image
+
+    @pytest.mark.parametrize("ground", GROUNDS)
+    def test_the_composite_is_a_solid_class_here_not_a_band(self, ground) -> None:  # type: ignore[no-untyped-def]
+        # The diagnosis: the same fill that scores 0.321 over white scores
+        # 0.357-0.374 over these grounds, so the band pass — the only
+        # place the refusal used to live — is never even asked.
+        image = self.box(ground, ROTATIONS["O"][0].cells)
+        scores, _band, _level = band_split(image)
+        assert float(scores.max()) >= MIN_SPREAD
+
+    @pytest.mark.parametrize("ground", GROUNDS)
+    @pytest.mark.parametrize("piece", PIECES)
+    def test_our_own_hint_is_refused_on_a_dark_box_too(self, piece: str, ground) -> None:  # type: ignore[no-untyped-def]
+        for rot in ROTATIONS[piece]:
+            assert identify_next(self.box(ground, rot.cells)) is None
+
+    def test_it_is_the_paint_rule_and_not_the_shape_rules(self) -> None:
+        # Pinned the same way the light box pins it: the shape rules find
+        # a perfectly good piece, and it is the color arithmetic that
+        # refuses it.
+        image = self.box((0, 0, 0), ROTATIONS["T"][0].cells)
+        assert identify_next(image, own_paint=None) == "T"
+        assert identify_next(image) is None
+
+    @pytest.mark.parametrize("ground", GROUNDS)
+    def test_a_real_piece_on_the_same_dark_box_is_still_named(self, ground) -> None:  # type: ignore[no-untyped-def]
+        # The control: the guard must refuse our fill, not dark boxes. A
+        # game piece drawn on the same ground reads exactly as before.
+        image = self.box(ground, ())
+        for r, c in ROTATIONS["S"][0].cells:
+            top, left = 8 + r * 19 + 1, 12 + c * 19 + 1
+            image[top : top + 17, left : left + 17] = (215, 15, 55)
+        assert identify_next(image) == "S"

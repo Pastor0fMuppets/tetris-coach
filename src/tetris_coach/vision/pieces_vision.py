@@ -1108,8 +1108,25 @@ def identify_next(image: NDArray[np.uint8], own_paint: OwnPaint | None = HINT_PA
         # splitting background|(gridlines+piece) and ruin the bounding
         # box; every SOLID piece color sits well above the floor (see the
         # measured anchors on MIN_SPREAD).
-        piece = _piece_from_mask(scores > max(otsu_threshold_hist(flat), MIN_SPREAD))
+        solid = scores > max(otsu_threshold_hist(flat), MIN_SPREAD)
+        piece = _piece_from_mask(solid)
         if piece is not None:
+            # ...and our own paint is refused HERE too, not only in the
+            # band. The hint fill lands in the band over a LIGHT box
+            # (0.321 over white), which is what made the band the place
+            # to ask — but the composite is a distance from the box's
+            # ground, not a constant: over a BLACK box the same fill
+            # scores 0.374, above MIN_SPREAD entirely, so it arrives as
+            # a solid class and this branch names it. Measured over
+            # black and near-black box grounds it scores 0.357-0.374 and
+            # an O-, T- or I-shaped hint was read as 'O', 'T', 'I': the
+            # exact name of the placement the coach is pointing at,
+            # reported as the piece coming next. A dark theme is not an
+            # edge case, and the rule belongs to both readings of the
+            # box rather than to the pass that happened to need it
+            # first.
+            if _is_own_paint(img, background, solid, own_paint):
+                return None
             return piece
     # ...and a piece that does NOT sit above the floor is the whole of
     # what is left to read. Below the floor there is no spread to gate on
