@@ -14,6 +14,7 @@ from tetris_coach.vision.colour_tracker import ColourTracker, Event
 
 from .colour_frames import (
     BLUE_I,
+    CELL,
     COLS,
     GREEN_O,
     PALE_T,
@@ -625,3 +626,30 @@ def test_a_refused_frame_does_not_move_the_next_piece_either() -> None:
     assert not covered.board_visible
     assert covered.next_piece == "T", "the box reading came with a frame that is not a board"
     assert len(track.palette.classes) == classes
+
+
+def test_the_next_box_is_read_with_this_session_own_paint() -> None:
+    """--hint-color has to reach the box, not just the board.
+
+    The NEXT panel floats over the top corner of the playfield in the game
+    this is used on, so a hint drawn in that corner is drawn over the BOX.
+    A reader told the wrong paint colour does not recognize the fill, and
+    what it then sees in the box is our own tetromino-shaped paint.
+    """
+    from tetris_coach.vision.grid import HINT_FILL_OPACITY, HINT_PAINT, OwnPaint
+
+    magenta = OwnPaint.for_hint_color("#ff00ff")
+    assert magenta is not None
+    box = preview([(0, 0), (0, 1), (1, 0), (1, 1)], GREEN_O).astype(np.float64)
+    fill = np.array(magenta.color, dtype=np.float64)
+    under = box[: 3 * CELL, :]
+    box[: 3 * CELL, :] = under + HINT_FILL_OPACITY * (fill - under)
+    painted = box.round().astype(np.uint8)
+
+    told = ColourTracker(rows=ROWS, cols=COLS, paint=magenta)
+    assert told.update(render({}), painted).next_piece == "O"
+    # The default paint is a different colour, so the fill is not
+    # recognized and the box is unreadable rather than misread.
+    for paint in (HINT_PAINT, None):
+        deaf = ColourTracker(rows=ROWS, cols=COLS, paint=paint)
+        assert deaf.update(render({}), painted).next_piece is None

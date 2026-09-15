@@ -396,8 +396,15 @@ class ColourTracker:
         return FallingPiece(named, falling.cells, falling.colour_class, falling.floating)
 
     def _read_preview(self, crop: NDArray[np.uint8]) -> None:
-        """Name the NEXT piece, and teach the palette its colour."""
-        reading = identify_preview(crop)
+        """Name the NEXT piece, and teach the palette its colour.
+
+        The box is read with THIS session's paint, not the default one:
+        the NEXT panel floats over the top corner of the playfield in the
+        game this is used on, so a hint drawn in that corner is drawn over
+        the box, and a reader that does not know what the paint looks like
+        reads a tetromino of our own colour as the piece being dealt.
+        """
+        reading = identify_preview(crop, self._paint)
         if reading is None:
             return  # an unreadable box says nothing; the last reading stands
         self._next_piece = reading.piece
