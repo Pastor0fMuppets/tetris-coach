@@ -348,8 +348,10 @@ def _partial_piece(
     mis-read preview can therefore misname an entering piece, and that is
     the deliberate trade: the alternative is no name for as long as the
     piece sits at the top edge (measured on the live session: 13 frames,
-    ~0.9 s, of a piece nobody could hint), and a misnamed one is corrected
-    by the ordinary rules the moment it descends into full view.
+    ~0.9 s, of a piece nobody could hint), and a misnamed one stands only
+    until the frame can contradict it — which is as long as the fragment
+    stays ambiguous, 12 frames on the committed window when the box lies
+    consistently, and nothing structural either way.
     ``hinted`` says the name came from the hint rather than from
     structure, so the tracker can refuse to treat a guess as an
     observation.

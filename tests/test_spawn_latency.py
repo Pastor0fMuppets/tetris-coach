@@ -54,8 +54,10 @@ from __future__ import annotations
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from tetris_coach.app import CoachConfig, CoachEngine, compute_overlap_mask
@@ -212,6 +214,76 @@ def entering_episodes() -> list[tuple[str, str | None, int | None]]:
     if opened is not None:
         episodes.append((opened[1], None, None))
     return episodes
+
+
+class Replay(NamedTuple):
+    """One pass of the window: what was hinted, and what it committed."""
+
+    hints: list[tuple[str, str | None]]  # (frame, "piece@col") per capture
+    events: Counter[GameEvent]
+    stack: tuple[int, ...]
+
+
+def replay_window() -> Replay:
+    """The window again, on a fresh engine, reading the preview as patched."""
+    covered = compute_overlap_mask(SESSION_BOARD, SESSION_NEXT, rows=ROWS)
+    engine = CoachEngine(CoachConfig(rows=ROWS), unobservable_cells=covered)
+    events: Counter[GameEvent] = Counter()
+    update = engine.tracker.update
+
+    def spy(occupancy, next_piece):  # type: ignore[no-untyped-def]
+        seen = update(occupancy, next_piece)
+        events.update(seen)
+        return seen
+
+    engine.tracker.update = spy  # type: ignore[method-assign]
+    hints: list[tuple[str, str | None]] = []
+    for number in frame_numbers():
+        preview = FIXTURES / f"next_{number}.png"
+        hint = engine.process_frame(
+            load(f"board_{number}.png"), load(preview.name) if preview.exists() else None
+        )
+        hints.append((number, f"{hint.piece}@{hint.col}" if hint is not None else None))
+    return Replay(hints, events, engine.tracker.committed.stack_rows)
+
+
+def test_a_preview_that_lies_costs_the_ambiguous_window_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The price of the accelerator, measured rather than asserted away.
+    # Naming a clipped fragment from the preview means a preview that is
+    # WRONG names it wrong, and no rule can do better than the frame: two
+    # cells side by side fit an O and an S alike, so while the piece sits
+    # at the top edge showing two cells there is nothing to contradict the
+    # name. Here every O the box shows is read as an S — a consistent lie,
+    # which is the worst case, since a wobbling one is refused by the
+    # preview debounce before it can flip anything.
+    #
+    # What that costs is 12 frames (0.80 s) of a wrong hint on the ONE
+    # piece whose name came from the preview, ending the moment the O's
+    # second row descends and rules the S out. What it does NOT cost is
+    # anything structural: the same committed stack at the end of the
+    # window, the same locks, the same resets. A hinted name is never
+    # evidence, and this is the ceiling on what a wrong one can do.
+    import tetris_coach.app as app_module
+
+    honest = replay_window()
+    real = app_module.identify_next
+    monkeypatch.setattr(
+        app_module, "identify_next", lambda image: "S" if real(image) == "O" else real(image)
+    )
+    lying = replay_window()
+
+    differing = [
+        (n, h, li) for (n, h), (_, li) in zip(honest.hints, lying.hints, strict=True) if h != li
+    ]
+    assert [n for n, _, _ in differing] == [f"00{n}" for n in range(163, 175)]
+    assert {li for _, _, li in differing} == {"S@0"}  # the phantom, 12 frames
+    assert dict(honest.hints)["00175"] == "O@0"  # the frame the shape corrects it
+    assert dict(lying.hints)["00175"] == "O@0"
+    assert lying.stack == honest.stack
+    assert lying.events[GameEvent.PIECE_LOCKED] == honest.events[GameEvent.PIECE_LOCKED] == 2
+    assert lying.events[GameEvent.BOARD_RESET] == honest.events[GameEvent.BOARD_RESET] == 2
 
 
 def test_the_window_is_the_readme_geometry() -> None:

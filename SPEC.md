@@ -646,17 +646,23 @@ vision/
                   # entering from above and no placement of the hinted
                   # piece fits it, explain_grid reports hint_refuted and
                   # the tracker drops the hypothesis on that frame
-                  # (Explanation.hint_refuted -> GameStateTracker.update).
+                  # (Explanation.hint_refuted -> GameStateTracker.update),
+                  # and TAKES BACK the name that hypothesis had already
+                  # committed (PIECE_UNNAMED; see state.py rule (4)).
                   # Two cells side by side fit an O as well as an L; the
                   # row below them does not, so a misnamed piece whose
                   # fragment GROWS before it is whole contradicts itself
                   # at the top edge, and one that goes straight from two
                   # cells to four is renamed by the ordinary rules on the
-                  # frame it is whole. Either way the correction costs a
-                  # briefly withheld hint, never a confidently wrong one,
-                  # and nothing structural: a hinted name authorises no
-                  # lock (it is not an observation) and an unnameable
-                  # frame is OCCLUDED, which never counts toward a reset.
+                  # frame it is whole. What the correction costs is the
+                  # frames BEFORE it — while the fragment fits the hinted
+                  # name as well as the real one, the wrong name is on
+                  # screen, measured at 12 frames (0.80 s) on the
+                  # committed window with a consistently lying box. What
+                  # it never costs is anything structural: a hinted name
+                  # authorises no lock (it is not an observation) and an
+                  # unnameable frame is OCCLUDED, which never counts
+                  # toward a reset.
                   # Only a fragment coming in from ABOVE is evidence about
                   # the hint — a piece sliding under a panel was named
                   # from its own earlier frames — and a piece seen WHOLE
@@ -800,6 +806,18 @@ vision/
                   # flip, and the hint's age carries it honestly: a flip is
                   # dated from the capture the change was FIRST seen on,
                   # not from the one that confirms it.
+                  # NOTE what none of these rules can do: a preview that
+                  # reads WRONG consistently names the clipped fragment
+                  # wrong, and no frame can contradict it while two cells
+                  # at row 0 fit five pieces. Measured with every O in the
+                  # committed window misread as an S: 12 frames, 0.80 s,
+                  # of a confidently wrong hint on the one piece the
+                  # preview named, ending as the O's second row descends,
+                  # with the same committed stack, locks and resets as the
+                  # honest replay. The claim to make is not "never a wrong
+                  # hint" — it is that a wrong hint is bounded by the
+                  # ambiguity of the frame, retracted the moment the frame
+                  # can tell, expired with its deal, and never evidence.
                   # (1) A flip counts only when the GAP it is read across
                   # is shorter than a tenure. The box is unreadable in
                   # bursts, and a burst covering one previewed piece's

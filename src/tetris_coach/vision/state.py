@@ -305,11 +305,22 @@ class GameStateTracker:
             # it: the piece coming in from above showed cells no placement
             # of the hinted piece fits. Dropped here, before anything is
             # decided on it, so the rest of this frame — and every frame
-            # until the next flip — reads from shape alone. A piece two
-            # cells wide fits an O as well as an L, but its next row down
-            # does not, so a misnamed piece contradicts itself within a
-            # frame or two of descending and costs a briefly withheld
-            # hint rather than a confidently wrong one.
+            # until the next flip — reads from shape alone, and the name
+            # the hypothesis already committed is taken back below.
+            #
+            # What this does NOT do is make a wrong reading harmless. A
+            # frame can only refute what it contradicts, and while the
+            # piece is clipped to two cells at the top edge it fits an O,
+            # an S, a Z, a J and an L alike — so a preview that says S
+            # over an O buys a confidently wrong hint for exactly as long
+            # as the fragment is ambiguous. Measured on the committed
+            # window with every O misread as an S: 12 frames, 0.80 s, on
+            # the one piece the preview named, ending when its second row
+            # descends; the committed stack, the locks and the resets are
+            # untouched (test_spawn_latency). That is the accelerator's
+            # price, and it is the same trade as naming the fragment at
+            # all: the alternative measured here is 13 frames of no hint
+            # on EVERY piece.
             self._entering_hint = None
 
         if explanation.falling is not None and not explanation.hinted_name:
