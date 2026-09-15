@@ -1067,6 +1067,16 @@ _MAX_BAND_SPREAD = 1.25
 # fills 0.72-0.77 at every radius and used to be read as a confident 'O'.
 _MIN_FLUSH_CELL_FILL = 0.9
 
+# How many pixels the own-paint rule estimates a background LEVEL from
+# (:func:`_grounds`). A level is a color and its median is stable in the
+# sample size: a crop is 10-40k pixels, a level is a large part of one,
+# and taking every pixel of it made the preview stage cost 2.4x what the
+# whole stage is budgeted at. Measured over every committed crop (1114
+# candidates), capped and uncapped grounds differ by at most 1 uint8
+# unit, against this rule's 8.0 tolerance and the 19 units of margin the
+# nearest real candidate stands off it.
+_GROUND_SAMPLES = 4096
+
 
 def identify_next(image: NDArray[np.uint8], own_paint: OwnPaint | None = HINT_PAINT) -> str | None:
     """Recognize the piece shown in a next-piece preview image.
@@ -1134,7 +1144,7 @@ def identify_next(image: NDArray[np.uint8], own_paint: OwnPaint | None = HINT_PA
             # edge case, and the rule belongs to both readings of the
             # box rather than to the pass that happened to need it
             # first.
-            if _is_own_paint(img, background, solid, own_paint):
+            if _is_own_paint(img, scores, background, solid, own_paint):
                 return None
             return piece
     # ...and a piece that does NOT sit above the floor is the whole of
@@ -1237,13 +1247,14 @@ def _band_piece(
     candidate = band & (scores > otsu_threshold_hist(scores[band]))
     if not bool(candidate.any()):
         candidate = band
-    if _is_own_paint(img, background, candidate, own_paint):
+    if _is_own_paint(img, scores, background, candidate, own_paint):
         return None
     return _piece_from_mask(candidate, flush=False)
 
 
 def _is_own_paint(
     img: NDArray[np.uint8],
+    scores: NDArray[np.float32],
     background: NDArray[np.float64],
     candidate: NDArray[np.bool_],
     paint: OwnPaint | None,
@@ -1279,18 +1290,23 @@ def _is_own_paint(
     if paint is None or len(paint.color) != int(img.shape[-1]):
         return False
     color = np.asarray(paint.color, dtype=np.float64)
-    pixels = np.asarray(img, dtype=np.float64)
-    for ground in _grounds(pixels, background, candidate):
+    # Only the candidate's own pixels are ever asked about, so only they
+    # are measured: the answer is a majority over exactly this level.
+    claimed = np.asarray(img)[candidate].astype(np.float64)
+    if not claimed.size:
+        return False
+    for ground in _grounds(img, scores, background, candidate):
         composite = ground + paint.opacity * (color - ground)
-        diff = pixels - composite
+        diff = claimed - composite
         painted = np.sqrt(np.sum(diff * diff, axis=-1)) <= paint.tolerance
-        if int((painted & candidate).sum()) * 2 >= int(candidate.sum()):
+        if int(painted.sum()) * 2 >= int(claimed.shape[0]):
             return True
     return False
 
 
 def _grounds(
-    pixels: NDArray[np.float64],
+    img: NDArray[np.uint8],
+    scores: NDArray[np.float32],
     background: NDArray[np.float64],
     candidate: NDArray[np.bool_],
 ) -> list[NDArray[np.float64]]:
@@ -1329,11 +1345,22 @@ def _grounds(
     the majority the rule asks for.
     """
     grounds = [np.asarray(background, dtype=np.float64)]
-    rest = pixels[~candidate]
-    if rest.size:
-        scores = _distance_scores(rest, grounds[0]).ravel()
-        level = otsu_threshold_hist(scores)
-        for side in (scores <= level, scores > level):
+    # Distance from the median is what ``scores`` already holds, so the
+    # split costs a threshold rather than a second pass over the crop —
+    # and the medians are taken from an evenly strided SAMPLE of what is
+    # left, because a level's median is a color: estimating it wants
+    # enough pixels of that level, not all of them. Capped, this rule
+    # keeps the cost of a big crop near that of a small one (measured on
+    # the 200x200 benchmark box, the whole preview stage: 5.3 ms
+    # uncapped against 3.0 ms capped, where the reading itself is 2.2).
+    outside = np.flatnonzero(~candidate.reshape(-1))
+    if outside.size:
+        if outside.size > _GROUND_SAMPLES:
+            outside = outside[:: outside.size // _GROUND_SAMPLES]
+        rest = np.asarray(img).reshape(-1, img.shape[-1])[outside].astype(np.float64)
+        apart = np.asarray(scores).reshape(-1)[outside]
+        level = otsu_threshold_hist(apart)
+        for side in (apart <= level, apart > level):
             if bool(side.any()):
                 grounds.append(np.asarray(np.median(rest[side], axis=0), dtype=np.float64))
     return grounds

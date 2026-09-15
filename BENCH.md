@@ -73,7 +73,19 @@ Otsu for the 200 cell scores, and `CoachEngine` still gates
 `identify_next` behind the byte-identical preview cache (~14 of 15 frames
 in the steady state).
 
-At the default 15 fps poll rate the vision stages cost ~4 ms per frame
+The preview stage then pays once more, for the rules that keep the box
+from being named WRONG: the own-paint refusal is asked in both readings of
+the box (not only in the band) and computes its composite over the crop's
+background LEVELS rather than its average, which is a median per level.
+Measured back-to-back on the same machine, best of 200 runs: 2.2 -> 3.0 ms
+on the 200x200 box, and 0.82 -> 1.25 ms per crop over the 135 committed
+session crops (99x102 and 94x94). The level medians are taken from an
+evenly strided sample capped at 4096 pixels, which is what keeps the big
+crop near the small one — uncapped, the same box costs 5.3 ms — and over
+every committed crop capped and uncapped grounds differ by at most 1 uint8
+unit against an 8.0 tolerance.
+
+At the default 15 fps poll rate the vision stages cost ~5 ms per frame
 worst case (~2 ms in the cache-hit steady state) against the ~67 ms frame
 budget.
 
