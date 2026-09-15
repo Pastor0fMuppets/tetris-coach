@@ -37,8 +37,10 @@ from tetris_coach.vision.grid import (
     _GHOST_SEPARATION,
     _LAYER_CONFIDENCE_CEILING,
     _UNIFORM_EMPTY_CONFIDENCE,
+    HINT_PAINT,
     MIN_SPREAD,
     _cell_colors,
+    _classify_scored,
     _clear_of_background,
     _distance_scores,
     _ghost_layer,
@@ -503,3 +505,64 @@ def test_a_continuum_is_not_a_band_and_is_never_promoted() -> None:
     assert not _clear_of_background(scores, band, observable)
     _occupancy, confidence = classify_grid(image, rows=ROWS, cols=COLS)
     assert confidence < 0.15, f"the start screen read at {confidence:.3f}"
+
+
+# --- The promotion's confidence clamp, and where it looks for air --------
+#
+# A promoted band is a level being called content over the threshold's
+# objection, and a level has air ABOVE it as well as below. That air is
+# what separates a pale piece from one slice of a lighting ramp, so the
+# frame's confidence is clamped by it — and it must be measured on the
+# BOARD rather than on the frame, because the cells a named layer has
+# just declared are not there cannot be the next level up.
+#
+# The theme that shows the difference is a BLACK ground, the one
+# _own_paint_layer measured at 0.374 for this tool's own hint: above
+# MIN_SPREAD, so the paint is named and taken out, and 0.028 above a pale
+# periwinkle piece promoted out of the band at 0.346.
+BLACK_GROUND = np.zeros(3, dtype=np.float64)
+PALE_SCORE = 0.346  # tests/fixtures/pale_piece's periwinkle, on this scale
+SOLID_SCORE = 0.80  # the blue stack beside it
+PALE_PIECE = [(4, 4), (4, 5), (5, 4), (5, 5)]
+HINT_CELLS = [(2, c) for c in range(6, 10)]
+
+
+def at_score(score: float) -> np.ndarray:
+    """A color whose distance from ``BLACK_GROUND`` is ``score``."""
+    return np.array([0.0, 0.0, 441.6729559300637 * score * score])
+
+
+def black_ground_scene(hint: bool) -> np.ndarray:
+    """A deep stack, a pale piece above it, and optionally our own hint.
+
+    The stack is deep on purpose: Otsu's peak sits up among those cells,
+    the cut lands above 0.346, and the pale piece is DROPPED — which is
+    what makes it a promotion rather than an ordinary reading.
+    """
+    colors = np.zeros((ROWS, COLS, 3), dtype=np.float32)
+    colors[8:12, :] = at_score(SOLID_SCORE)
+    colors[8:10, 4:6] = BLACK_GROUND
+    for r, c in PALE_PIECE:
+        colors[r, c] = at_score(PALE_SCORE)
+    if hint:
+        composite = BLACK_GROUND + HINT_PAINT.opacity * (
+            np.asarray(HINT_PAINT.color, dtype=np.float64) - BLACK_GROUND
+        )
+        for r, c in HINT_CELLS:
+            colors[r, c] = composite
+    return colors
+
+
+def test_our_own_paint_is_not_the_level_above_a_promoted_piece() -> None:
+    bare = _classify_scored(black_ground_scene(hint=False), BLACK_GROUND, frozenset(), HINT_PAINT)
+    painted = _classify_scored(black_ground_scene(hint=True), BLACK_GROUND, frozenset(), HINT_PAINT)
+    assert painted.ghost is not None and int(painted.ghost.sum()) == 4, (
+        "the scene no longer has our own paint named on it"
+    )
+    assert bare.occupancy[grid(PALE_PIECE)].all(), "the pale piece was not promoted at all"
+    assert bool(np.array_equal(bare.occupancy, painted.occupancy))
+    # Taking our own overlay out of the frame may not cost the board
+    # underneath its confidence: measured, 0.035 against 0.433 when the
+    # clamp counted the named cells as the next level up.
+    assert painted.confidence == pytest.approx(bare.confidence)
+    assert painted.confidence >= 0.15

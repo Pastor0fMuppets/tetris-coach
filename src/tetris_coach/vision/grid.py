@@ -1392,7 +1392,16 @@ def _classify_scored(
         # 140-unit vertical gradient, against 0.206 for the real pale
         # piece of tests/fixtures/pale_piece, whose next level up is
         # 0.469 away).
-        gap = min(gap, _clearance_above(scores, promoted, observable))
+        #
+        # The air is looked for on the BOARD, not on the frame: a named
+        # layer's cells were just declared not to be there, so they
+        # cannot be the next level up either. Left in, a theme whose
+        # paint composites just over MIN_SPREAD (black ground: 0.374,
+        # see _own_paint_layer) puts a hint 0.028 above a promoted pale
+        # piece and collapses a correct reading from 0.433 to 0.035,
+        # under the gate — the pale-piece failure back again, now by way
+        # of the confidence rather than the split.
+        gap = min(gap, _clearance_above(scores, promoted, observable & board))
     confidence = float(np.clip(gap / (hi - lo), 0.0, 1.0))
     if ghost is not None:
         # Three levels were seen and two are being reported on; the third
