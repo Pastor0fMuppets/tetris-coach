@@ -640,10 +640,29 @@ vision/
                   # OBSERVED name, so a misnamed entering piece would block
                   # its own lock (4 identical unexplainable frames -> a
                   # spurious BOARD_RESET, hint cleared, overlay blank),
-                  # making a wrong name strictly worse than no name. In
-                  # this game a piece goes from the top edge straight to a
-                  # hard drop, so the correction on the way down — the
-                  # other half of the trade — never runs. It only
+                  # making a wrong name strictly worse than no name.
+                  # A preview reading is a HYPOTHESIS, so the frame that
+                  # FALSIFIES one ends it: when the fragment is a piece
+                  # entering from above and no placement of the hinted
+                  # piece fits it, explain_grid reports hint_refuted and
+                  # the tracker drops the hypothesis on that frame
+                  # (Explanation.hint_refuted -> GameStateTracker.update).
+                  # Two cells side by side fit an O as well as an L; the
+                  # row below them does not, so a misnamed piece whose
+                  # fragment GROWS before it is whole contradicts itself
+                  # at the top edge, and one that goes straight from two
+                  # cells to four is renamed by the ordinary rules on the
+                  # frame it is whole. Either way the correction costs a
+                  # briefly withheld hint, never a confidently wrong one,
+                  # and nothing structural: a hinted name authorises no
+                  # lock (it is not an observation) and an unnameable
+                  # frame is OCCLUDED, which never counts toward a reset.
+                  # Only a fragment coming in from ABOVE is evidence about
+                  # the hint — a piece sliding under a panel was named
+                  # from its own earlier frames — and a piece seen WHOLE
+                  # deliberately is not: on the frame of a flip the board
+                  # still shows the piece that just locked, which would
+                  # refute every hint on the frame it was set. It only
                   # became possible once the preview could be read at all
                   # (see identify_next); the panel case is deliberately left
                   # alone, because a piece that slides under a panel was
@@ -758,22 +777,65 @@ vision/
                   # instead of 74 — 13 frames, ~0.9 s, that used to carry no
                   # hint at all — and frame 74's independent structural
                   # reading agrees it is an O. That evidence is about ONE
-                  # deal, so it expires with it: the preview reports a deal
-                  # only by CHANGING, and it is unreadable in bursts, so a
-                  # burst covering one previewed piece's whole tenure makes
-                  # the next change arrive a deal late (X -> [Y never read]
-                  # -> Z names the entering piece X). A lock is the game
-                  # dealing again — and the flip that reports that deal is
-                  # the same event, one frame ahead of the debounced commit
-                  # — so the hint set for the deal a lock BEGINS survives
-                  # that lock, and one that reaches a SECOND lock has
-                  # outlived its deal and is dropped. Without the expiry a
-                  # single unreadable burst (or one flickered frame:
-                  # X -> W -> X leaves the hint naming W, a piece never
-                  # dealt) names every later top-edge fragment for the rest
-                  # of the session. A resync drops it outright: what the
-                  # preview shows still holds, what was dealt into THIS
-                  # board does not.
+                  # deal, and three rules hold it there — a flip says "the
+                  # piece that was here has been dealt" and never says
+                  # WHEN, so all three are about DATING it.
+                  # (1) A flip counts only when the PREVIOUS frame read the
+                  # box too. The box is unreadable in bursts, and a burst
+                  # covering one previewed piece's whole tenure moves its
+                  # value on twice, so the next flip arrives a deal late
+                  # (X -> [Y never read] -> Z names X, which is by then on
+                  # the board — the "confused two pieces" failure the user
+                  # reported seeing once). Two CONSECUTIVE readable frames
+                  # cannot straddle two deals: a tenure is ~14-22 frames
+                  # here. Measured on tests/fixtures/spawn_latency: the T
+                  # dealt at 00198 sat unread in the box for 18 frames and
+                  # the flip at 00216 carried the I before it. (Residual:
+                  # the tracker only sees frames the confidence gate
+                  # accepted, so a deal hidden entirely inside a rejected
+                  # stretch is invisible to this test; rule (4) below is
+                  # what catches the hint it would mis-set.)
+                  # (2) A hint survives a lock only while it is YOUNGER
+                  # than that lock's own debounce. The preview reports a
+                  # deal by changing as the new piece spawns, which is the
+                  # frame the commit is debouncing, so the hint of the deal
+                  # a lock BEGINS is always the young one; an older hint
+                  # names the piece that just LOCKED. Counting locks
+                  # instead (what this did) cannot tell the two apart —
+                  # both show exactly one lock since the hint was set — and
+                  # with no expiry at all, one unreadable burst (or one
+                  # flickered frame: X -> W -> X leaves the hint naming W,
+                  # a piece never dealt) names every later top-edge
+                  # fragment for the rest of the session.
+                  # (3) A resync drops a hint from BEFORE the world it is
+                  # adopting — what the preview shows still holds, what was
+                  # dealt into THIS board does not — but KEEPS one set
+                  # inside the run of frames it is resyncing onto, which is
+                  # this board's own deal. That clause is the wait the user
+                  # reported: the game wipes the field, deals an O, the box
+                  # flips O -> I on the frame the O's first two cells reach
+                  # the top edge, and the reset four frames later threw
+                  # away the hint naming the very piece it was resyncing
+                  # ONTO. (4) And the hint is dropped outright by any frame
+                  # that refutes it (hint_refuted, above).
+                  # Measured over tests/fixtures/spawn_latency (161 frames,
+                  # 124 accepted): OCCLUDED 43 -> 31, frames with a hint on
+                  # screen 108 -> 120, and the per-piece sighting -> hint
+                  # distance 17 / 14 / 16 -> 17 / 2 / 16 frames. The 2 is
+                  # the commit debounce, not a wait, and the O is named
+                  # with two of its four cells still above the capture. The
+                  # two that do not move are the two with no sound evidence
+                  # (one where no flip has been seen at all, one where the
+                  # flip is a deal late), which is the shape of the whole
+                  # thing: an accelerator on a signal that is usually
+                  # present (the preview reads on 69% of this session's
+                  # frames), never a dependency — where it is absent the
+                  # coach holds exactly as before. Every other committed
+                  # window is unmoved: pale_piece, ghost_beside_stack,
+                  # ghost_session, absorbed_piece, live_session and
+                  # roas_stacker keep the same frames hinted, the same
+                  # LOCKED and BOARD_RESET counts, and no episode whose
+                  # hint changes target mid-flight.
                   # unobservable_cells: the tracker discards the capture's
                   # reading there and carries a BELIEF for those cells instead —
                   # seeded empty at bootstrap/resync, moved only by an explained

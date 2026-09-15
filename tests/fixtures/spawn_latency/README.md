@@ -42,3 +42,53 @@ only sound at the MOMENT OF ENTRY. On the frames after, the committed
 `next_piece` has already advanced to the piece after it, so naming a
 fragment from the CURRENT next_piece would name the wrong piece - which is
 exactly the "confused two pieces" failure to avoid.
+
+## What it costs now
+
+The signal is used, and the thing that was throwing it away turned out
+to be the BOARD RESET. The game wipes the field, deals an O, and the box
+flips O -> I on 00158 — the same frame the O's first two cells appear at
+the top edge. Four frames later the resync fires on that same run of
+frames and dropped the hint naming the very piece it was resyncing onto.
+A resync now keeps a hint set INSIDE the run it is adopting, and drops
+only one from before it.
+
+Measured over this window (161 frames, 124 past the confidence gate):
+
+    OCCLUDED frames                 43 -> 31  of 124 accepted
+    frames with a hint on screen   108 -> 120
+    sighting -> first hint          17 -> 17   frames   no flip seen
+                                    14 ->  2   frames   the flip names the O
+                                    16 -> 16   frames   the flip is a deal late
+
+Two frames is the commit debounce, not a wait: the name is available on
+00162 and the tracker commits any candidate on its second identical
+frame. The O is named with two of its four cells still above the
+capture — which is what the user asked for.
+
+The two episodes that do not move are the two with no sound evidence,
+and they must not move. 00086 has seen no preview CHANGE at all (the box
+holds an O from the first frame, and None -> X says nothing about what
+was dealt). 00217's flip is I -> O and it is a deal LATE, because of the
+pale T above: naming the fragment from it is the "confused two pieces"
+failure.
+
+## What keeps the late flip from being believed
+
+Three rules, all about DATING a flip rather than counting what it
+outlives, since a flip says "the piece that was here has been dealt" and
+never says when:
+
+- a flip counts only when the PREVIOUS frame read the box too. Two
+  consecutive readable frames cannot straddle two deals (a tenure here
+  is ~14-22 frames), which is exactly what the 18-frame gap at
+  00198-00215 did.
+- a hint survives a lock only while it is younger than that lock's own
+  debounce. The flip reporting a deal lands on the frame the lock commit
+  is debouncing, so this deal's hint is the young one and an older hint
+  names the piece that just locked. Counting locks could not separate
+  those: both show exactly one lock since the hint was set.
+- a hint is dropped by any frame that REFUTES it — the fragment is a
+  piece entering from above and no placement of the hinted piece fits
+  it. A preview reading is a hypothesis, and a hint briefly withheld
+  beats one confidently wrong.
