@@ -1,4 +1,11 @@
-"""Drive each tracker over a capture window and record what the user sees.
+"""Drive each tracker over a capture window and record what it would show.
+
+The two names are the ones the race was run under and are kept so the
+verdict stays quotable: "shipped" is the shape-matching tracker, which
+``--tracker shape`` still selects, and "prototype" is the colour-first one,
+which the engine has read with by default since. What the two put on
+SCREEN, through the real engine rather than at this boundary, is
+:mod:`tetris_coach.race.engine`.
 
 Both runners produce the same :class:`FrameOutput` per frame, so the
 scoring in :mod:`tetris_coach.race.measures` never has to know which

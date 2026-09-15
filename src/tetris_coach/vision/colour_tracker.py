@@ -1,11 +1,15 @@
 """A falling-piece tracker with per-cell state and no global commit.
 
-PARALLEL PROTOTYPE. Nothing here is wired into ``app.py``/``cli.py``; the
-shipped tracker (``pieces_vision.py`` + ``state.py``, ~2200 lines with the
-board reading it needs) is untouched and answers the same questions from a
-different representation.
+THE DEFAULT READER since the race in :mod:`tetris_coach.race`: ``app.py``
+reads frames with this unless ``--tracker shape`` asks for the other one,
+which is still there, still tested, and still answers the same questions
+from a different representation. What the two put on screen through the
+real engine, over the six committed windows and 422 frames, is pinned in
+``tests/test_engine_race.py``: no hint for the wrong piece against six, no
+wait from a piece appearing to its hint against one to three frames, no
+target moving mid-flight against three, 7 blank frames against 25.
 
-The shipped design keeps ONE authoritative memory — the committed stack —
+The older design keeps ONE authoritative memory — the committed stack —
 and derives the falling piece as a set difference against it. Every error is
 therefore permanent until something explains it away, which is what produced
 the absorbed-piece loop, the phantom locks and the 25-frame freeze the user

@@ -193,7 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug",
         action="store_true",
         help="overlay: print a terminal debug view of what vision sees "
-        "(grid, falling/next piece, confidence, events) per committed frame",
+        "(the board, the falling and next piece, the transitions) on every "
+        "frame whose reading changed, plus a throttled one-line status",
     )
     parser.add_argument(
         "--tracker",

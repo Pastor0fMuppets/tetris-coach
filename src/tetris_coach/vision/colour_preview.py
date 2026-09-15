@@ -1,8 +1,9 @@
 """Reading the NEXT box: which tetromino it holds, and in what colour.
 
-PARALLEL PROTOTYPE (see :mod:`.colour_palette`). The shipped reader is
-``pieces_vision.identify_next``; this one answers a second question the
-shipped one cannot, and the tracker needs: the piece's COLOUR. That is the
+The NEXT reader the default tracker uses (see :mod:`.colour_palette`); the
+other one is ``pieces_vision.identify_next``, which ``--tracker shape``
+still reads with. This one answers a second question that one cannot, and
+the tracker needs: the piece's COLOUR. That is the
 labelled example the whole colour-first design runs on — the box says "this
 colour is a T" for free, every time a piece is dealt, with no shape
 ambiguity to resolve and no ghost in the way.

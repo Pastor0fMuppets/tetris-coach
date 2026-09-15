@@ -1,10 +1,10 @@
 """Colour segmentation and a colour->piece palette learned during the session.
 
-PARALLEL PROTOTYPE. Nothing here is wired into ``app.py``/``cli.py``; the
-shipped reading path (``grid.py`` -> ``pieces_vision.py`` -> ``state.py``)
-is untouched. See :mod:`.colour_tracker` for the tracker built on this.
+The reading the DEFAULT tracker is built on (see :mod:`.colour_tracker`);
+the older path (``grid.py`` -> ``pieces_vision.py`` -> ``state.py``) is
+untouched and still reachable with ``--tracker shape``.
 
-The shipped pipeline reduces every cell to one bit — filled or empty — and
+That path reduces every cell to one bit — filled or empty — and
 must then name the falling piece by its SHAPE. A piece entering from above
 shows 1-3 cells, which genuinely fit several tetrominoes, so it cannot be
 named until it has descended; and in occupancy a ghost, a UI panel, this
