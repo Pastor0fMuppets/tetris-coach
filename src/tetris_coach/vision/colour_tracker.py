@@ -68,9 +68,12 @@ naming: a piece whose colour is unknown AND whose sighting is incomplete.
 Shape cannot name 1-3 cells (they fit several tetrominoes — that is the
 whole reason this design exists), so such a piece is tracked and reported
 with ``piece=None`` until it is whole or the NEXT box names its colour. It
-costs a cold start per colour and nothing after it: measured over the
-committed windows, every colour is named by its first complete sighting or
-by the box, and the one window that pays it pays 7 frames.
+costs a cold start per colour and nothing after it: measured over the six
+committed windows, 15 frames in all carry a piece in flight with no name —
+14 of them absorbed_piece's opening T, unnamed until it is whole enough to
+spell itself because the NEXT box never shows it in that window, and 1
+ghost_session's first frame. Every other frame of every window names its
+piece.
 """
 
 from __future__ import annotations
