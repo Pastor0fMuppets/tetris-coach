@@ -274,16 +274,65 @@ def test_latency_from_a_piece_appearing_to_it_being_named(
     assert sorted(total.latencies) == sorted(latencies)
 
 
-def test_neither_tracker_freezes_through_a_piece_change_on_these_windows() -> None:
-    """The reported 25-frame freeze does not reproduce here.
+def test_the_reported_freeze_is_in_this_corpus_and_it_is_the_shipped_tracker() -> None:
+    """ "It got stuck and the piece didn't update for several turns" -- here it is.
 
-    Both trackers update within one frame of the piece changing on every
-    one of the 19 flights, so the user's "it got stuck" is not in these
-    captures. Reported as a null result, not as a pass.
+    spawn_latency 00103-00160: the shipped coach's state does not move for
+    58 frames, 31 of them frames its confidence gate refused outright. At
+    00134 the bottom row clears -- I read the pixels of board_00134.png: row
+    11 columns 0-7 are (252, 251, 250), the board's own background, and only
+    columns 8 and 9 hold anything. The coach goes on showing that row full
+    for 27 more frames, 1.8 s at 15 fps, on a board 10 cells away from the
+    one in front of the player.
+
+    The name never looks wrong -- an O gives way to another O -- which is
+    exactly why a measure that only watched the letter reported nothing.
+
+    The prototype has no freeze on any window. That is not a subtle result
+    and it should not be oversold either: it has no cross-frame state that
+    COULD freeze, so this measure can only ever be a null for it.
     """
+    runs = [(w, run) for w in WINDOWS for run in part(w, "shipped").stuck]
+    assert [w for w, _ in runs] == ["spawn_latency"]
+    ((_, freeze),) = runs
+    assert (freeze.first, freeze.changed, freeze.last) == ("00103", "00134", "00160")
+    assert (freeze.frames, freeze.stale, freeze.refused) == (58, 27, 31)
+    assert (freeze.held, freeze.truth) == ("O", "O"), "the letter is right throughout"
+    assert freeze.misplaced == 10, "the board under it is not"
+    assert overall(scores(), "shipped").worst_stuck == 27  # type: ignore[arg-type]
+
     for window in WINDOWS:
-        assert part(window, "shipped").stuck == []
         assert part(window, "prototype").stuck == []
+
+
+def test_refusal_is_a_freeze_and_a_measure_that_skips_it_is_blind() -> None:
+    """Why the detector counts refused frames: without them it sees nothing.
+
+    The shipped engine's gate does not blank the screen when it refuses a
+    frame -- it leaves the last hint up. So refusal IS how this tracker
+    freezes, and a freeze detector that steps over unaccepted frames can
+    never observe the thing it exists to observe. Re-running the identical
+    rule with only that filter restored reports no freeze at all, on the
+    very window that holds one.
+    """
+    truth = load_truth()["spawn_latency"]
+    outputs = raw()["spawn_latency"]["shipped"]
+    assert score("shipped", outputs, truth).stuck, "the freeze is there"
+
+    blinded = [
+        FrameOutput(
+            frame=output.frame,
+            accepted=output.accepted,
+            # Every refused frame given a state nothing else can equal, which
+            # is what skipping it amounts to: the run is cut at every refusal.
+            piece=output.piece if output.accepted else f"break-{index}",
+            stack_rows=output.stack_rows,
+            next_piece=output.next_piece,
+            hint=output.hint,
+        )
+        for index, output in enumerate(outputs)
+    ]
+    assert score("blinded", blinded, truth).stuck == []
 
 
 def test_the_freeze_detector_is_not_vacuous() -> None:

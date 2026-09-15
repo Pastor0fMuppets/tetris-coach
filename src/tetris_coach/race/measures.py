@@ -13,14 +13,20 @@ LATENCY   Frames from a piece first becoming visible -- the first frame of
           the oracle's episode -- to the tracker naming it correctly.
 STABILITY Within one piece's flight, how many times the named piece or the
           hint's target square changes. Churn the user sees as flicker.
-STUCK     A run of ACCEPTED frames where the coach's state is frozen ACROSS
-          a piece change -- the piece in play became a different piece and
-          the coach went on holding the old one ("it got stuck and the
-          piece didn't update for several turns"). A frozen state is not by
-          itself a fault: this game has no gravity, a piece can sit at the
-          top edge for forty frames, and a coach that keeps saying the same
-          true thing is doing its job. What is measured is how long the
-          freeze outlives the truth.
+STUCK     A run of frames where the coach's state is frozen ACROSS a piece
+          change -- the board moved on and the coach went on holding what
+          it held ("it got stuck and the piece didn't update for several
+          turns"). A frozen state is not by itself a fault: this game has
+          no gravity, a piece can sit at the top edge for forty frames, and
+          a coach that keeps saying the same true thing is doing its job.
+          What is measured is how long the freeze outlives the truth.
+          EVERY frame counts here, refused ones included. Refusal is not
+          the absence of an output: the shipped engine's gate leaves the
+          last hint on screen, so a long refusal IS a frozen coach from the
+          only seat that matters. An earlier version of this measure
+          skipped unaccepted frames and therefore could not see the one
+          failure it was built for -- it reported "none" on a window
+          holding a 58-frame freeze.
 BOARD     Is the stack it would hand the solver the stack that is really
           there? A right name on a wrong board still draws the wrong
           square.
@@ -174,6 +180,8 @@ class StuckRun:
     stale: int  # frames it stayed frozen AFTER the piece changed
     held: str | None  # what the coach was still saying
     truth: str  # what was actually falling by then
+    misplaced: int = 0  # cells its held stack differs from the real one by
+    refused: int = 0  # frames of the run the coach never got to see at all
 
 
 @dataclass
@@ -300,35 +308,35 @@ def _longest(flags: list[bool]) -> int:
 
 
 def _stuck(
-    outputs: list[FrameOutput], truth: list[TruthFrame], plan: list[Episode], warmup: int = 0
+    outputs: list[FrameOutput], truth: TruthWindow, plan: list[Episode], warmup: int = 0
 ) -> list[StuckRun]:
-    """Frozen runs of accepted frames that outlive the piece they hold.
+    """Frozen runs that outlive the piece they hold.
 
-    A run is maximal: consecutive accepted frames whose coach state -- the
-    piece it names and the stack it would hand the solver -- never changes.
-    It is only a fault if a new piece came into play inside it, and only
-    reported once the coach has gone on holding the old state for
-    ``STUCK_FLOOR`` frames after that.
+    A run is maximal: consecutive frames whose coach state -- the piece it
+    names and the stack it would hand the solver -- never changes. It is
+    only a fault if a new piece came into play inside it, and only reported
+    once the coach has gone on holding the old state for ``STUCK_FLOOR``
+    frames after that.
+
+    ``accepted`` is deliberately NOT consulted. A refused frame is a frame
+    the user spends looking at the previous hint, so a run of refusals is a
+    frozen coach by definition; filtering them out is what made this
+    measure blind to the shipped tracker's actual freeze mode.
     """
     starts = {episode.start: episode for episode in plan[1:]}
     runs: list[StuckRun] = []
     index = 0
     while index < len(outputs):
-        if not outputs[index].accepted:
-            index += 1
-            continue
         end = index
-        while (
-            end + 1 < len(outputs)
-            and outputs[end + 1].accepted
-            and outputs[end + 1].state == outputs[index].state
-        ):
+        while end + 1 < len(outputs) and outputs[end + 1].state == outputs[index].state:
             end += 1
         inside = [at for at in range(index + 1, end + 1) if at in starts and at >= warmup]
         if inside:
             changed = inside[0]
             stale = end - changed + 1
             if stale >= STUCK_FLOOR:
+                held_rows = truth.observable_rows(outputs[index].stack_rows)
+                real_rows = truth.settled_rows(truth.frames[changed])
                 runs.append(
                     StuckRun(
                         first=outputs[index].frame,
@@ -338,6 +346,11 @@ def _stuck(
                         stale=stale,
                         held=outputs[index].piece,
                         truth=starts[changed].piece,
+                        misplaced=sum(
+                            (held ^ real).bit_count()
+                            for held, real in zip(held_rows, real_rows, strict=True)
+                        ),
+                        refused=sum(1 for at in range(index, end + 1) if not outputs[at].accepted),
                     )
                 )
         index = end + 1
@@ -400,7 +413,7 @@ def score(
             [output.piece is not None and output.piece != frame.piece for output, frame in judged]
         ),
         worst_silent_run=_longest([output.piece is None for output, _ in judged]),
-        stuck=_stuck(outputs, frames, plan, warmup),
+        stuck=_stuck(outputs, truth, plan, warmup),
         episodes=sum(1 for episode in plan if episode.start >= warmup),
         warmup=warmup,
     )

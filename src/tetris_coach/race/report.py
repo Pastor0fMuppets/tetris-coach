@@ -166,8 +166,16 @@ def streak_detail(scores: dict[str, dict[str, Score]]) -> str:
 
 
 def stuck_detail(scores: dict[str, dict[str, Score]]) -> str:
-    """Every frozen run the race found, with the frames it spans."""
-    lines = ["frozen past the piece change (accepted frames, coach state unchanged):"]
+    """Every frozen run the race found, with the frames it spans.
+
+    ``misplaced`` is what makes these readable: a freeze can hold the right
+    LETTER across a piece change and still be a freeze, because the state
+    that is frozen is the piece AND the board under it. The one run in this
+    corpus is of exactly that kind -- an O gives way to another O over a row
+    that has just cleared, so the name never looks wrong and the board is
+    eight cells wrong for nearly two seconds.
+    """
+    lines = ["frozen past the piece change (every frame, coach state unchanged):"]
     found = False
     for name, window in scores.items():
         for tracker in RUNNERS:
@@ -175,9 +183,10 @@ def stuck_detail(scores: dict[str, dict[str, Score]]) -> str:
                 found = True
                 lines.append(
                     f"  {name:<{NAME}}{tracker:<11}{run.first}-{run.last}  "
-                    f"froze {run.frames:>3} frames; the piece became "
-                    f"{run.truth} at {run.changed} and it held "
-                    f"{run.held or 'nothing'} for {run.stale} more"
+                    f"froze {run.frames:>3} frames ({run.refused} of them refused unseen); "
+                    f"the piece became {run.truth} at {run.changed} and it held "
+                    f"{run.held or 'nothing'} for {run.stale} more, on a board "
+                    f"{run.misplaced} cells wrong"
                 )
     if not found:
         lines.append("  none")
