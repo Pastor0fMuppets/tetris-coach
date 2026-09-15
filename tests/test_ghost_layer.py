@@ -566,3 +566,75 @@ def test_our_own_paint_is_not_the_level_above_a_promoted_piece() -> None:
     # clamp counted the named cells as the next level up.
     assert painted.confidence == pytest.approx(bare.confidence)
     assert painted.confidence >= 0.15
+
+
+# --- The other end of the OCCUPIED default: a playfield in two shades ----
+#
+# The band asks one thing of a level before it will call it a candidate:
+# that it stand _GHOST_SEPARATION clear of the background cluster, which
+# on this scale is a step of about 14 uint8 units. A game that draws its
+# playfield in TWO BACKGROUND SHADES clears that by construction, and the
+# default would then read the second shade as board content — at board
+# scale, which is where the default's cost argument stops holding. These
+# are the four shapes that takes, all measured at 0.31 before the budget
+# and all of them twice the frame gate.
+SHADE = 0.25  # the second ground, ~28 uint8 units off the first
+STACK = 0.80  # a real piece color
+
+
+def two_shade_scene(shaded: list[tuple[int, int]], stack_top: int) -> np.ndarray:
+    """A board in two background shades, over a stack deep enough to matter.
+
+    The stack is what puts the shade in the PROMOTE path rather than the
+    ordinary one: Otsu's peak sits among those cells, the cut lands above
+    the shade, and the shaded cells are dropped — which is exactly the
+    condition the promotion fires on.
+    """
+    colors = np.zeros((ROWS, COLS, 3), dtype=np.float32)
+    for r, c in shaded:
+        colors[r, c] = at_score(SHADE)
+    colors[stack_top:ROWS, :] = at_score(STACK)
+    return colors
+
+
+SHADINGS = {
+    "alternating-columns": ([(r, c) for r in range(8) for c in range(1, COLS, 2)], 8),
+    "danger-tint": ([(r, c) for r in range(4) for c in range(COLS)], 7),
+    "dimmed-half": ([(r, c) for r in range(8) for c in range(5)], 8),
+    "shaded-rows": ([(r, c) for r in (2, 4) for c in range(COLS)], 7),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SHADINGS))
+def test_a_playfield_in_two_shades_is_refused_not_promoted(name: str) -> None:
+    shaded, stack_top = SHADINGS[name]
+    colors = two_shade_scene(shaded, stack_top)
+    scores = _distance_scores(colors, BLACK_GROUND)
+    band = grid(shaded)
+    assert (scores[band] < MIN_SPREAD).all() and (scores[band] >= _GHOST_SEPARATION).all(), (
+        f"{name}: the second shade no longer lands in the band"
+    )
+    assert otsu_threshold(scores) > float(scores[band].max()), (
+        f"{name}: the threshold no longer drops the shade, so this is not the promote path"
+    )
+    reading = _classify_scored(colors, BLACK_GROUND, frozenset(), None)
+    # Not content — that is a phantom board the tracker cannot refuse,
+    # since four frames of it are a BOARD_RESET that commits it — and not
+    # background either, which is the pale piece lost again. Unresolvable,
+    # so the frame goes, not the reading.
+    assert reading.confidence == 0.0, f"{name}: read at {reading.confidence:.3f}"
+
+
+def test_a_piece_sized_promotion_still_passes_the_budget() -> None:
+    """The budget is a ceiling on board-scale bands, not a new threshold.
+
+    The same scene shape as above, with the shade cut down to one
+    tetromino standing on the stack: still dropped by the threshold,
+    still promoted, still read — which is the whole point of the band.
+    """
+    colors = two_shade_scene([(7, 3), (7, 4), (7, 5), (6, 4)], 8)
+    scores = _distance_scores(colors, BLACK_GROUND)
+    assert otsu_threshold(scores) > SHADE, "the threshold no longer drops the piece"
+    reading = _classify_scored(colors, BLACK_GROUND, frozenset(), None)
+    assert reading.occupancy[grid([(7, 3), (7, 4), (7, 5), (6, 4)])].all()
+    assert reading.confidence >= 0.15, f"a real pale piece read at {reading.confidence:.3f}"

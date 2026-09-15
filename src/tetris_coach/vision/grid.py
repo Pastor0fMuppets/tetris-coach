@@ -142,6 +142,11 @@ _IMPOSSIBLE_FRAME_LIMIT = 15
 # background and is never named a ghost.
 _GHOST_SEPARATION = MIN_SPREAD / 2
 
+# The largest share of the OBSERVABLE playfield a candidate band may claim
+# as content before it is read as a second GROUND instead. See
+# :func:`_content_budget` for the argument and the measurement.
+_BAND_CONTENT_SHARE = 0.25
+
 # Opacity of the fill this tool paints its own placement hint with. THE
 # one definition: overlay.renderer.HintStyle draws with it and
 # :func:`_own_paint_layer` recognizes the result, so the painter and the
@@ -1160,6 +1165,87 @@ def _ghost_layer(
     return band
 
 
+def _content_budget(
+    promoted: NDArray[np.bool_],
+    occupancy: NDArray[np.bool_],
+    observable: NDArray[np.bool_],
+    unobservable: frozenset[tuple[int, int]],
+) -> bool:
+    """Is ``promoted`` an amount of board content a frame could really hold?
+
+    The guard on the band's OCCUPIED default. That default is right, and
+    the argument for it is a cost asymmetry: a candidate no rule can name
+    is board content, because reading a ghost as a piece costs a
+    tetromino that teleports — bad, and BOUNDED, since the tracker
+    refuses to explain it and holds — while reading a piece as background
+    costs the piece entirely. Both halves of that sentence are about ONE
+    PIECE. At board scale it is not an asymmetry at all: a phantom the
+    size of the playfield is not held, it is a new board, and four frames
+    of it is a BOARD_RESET that commits the phantom as stack.
+
+    Board scale is exactly what the band admits, because the only thing
+    the band itself asks of a level is that it stand
+    :data:`_GHOST_SEPARATION` clear of the background cluster — a step of
+    about 14 uint8 units. A playfield drawn in TWO BACKGROUND SHADES
+    clears that by construction, and those are not rare: alternating
+    column or row shading, a top-out danger tint, a half-dimmed board
+    behind a menu, a translucent pause panel. Measured on a 10x12 board
+    against a remembered background, alternating column shading 28 units
+    apart read as five phantom columns floor to ceiling at confidence
+    0.31, and a danger tint over the top four rows as four phantom
+    completed rows at the same number — twice the frame gate, both.
+
+    So the promotion is bounded three ways, by the three things that make
+    a reading a BOARD rather than a picture. Each catches a shading the
+    other two do not, which is why all three are here:
+
+    1. SIZE. A promoted level is being called one PIECE COLOR; seven of
+       those share a board that is never full, so a level holding a
+       quarter of the playfield is not a piece color, it is the playfield
+       in a second shade. Measured over the five committed windows (767
+       readings) the band never exceeds 8 cells of ~118 observable and
+       the only promotion in any of them is 6, so this budget sits four
+       times clear of every real reading. It is what catches the shadings
+       that reach the FLOOR and so hang from nothing: alternating
+       columns, a dimmed half-board.
+    2. AIR. A board shows a settled stack plus at most one falling piece,
+       so a promotion may add at most :data:`_PIECE_CELLS` cells OVER THE
+       VOID — the same budget, on the same measurement, that
+       :func:`_top_row_vouchable` spends on the same question. Support
+       from below is the thing a floating panel cannot have. A stack band
+       cut loose by its own buried holes still has its own column under
+       it, so this costs a hole-riddled real stack nothing (see
+       :func:`_over_the_void`). It is what catches a tint or a panel
+       floating over open board, however small.
+    3. COMPLETED ROWS. A completed row clears the instant it completes,
+       so a promotion that finishes one describes a board the game cannot
+       be showing (:func:`_claims_a_completed_row`, asked only of the
+       rows the promotion actually contributes to — a row that was
+       already complete without it is not this rule's business). It is
+       what catches a shading drawn in FULL ROWS across a board with a
+       stack under it, which is small enough for 1 and grounded enough
+       for 2.
+
+    A band that fails any of the three is not resolvable: it cannot be
+    content (that is the phantom board) and it cannot be background (that
+    is the pale piece lost again). It is in the same position as our own
+    paint under the rotation badge, and it gets the same answer — the
+    FRAME is refused, and the last committed state stands.
+    """
+    claimed = int(promoted.sum())
+    if claimed == 0:
+        return True
+    if claimed >= _BAND_CONTENT_SHARE * int(observable.sum()):
+        return False
+    airborne, grounded = _support(occupancy, unobservable)
+    if int((_over_the_void(airborne, grounded) & promoted).sum()) > _PIECE_CELLS:
+        return False
+    # Only the rows the promotion put something in: a row that was
+    # already complete without it is not this rule's business.
+    touched = occupancy & promoted.any(axis=1)[:, None]
+    return not _claims_a_completed_row(touched, unobservable)
+
+
 def _band_only_reading(
     colors: NDArray[np.float32],
     background: NDArray[np.float64],
@@ -1362,6 +1448,15 @@ def _classify_scored(
         # always were, confidence included.
         occupancy = occupancy | promoted
         empty_scores = scores[board & ~occupancy]
+        if not _content_budget(promoted, occupancy, observable, unobservable):
+            # More content than a board can hold. The band's own
+            # admission test is a ~14 uint8 step, which a playfield drawn
+            # in two background shades clears by construction, so this
+            # default would otherwise turn alternating column shading or
+            # a top-out danger tint into a full board of phantom stack
+            # at twice the gate. Unresolvable, and refused for the same
+            # reason our own unnameable paint is.
+            return _Reading(occupancy, 0.0, ghost)
     occupied_scores = scores[occupancy]
     if occupied_scores.size == 0 or empty_scores.size == 0:
         return _Reading(occupancy, 0.0, ghost)
