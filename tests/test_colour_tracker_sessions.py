@@ -365,7 +365,13 @@ def test_the_clear_animation_is_refused_rather_than_named() -> None:
     numbers, reports = replay("spawn_latency")
     flash = [reports[numbers.index(f"00{n}")] for n in range(127, 134)]
     assert all(not r.board_visible for r in flash)
-    assert {r.refused_because for r in flash} == {"a completed row is still on screen"}
+    # Two premises cover the animation between them, and which one speaks
+    # says what the row is doing: while it is still drawn (recoloured) the
+    # row reads as complete, and once it has faded most of the way to the
+    # background its cells are neither ground nor content.
+    assert [r.refused_because for r in flash] == ["a completed row is still on screen"] * 3 + [
+        "cells are neither the board's ground nor content"
+    ] * 4
     assert all(r.falling is None for r in flash)
     assert all(r.events == () for r in flash), "a flash is not a spawn and not a lock"
     # The stack the coach keeps looking at across the gap is the last real

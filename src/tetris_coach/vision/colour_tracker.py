@@ -98,6 +98,7 @@ from .colour_palette import (
     board_colours,
     board_readable,
     observable_mask,
+    off_ground,
     own_paint_states,
     piece_from_cells,
 )
@@ -279,7 +280,14 @@ class ColourTracker:
         mark = self.palette.checkpoint()
         colours = board_colours(board, self.rows, self.cols)
         painted = own_paint_states(board, self.rows, self.cols, self._paint)
-        self.palette.update_background(colours, self._observable & (painted == CLEAN))
+        clean = self._observable & (painted == CLEAN)
+        self.palette.update_background(colours, clean)
+        background = self.palette.background
+        if background is not None:
+            band = int(np.count_nonzero(off_ground(colours, background, clean)))
+            if band > PIECE_CELLS:
+                self.palette.restore(mark)
+                return self._blind("cells are neither the board's ground nor content")
         labels = self.palette.classify(colours, self._observable, painted)
         grounded = _grounded(labels)
         if int(np.count_nonzero((labels != EMPTY) & ~grounded)) > PIECE_CELLS:
@@ -330,7 +338,7 @@ class ColourTracker:
         occluded frame is a lasting corruption of the one memory this
         design does keep.
 
-        THREE PREMISES have to hold, and they fail on different frames.
+        FOUR PREMISES have to hold, and they fail on different frames.
 
         (1) The board is drawn as flat cells (:func:`board_readable`). That
         is this module's own premise rather than anything about Tetris --
@@ -352,7 +360,22 @@ class ColourTracker:
         exactly one tetromino, never once more; the web page, fed past (1),
         shows 58 in a single component.
 
-        (3) No row is COMPLETE. A finished row does not stay on a Tetris
+        (3) Every cell is either the board's own ground or content
+        (:func:`off_ground`). The two premises above are both blind to a
+        cover drawn in a colour NEAR the background, and that is the one
+        this game actually draws: the oracle measures its "ROW CLEARED"
+        card at 7 units off the ground against a content floor of 12, so
+        the card is not content resting on nothing, it is nothing.
+        Measured end to end before this premise existed, that card over a
+        16-cell stack was ACCEPTED with a stack of zero, and because the
+        frame was accepted the stale-frame counter was reset on every one
+        of them and the 45-frame withdrawal added for exactly this popup
+        never fired. What gives the card away is that the empty board does
+        not read "near" the background, it reads AS the background: over
+        the whole corpus, not one unpainted observable cell sits even 1.0
+        away from it.
+
+        (4) No row is COMPLETE. A finished row does not stay on a Tetris
         board -- it is taken away -- so a full row on screen means the
         clear is still playing, and this game recolours the row while it
         does. Nothing read off those frames is the board: the recoloured
@@ -368,16 +391,21 @@ class ColourTracker:
         across the board's full width is refused by the same test, which is
         the one thing that catches a flat card that reaches the floor.
 
-        What is NOT covered, stated so nobody has to find out live: a cover
-        that is flat, narrower than the board, and grounded -- one that
-        reaches the floor or touches the stack -- passes all three. Closing
-        that needs pixels of a real one, which this corpus does not have.
+        What is NOT covered, stated so nobody has to find out live: a
+        cover that is flat, drawn well clear of the background, narrower
+        than the board, and grounded -- one that reaches the floor or
+        touches the stack -- passes all four, and reads as a slab of
+        phantom stack. Measured on the same card lifted just past the
+        content floor, at 12.1 units: 14 phantom cells and the hint moves
+        three rows up the board. What saves the real card is that it spans
+        the board's full width and (4) refuses it; a narrower one would
+        need pixels this corpus does not have to close properly.
 
         Nothing is read and nothing is written: not the palette, not the
         background, not the NEXT box. (1) refuses the frame before any of
-        it; (2) and (3) cannot be asked until the cells are labelled, so
-        the caller takes a :meth:`Palette.checkpoint` first and restores it
-        here. The stack count IS carried across, so the frame the board
+        it; (3) needs the background, and (2) and (4) the labelled cells,
+        so the caller takes a :meth:`Palette.checkpoint` first and restores
+        it here. The stack count IS carried across, so the frame the board
         comes back does not look like a line clear to :meth:`_events`.
 
         The per-cell history is FORGOTTEN rather than carried, for the

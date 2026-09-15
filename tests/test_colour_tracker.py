@@ -558,6 +558,81 @@ def test_a_colour_that_is_contradicted_once_never_names_again() -> None:
     assert track.palette.piece_of(0) is None, "a retired class cannot be revived by the box"
 
 
+def card(offset: float) -> tuple[float, ...]:
+    """A flat popup card drawn ``offset`` uint8 units off the board's ground."""
+    return (WHITE[0] - offset, WHITE[1], WHITE[2])
+
+
+def test_a_card_near_the_board_colour_erases_nothing() -> None:
+    """The cover neither the flatness nor the airborne premise can see.
+
+    ROAS Stacker's "ROW CLEARED" card sits 7 uint8 units off the board
+    background (``truth/oracle.py``), and the content floor is 12. So a
+    cell the card covers is not content resting on nothing -- it is
+    NOTHING, and both of the other premises are satisfied by a board that
+    has apparently just gone empty. Measured before this premise existed:
+    the card over a 16-cell stack gave ``accepted=True`` and a stack of
+    zero, and because the frame was ACCEPTED the engine's stale counter
+    was reset on every one of them, so the 45-frame withdrawal that exists
+    for this very popup was never reached.
+
+    What gives it away is that the empty board reads AS the background
+    rather than near it: over the whole committed corpus not one
+    unpainted observable cell sits even 1.0 away.
+    """
+    track = tracker()
+    board = {(11, c): BLUE_I for c in range(8)} | {(10, c): GREEN_O for c in range(4)}
+    for _ in range(3):
+        before = track.update(render(board))
+    assert before.stack_rows[11] == 0b11111111
+
+    covered = board | {(r, c): card(7.0) for r in (9, 10, 11) for c in range(COLS)}
+    report = track.update(render(covered))
+    assert not report.board_visible
+    assert report.refused_because == "cells are neither the board's ground nor content"
+    assert report.stack_rows == before.stack_rows, "the last real board is what it holds"
+
+
+def test_a_card_just_above_the_content_floor_is_refused_too() -> None:
+    """The same card one unit brighter fills instead of erasing.
+
+    Above :data:`EMPTY_DIST` every cell it covers is content, grounded and
+    plausible: measured, 14 phantom stack cells and a hint three rows
+    higher up the board. Nothing about the colour can refuse that -- what
+    refuses it is that the card spans the board's full width, which reads
+    as a completed row, and a completed row is never a resting state.
+
+    A cover narrower than the board AND clear of the background AND
+    touching the stack is the case that still gets through; it is named in
+    ``ColourTracker._blind`` rather than left to be found live.
+    """
+    track = tracker()
+    board = {(11, c): BLUE_I for c in range(8)} | {(10, c): GREEN_O for c in range(4)}
+    for _ in range(3):
+        before = track.update(render(board))
+    covered = board | {(r, c): card(12.1) for r in (9, 10, 11) for c in range(COLS)}
+    report = track.update(render(covered))
+    assert not report.board_visible
+    assert report.refused_because == "a completed row is still on screen"
+    assert report.stack_rows == before.stack_rows
+
+
+def test_a_ghost_outline_does_not_look_like_a_cover() -> None:
+    """The band premise must not fire on the game's own landing preview.
+
+    The preview is an outline: the centre of the cell is pure background,
+    so the sampled patch barely moves and the four cells it marks stay
+    well under the band. Even if one did land in it, a preview is a
+    tetromino and the budget is a tetromino.
+    """
+    track = tracker()
+    piece = {(4, c): GREEN_O for c in range(2)} | {(5, c): GREEN_O for c in range(2)}
+    ghost = {(r, c): blend(GREEN_O, 0.04) for r in (10, 11) for c in range(2)}
+    report = track.update(render(piece | ghost))
+    assert report.board_visible
+    assert report.falling is not None and report.falling.piece == "O"
+
+
 def test_a_flat_panel_floating_over_the_board_is_not_a_board() -> None:
     """The cover the flatness premise cannot see, and the one that matters live.
 

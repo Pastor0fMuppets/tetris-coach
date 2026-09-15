@@ -112,6 +112,19 @@ from .grid import _cell_colors as cell_colors  # same sampler => same geometry
 # under 1.0, because ``cell_colors`` insets 25% and never samples a gridline.
 EMPTY_DIST = 12.0
 
+# uint8 units above which a cell is no longer the board's OWN ground. The
+# empty board does not read "close to" the background, it reads AS the
+# background: measured over every accepted frame of the six committed
+# windows outside a line-clear animation, not one observable unpainted cell
+# sits even 1.0 away from it, the landing-preview ghost included (it is an
+# outline, and the sampled patch is pure background). So the band between
+# here and :data:`EMPTY_DIST` is empty in real play, and a cell found in it
+# is something DRAWN OVER the board in a colour near its ground -- which is
+# what this game's "ROW CLEARED" card is, at a measured 7 units
+# (``truth/oracle.py``). Four times the largest stray ever measured, and
+# three units clear of the content floor. See :func:`off_ground`.
+GROUND_TOL = 4.0
+
 # Perpendicular distance, in uint8 units, from a colour class's ray.
 LINE_TOL = 10.0
 
@@ -402,6 +415,36 @@ class Palette:
 def board_colours(image: NDArray[np.uint8], rows: int, cols: int) -> NDArray[np.float32]:
     """Mean colour of every cell's central patch: ``(rows, cols, 3)``."""
     return cell_colors(image, rows, cols, CELL_MARGIN)
+
+
+def off_ground(
+    colours: NDArray[np.float32],
+    background: NDArray[np.float64],
+    mask: NDArray[np.bool_],
+) -> NDArray[np.bool_]:
+    """Cells too far from the background to BE it, too near to be content.
+
+    Neither of :meth:`~.colour_tracker.ColourTracker._blind`'s other
+    premises can see a cover drawn in a colour NEAR the board's ground,
+    and that is the one this game actually draws. A cell the card covers
+    is not "content resting on nothing" -- it is nothing, so the airborne
+    premise has nothing to count, and the card is flat, so the flatness
+    premise is happy. What gives it away is that the board's own empty
+    cells do not read like that: they read as the background exactly.
+
+    Measured end to end before this existed, ROAS Stacker's "ROW CLEARED"
+    card over a 16-cell stack gave ``accepted=True`` and a stack of ZERO,
+    and the coach went on drawing a placement computed on a board it
+    believed was empty -- with the frame accepted, the stale-frame counter
+    reset every frame and the 45-frame withdrawal that exists for exactly
+    this popup never fired.
+
+    ``mask`` should be the observable cells this tool has not painted:
+    our own fill shifts a cell about 55 units and would land half the
+    board in the band.
+    """
+    dist = np.linalg.norm(colours.astype(np.float64) - background, axis=2)
+    return mask & (dist >= GROUND_TOL) & (dist < EMPTY_DIST)
 
 
 def flat_cells(image: NDArray[np.uint8], rows: int, cols: int) -> NDArray[np.bool_]:
