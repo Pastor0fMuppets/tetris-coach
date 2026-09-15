@@ -783,6 +783,23 @@ vision/
                   # deal, and three rules hold it there — a flip says "the
                   # piece that was here has been dealt" and never says
                   # WHEN, so all three are about DATING it.
+                  # (0) A reading is the box's CONTENT only once a second
+                  # consecutive readable capture agrees with it — the same
+                  # debounce every other observation here goes through.
+                  # The preview is read by the same vision as the board and
+                  # one frame of it can be wrong, and one misread capture
+                  # is not one bad flip but TWO: X -> W and then W -> X.
+                  # The second is the dangerous one — it names W, a piece
+                  # the game never dealt, and applies it to whatever
+                  # fragment is parked at the top edge, which the
+                  # structural rules had refused to name. (SPEC used to
+                  # claim rule (2) covered this flicker; it only bounds how
+                  # long W survives past the NEXT lock, and does nothing
+                  # about the piece already in flight, which is renamed on
+                  # the spot.) The cost is one capture of latency on a real
+                  # flip, and the hint's age carries it honestly: a flip is
+                  # dated from the capture the change was FIRST seen on,
+                  # not from the one that confirms it.
                   # (1) A flip counts only when the GAP it is read across
                   # is shorter than a tenure. The box is unreadable in
                   # bursts, and a burst covering one previewed piece's

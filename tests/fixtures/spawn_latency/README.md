@@ -75,10 +75,16 @@ failure.
 
 ## What keeps the late flip from being believed
 
-Three rules, all about DATING a flip rather than counting what it
-outlives, since a flip says "the piece that was here has been dealt" and
-never says when:
+One rule about believing the box at all, and three about DATING a flip
+rather than counting what it outlives, since a flip says "the piece that
+was here has been dealt" and never says when:
 
+- a reading is the box's content only once a second consecutive readable
+  capture agrees with it. One misread frame is two flips, X -> W and
+  W -> X, and the second names a piece the game never dealt and pins it
+  on whatever fragment is parked at the top edge. One capture of latency
+  on a real flip is the price, and the hint's age is dated from the
+  capture the change was first seen on.
 - a flip counts only when the GAP it is read across is shorter than a
   tenure: a piece that came and went inside the gap held the box for the
   whole of it. The budget is 12 captures, between the 18-frame gap at

@@ -160,8 +160,15 @@ class GameStateTracker:
         self._unexplained_rows: tuple[int, ...] | None = None
         self._unexplained_count = 0
         # Preview memory, for naming a piece the top edge has cut in half.
-        # The last non-None preview reading, and the one it replaced.
+        # The last CONFIRMED preview reading, and the one it replaced.
         self._preview_piece: str | None = None
+        # A reading seen once and not yet confirmed by a second one, with
+        # how many captures ago it was first seen and what gap preceded
+        # it: a flip is dated from the first sighting, not from the
+        # capture that confirms it (see _observe_preview).
+        self._preview_pending: str | None = None
+        self._pending_age = 0
+        self._pending_gap = 0
         self._entering_hint: str | None = None
         # How many CAPTURES have gone by since the box was last readable.
         # A flip is only news of the deal happening NOW when the gap it is
@@ -236,16 +243,43 @@ class GameStateTracker:
         # carried the I before it — refused; the wipe at 00152-00157
         # hides the box for 6, and the flip at 00158 names the O that the
         # wipe dealt — accepted.
+        # ...and only a CHANGE the box holds. The preview is read by the
+        # same vision as everything else, and a single frame of it can be
+        # wrong (a fade, a flash, a piece drawn against a colour close to
+        # its own). One misread capture is not one bad flip but TWO — X ->
+        # W and then W -> X — and the second is the dangerous one: it
+        # names W, a piece the game never dealt, and applies it to
+        # whatever fragment happens to be parked at the top edge, which
+        # the structural rules had correctly refused to name. So a reading
+        # becomes the box's content only when a second consecutive
+        # readable capture agrees with it, exactly as every other
+        # observation here is debounced before it is believed; a value
+        # that comes and goes inside one capture flips nothing, in either
+        # direction. The cost is one capture of latency on a real flip,
+        # which the hint's age then carries honestly.
         self._hint_age += 1
+        if self._preview_pending is not None:
+            self._pending_age += 1
         if next_piece is None:
             self._preview_gap += 1
             return
         gap, self._preview_gap = self._preview_gap, 0
-        if next_piece != self._preview_piece:
-            if self._preview_piece is not None and gap <= MAX_PREVIEW_GAP:
-                self._entering_hint = self._preview_piece
-                self._hint_age = 0
-            self._preview_piece = next_piece
+        if next_piece == self._preview_piece:
+            self._preview_pending = None  # a one-capture wobble, and back
+            return
+        if next_piece != self._preview_pending:
+            # First sighting of a new value: remember WHEN it was first
+            # seen and what gap preceded it, since that — not this frame —
+            # is when the deal it reports happened.
+            self._preview_pending = next_piece
+            self._pending_age = 0
+            self._pending_gap = gap
+            return
+        if self._preview_piece is not None and self._pending_gap <= MAX_PREVIEW_GAP:
+            self._entering_hint = self._preview_piece
+            self._hint_age = self._pending_age
+        self._preview_piece = next_piece
+        self._preview_pending = None
 
     def update(self, occupancy: NDArray[np.bool_], next_piece: str | None) -> list[GameEvent]:
         """Feed one frame's full occupancy grid; returns committed events."""

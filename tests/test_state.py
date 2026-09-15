@@ -515,7 +515,11 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")  # the preview holds the O
         entering = merge(self.STACK, self.FRAGMENT)
+        # The new reading is believed on its second capture (a single
+        # misread frame must flip nothing), and the named fragment commits
+        # on its second — the ordinary debounce.
         assert feed(tracker, entering, "I") == []  # the O is dealt: preview -> I
+        assert feed(tracker, entering, "I") == []
         assert feed(tracker, entering, "I") == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "O"
         assert tracker.committed.stack_rows == self.STACK  # still not stack
@@ -526,7 +530,7 @@ class TestTheEnteringPieceHint:
         # it from four cells — and it is the O, with no second spawn.
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
-        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=3)
         descended = merge(self.STACK, piece_cells("O", 0, 2, 4))
         assert feed(tracker, descended, "I", times=2) == []
         assert tracker.committed.falling_piece == "O"
@@ -558,7 +562,7 @@ class TestTheEnteringPieceHint:
         # blank overlay. Here the preview says O and the piece is an S.
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
-        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=3)
         assert tracker.committed.falling_piece == "O"  # hinted, and shown
         # The S hard-drops to the floor and the next piece enters behind it.
         locked = piece_cells("S", 0, HEIGHT - 2, 3)
@@ -584,7 +588,7 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
         fragment = merge(self.STACK, self.FRAGMENT)
-        feed(tracker, fragment, "I", times=2)  # the O is dealt: preview -> I
+        feed(tracker, fragment, "I", times=3)  # the O is dealt: preview -> I
         assert tracker.committed.falling_piece == "O"
         # The O locks and the next piece enters. The preview never changes
         # again (unreadable, so the tracker is told nothing).
@@ -602,15 +606,18 @@ class TestTheEnteringPieceHint:
 
     def test_a_flip_the_box_is_readable_on_both_sides_of_names_the_piece(self) -> None:
         # The flip the accelerator runs on, in its plainest form: the box
-        # is read on two consecutive frames and the value changes between
-        # them. Nothing can have been dealt in between except the piece
-        # that left, so the column at the top edge — which a vertical I, a
-        # J, an L, an S and a Z all fit — is the I.
+        # is read, the value changes, and the change holds. Nothing can
+        # have been dealt in between except the piece that left, so the
+        # column at the top edge — which a vertical I, a J, an L, an S and
+        # a Z all fit — is the I. Both sides of the flip have to be the
+        # box's actual content, which is a reading a second capture
+        # agrees with: one misread frame is not a deal.
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, None)
         column = merge(self.STACK, self.COLUMN)
-        assert feed(tracker, column, "I") == []  # None -> I reports no deal
-        assert feed(tracker, column, "Z") == []  # I -> Z: the I is entering
+        assert feed(tracker, column, "I", times=2) == []  # None -> I: no deal
+        assert feed(tracker, column, "Z") == []  # I -> Z, on its first capture
+        assert feed(tracker, column, "Z") == []  # ...confirmed on its second
         assert feed(tracker, column, "Z") == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "I"
 
@@ -630,9 +637,9 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, None)
         column = merge(self.STACK, self.COLUMN)
-        assert feed(tracker, column, "I") == []
+        assert feed(tracker, column, "I", times=2) == []
         assert feed(tracker, column, None, times=MAX_PREVIEW_GAP + 1) == []
-        assert feed(tracker, column, "Z", times=3) == []
+        assert feed(tracker, column, "Z", times=4) == []
         assert tracker.committed.falling_piece is None
 
     def test_a_flip_read_across_a_short_dark_gap_still_names_the_piece(self) -> None:
@@ -647,9 +654,9 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, None)
         column = merge(self.STACK, self.COLUMN)
-        assert feed(tracker, column, "I") == []
+        assert feed(tracker, column, "I", times=2) == []
         assert feed(tracker, column, None, times=6) == []
-        assert feed(tracker, column, "Z", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert feed(tracker, column, "Z", times=3) == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "I"
 
     def test_the_gap_is_counted_in_captures_the_board_gate_never_saw(self) -> None:
@@ -666,10 +673,10 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, None)
         column = merge(self.STACK, self.COLUMN)
-        assert feed(tracker, column, "I") == []
+        assert feed(tracker, column, "I", times=2) == []
         for _ in range(MAX_PREVIEW_GAP + 1):
             tracker.observe_preview(None)  # rejected captures, box unreadable
-        assert feed(tracker, column, "Z", times=3) == []
+        assert feed(tracker, column, "Z", times=4) == []
         assert tracker.committed.falling_piece is None
 
     def test_a_readable_box_dates_the_flip_even_while_the_board_is_rejected(self) -> None:
@@ -680,11 +687,31 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, None)
         column = merge(self.STACK, self.COLUMN)
-        assert feed(tracker, column, "I") == []
+        assert feed(tracker, column, "I", times=2) == []
         for _ in range(30):
             tracker.observe_preview("I")  # rejected captures, box still the I
-        assert feed(tracker, column, "Z", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert feed(tracker, column, "Z", times=3) == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "I"
+
+    def test_one_misread_preview_frame_flips_nothing(self) -> None:
+        # The preview is read by the same vision as everything else and a
+        # single frame of it can be wrong. One misread capture is not one
+        # bad flip but TWO — I -> J and then J -> I — and the second is the
+        # dangerous one: it names a J, a piece the game never dealt, and
+        # applies it to whatever is parked at the top edge. Here that is a
+        # fragment the structural rules had correctly refused to name, and
+        # it used to be renamed J on the spot and committed. A reading is
+        # the box's content only once a second capture agrees with it, so
+        # a value that comes and goes inside one frame flips nothing.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "I")
+        parked = merge(self.STACK, self.FRAGMENT)
+        assert feed(tracker, parked, "I", times=3) == []
+        assert tracker.committed.falling_piece is None  # nameless, correctly
+        assert feed(tracker, parked, "J") == []  # one misread capture
+        assert feed(tracker, parked, "I", times=4) == []
+        assert tracker.committed.falling_piece is None
+        assert tracker._entering_hint is None
 
     def test_a_hint_whose_own_deal_ended_under_it_names_no_later_fragment(self) -> None:
         # A hint is evidence about ONE deal and expires with it. The
@@ -698,7 +725,7 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
         entering = merge(self.STACK, self.FRAGMENT)
-        feed(tracker, entering, "I", times=2)  # the O is dealt: preview O -> I
+        feed(tracker, entering, "I", times=3)  # the O is dealt: preview O -> I
         assert tracker.committed.falling_piece == "O"
         # The O hard-drops and locks, with the next piece already at the
         # top edge behind it.
@@ -723,7 +750,7 @@ class TestTheEnteringPieceHint:
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
         two = merge(self.STACK, ((0, 4), (0, 5)))
-        assert feed(tracker, two, "I", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert feed(tracker, two, "I", times=3) == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "O"  # the hypothesis, shown
         three = merge(self.STACK, ((0, 4), (1, 4), (1, 5)))
         assert feed(tracker, three, "I", times=2) == [GameEvent.PIECE_SPAWNED]
@@ -751,6 +778,7 @@ class TestTheEnteringPieceHint:
         feed(tracker, empty, "T", times=2)  # the box holds the T
         one = rows_of([(0, 0)], height=12)
         assert feed(tracker, one, "I") == []  # the T is dealt: preview -> I
+        assert feed(tracker, one, "I") == []  # ...on its second capture
         assert feed(tracker, one, "I") == [GameEvent.PIECE_SPAWNED]
         assert tracker.committed.falling_piece == "T"  # the hypothesis, shown
         # The piece descends: a second cell in the same column, which no T
@@ -770,7 +798,7 @@ class TestTheEnteringPieceHint:
         # it commits under its real name with no reset in between.
         tracker = GameStateTracker(confirm_frames=2, rows=12)
         feed(tracker, (0,) * 12, "T", times=2)
-        feed(tracker, rows_of([(0, 0)], height=12), "I", times=2)
+        feed(tracker, rows_of([(0, 0)], height=12), "I", times=3)
         assert feed(tracker, rows_of([(0, 0), (1, 0)], height=12), "I") == [GameEvent.PIECE_UNNAMED]
         whole = rows_of(piece_cells("I", 1, 0, 0), height=12)
         assert feed(tracker, whole, "I", times=2) == [GameEvent.PIECE_SPAWNED]
@@ -784,7 +812,7 @@ class TestTheEnteringPieceHint:
         # which no O fits — must not take the O's name back.
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
-        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=3)
         assert tracker.committed.falling_piece == "O"
         descended = merge(self.STACK, piece_cells("O", 0, 2, 4))
         feed(tracker, descended, "I", times=2)
@@ -819,7 +847,7 @@ class TestTheEnteringPieceHint:
         # dealt into THIS board does not.
         tracker = GameStateTracker(confirm_frames=2)
         attach(tracker, self.STACK, "O")
-        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=3)
         assert tracker.committed.falling_piece == "O"
         new_world = rows_of(bottom_lines("#.#.#.#.#.", "##.##.##.#"))
         assert feed(tracker, new_world, "I", times=4) == [GameEvent.BOARD_RESET]

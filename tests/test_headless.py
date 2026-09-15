@@ -154,6 +154,7 @@ class TestCoachEngine:
             assert frame((), "T") is None  # the box holds the T
         one = ((0, 0),)
         frame(one, "I")  # the T is dealt: the box flips to the I
+        frame(one, "I")  # ...believed on the flip's second capture
         hint = frame(one, "I")
         assert hint is not None and hint.piece == "T"  # hinted on one cell
         # The piece descends: a second cell in the same column, which no T
