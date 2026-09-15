@@ -113,15 +113,39 @@ class TestWholeTopRowCovered:
         # coach would just sit there silent. The engine still runs: the
         # selection may be re-drawn, and nothing here may raise.
         mask = compute_overlap_mask(self.BOARD, self.BAR, rows=12)
-        warning = selection_warning(mask)
+        warning = selection_warning(mask, tracker="shape")
         assert warning is not None
         assert "next-piece box covers the whole top row" in warning
+        assert "no frame can be classified" in warning
         engine = CoachEngine(CoachConfig(rows=12, tracker="shape"), unobservable_cells=mask)
         image = np.zeros((240, 200, 3), dtype=np.uint8)
         image[:, :] = (245, 240, 228)
         image[80:, :] = (150, 140, 120)
         image[0:20, :] = (90, 95, 110)  # the bar's own pixels
         assert engine.process_frame(image, None) is None
+
+    def test_the_default_tracker_is_told_what_it_actually_costs(self) -> None:
+        # The colour reader estimates the background from every cell that
+        # reads empty, not from the top row, so the same selection is lossy
+        # rather than fatal: what is lost is a piece parked at the top edge,
+        # where this game leaves one until the player drags it down. Saying
+        # "no frame can be classified" there would be a lie.
+        from .colour_frames import GREEN_O, preview, render
+
+        mask = compute_overlap_mask(self.BOARD, self.BAR, rows=12)
+        warning = selection_warning(mask)
+        assert warning is not None
+        assert "next-piece box covers the whole top row" in warning
+        assert "no frame can be classified" not in warning
+
+        engine = CoachEngine(CoachConfig(rows=12), unobservable_cells=mask)
+        box = preview([(0, 0), (0, 1), (1, 0), (1, 1)], GREEN_O)
+        engine.process_frame(render({}), box)
+        hidden = {(0, 4): GREEN_O, (0, 5): GREEN_O}
+        assert engine.process_frame(render(hidden), box) is None  # behind the bar
+        descended = {(r, c): GREEN_O for r in (1, 2) for c in (4, 5)}
+        hint = engine.process_frame(render(descended), box)
+        assert hint is not None and hint.piece == "O"
 
     def test_the_usual_geometries_say_nothing(self) -> None:
         # The corner preview the mask exists for, and a preview drawn

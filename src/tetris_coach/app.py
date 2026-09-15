@@ -230,23 +230,37 @@ def compute_overlap_mask(
 def selection_warning(
     unobservable_cells: frozenset[tuple[int, int]],
     width: int = WIDTH,
+    tracker: str = CoachConfig.tracker,
 ) -> str | None:
     """A note for the user when the two rectangles hide what vision needs.
 
-    Only one selection is fatal rather than merely lossy: a next-piece box
-    that covers the board's ENTIRE top row. The board's background color
-    is bootstrapped from the top row's cells (see
-    :mod:`~tetris_coach.vision.grid`), so with all of them behind a panel
-    there is no sample to bootstrap from and every frame is refused —
-    correctly, but silently, and the user is left watching a coach that
-    never says anything. It is an ordinary mis-selection, not an exotic
-    one: any game whose NEXT queue is a horizontal bar across the top of
-    the playfield lands here if the board rectangle is drawn around it.
+    One selection costs more than it looks: a next-piece box that covers
+    the board's ENTIRE top row. It is an ordinary mis-selection, not an
+    exotic one — any game whose NEXT queue is a horizontal bar across the
+    top of the playfield lands here if the board rectangle is drawn around
+    it — and what it costs depends on which tracker is reading.
+
+    With ``--tracker shape`` it is FATAL and silently so: the board's
+    background colour is bootstrapped from the top row's cells (see
+    :mod:`~tetris_coach.vision.grid`), and with all of them behind a panel
+    there is no sample to bootstrap from, so every frame is refused —
+    correctly, and the user is left watching a coach that never says
+    anything.
+
+    With the colour reader it is lossy instead. The background is
+    re-estimated from every cell that reads empty rather than from the top
+    row (:meth:`~tetris_coach.vision.colour_palette.Palette.update_background`),
+    so frames still read — but this game parks a new piece at the top edge
+    until the player drags it down, and while it is up there it is behind
+    the panel. Measured on the same geometry: the coach says nothing at all
+    until the piece descends out of row 0, and then hints it at once.
 
     Returns None when the selection is fine (the common case, including
     the corner-preview geometry the mask exists for).
     """
-    if all((0, c) in unobservable_cells for c in range(width)):
+    if not all((0, c) in unobservable_cells for c in range(width)):
+        return None
+    if tracker == "shape":
         return (
             "tetris-coach: the next-piece box covers the whole top row of the "
             "board region, which is where the board's background color is read "
@@ -254,7 +268,14 @@ def selection_warning(
             "rectangle below the next-piece bar, or the next-piece rectangle "
             "outside the board."
         )
-    return None
+    return (
+        "tetris-coach: the next-piece box covers the whole top row of the "
+        "board region, so a piece that has entered the board but not yet "
+        "descended out of that row cannot be seen at all, and no hint will "
+        "be shown for it until it does. Restart and draw the board rectangle "
+        "below the next-piece bar, or the next-piece rectangle outside the "
+        "board."
+    )
 
 
 def make_vision(
@@ -653,7 +674,7 @@ def run(
     # region; name those unobservable cells once (the rects are fixed for
     # the session).
     unobservable_cells = compute_overlap_mask(board_rect, next_rect, config.rows)
-    warning = selection_warning(unobservable_cells)
+    warning = selection_warning(unobservable_cells, tracker=config.tracker)
     if warning is not None:
         print(warning, file=sys.stderr)
     engine = CoachEngine(config, unobservable_cells=unobservable_cells)
