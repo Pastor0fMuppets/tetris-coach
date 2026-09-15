@@ -352,6 +352,19 @@ class CoachEngine:
             self._precomputed = None
             self.current_hint = None
 
+        if GameEvent.PIECE_UNNAMED in events:
+            # The preview named the piece entering, and this frame ruled
+            # that name out. Take the hint off the screen rather than
+            # leaving a placement for a piece the player does not have:
+            # showing nothing is what the coach does for any piece it
+            # cannot name, and the next frames name this one from shape.
+            # The precompute goes too — it was solved for a board that
+            # assumed this hint would be followed.
+            self.current_hint = None
+            self._hint_is_provisional = False
+            self._predicted_board = None
+            self._precomputed = None
+
         if GameEvent.PIECE_LOCKED in events or GameEvent.PIECE_SPAWNED in events:
             board = self._solver_board(committed.stack_rows)
             piece = committed.falling_piece

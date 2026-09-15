@@ -736,6 +736,62 @@ class TestTheEnteringPieceHint:
         assert feed(tracker, whole, "I", times=2) == []
         assert tracker.committed.falling_piece == "L"
 
+    def test_a_refuted_name_is_taken_back_and_not_merely_dropped(self) -> None:
+        # Dropping the hypothesis is not the same as retracting the name it
+        # already gave the piece on screen. The frame that refutes a hint
+        # is usually one that names no replacement — the piece has shown a
+        # second cell, which rules the hinted name out while still fitting
+        # several others — so it is OCCLUDED, and OCCLUDED HOLDS the
+        # committed snapshot. The refuted name used to sit there for the
+        # rest of the piece's tenure at the top edge (14-17 frames in this
+        # game, ~1 s), which is the user's "confused two pieces" report
+        # made persistent. Here the box says T and a vertical I comes in.
+        tracker = GameStateTracker(confirm_frames=2, rows=12)
+        empty = (0,) * 12
+        feed(tracker, empty, "T", times=2)  # the box holds the T
+        one = rows_of([(0, 0)], height=12)
+        assert feed(tracker, one, "I") == []  # the T is dealt: preview -> I
+        assert feed(tracker, one, "I") == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "T"  # the hypothesis, shown
+        # The piece descends: a second cell in the same column, which no T
+        # fits and several other pieces do. The name goes back to nothing.
+        two = rows_of([(0, 0), (1, 0)], height=12)
+        assert feed(tracker, two, "I") == [GameEvent.PIECE_UNNAMED]
+        assert tracker.last_kind is FrameKind.OCCLUDED
+        assert tracker.committed.falling_piece is None
+        assert tracker.committed.stack_rows == empty  # nothing structural
+        # ...and it stays withdrawn while the piece is still unnameable.
+        assert feed(tracker, two, "I", times=4) == []
+        assert tracker.committed.falling_piece is None
+
+    def test_the_piece_names_itself_again_once_it_is_seen_whole(self) -> None:
+        # The end of that story: a withdrawn name is not a dead end. The
+        # same fragment keeps descending, the shape rule reaches it, and
+        # it commits under its real name with no reset in between.
+        tracker = GameStateTracker(confirm_frames=2, rows=12)
+        feed(tracker, (0,) * 12, "T", times=2)
+        feed(tracker, rows_of([(0, 0)], height=12), "I", times=2)
+        assert feed(tracker, rows_of([(0, 0), (1, 0)], height=12), "I") == [GameEvent.PIECE_UNNAMED]
+        whole = rows_of(piece_cells("I", 1, 0, 0), height=12)
+        assert feed(tracker, whole, "I", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "I"
+
+    def test_a_hinted_name_structure_confirms_stops_being_a_hypothesis(self) -> None:
+        # ...and a hinted name becomes an observation the moment the shape
+        # rule agrees with it, so a LATER fragment cannot retract it. The
+        # O is hinted at the top edge, descends into full view where its
+        # four cells name it, locks, and the next piece's first cells —
+        # which no O fits — must not take the O's name back.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        feed(tracker, merge(self.STACK, self.FRAGMENT), "I", times=2)
+        assert tracker.committed.falling_piece == "O"
+        descended = merge(self.STACK, piece_cells("O", 0, 2, 4))
+        feed(tracker, descended, "I", times=2)
+        behind = merge(descended, ((0, 0), (1, 0)))
+        assert feed(tracker, behind, "I", times=3) == []
+        assert tracker.committed.falling_piece == "O"
+
     def test_a_wrong_preview_authorises_nothing_structural(self) -> None:
         # The cost ceiling on a wrong reading. A hinted name is never an
         # observation, so it can vouch for no lock; and a frame it cannot

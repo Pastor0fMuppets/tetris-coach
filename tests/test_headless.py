@@ -130,6 +130,37 @@ def test_array_source_requires_frames() -> None:
 
 
 class TestCoachEngine:
+    def test_a_refuted_preview_name_takes_its_hint_off_the_screen(self) -> None:
+        # End to end, on rendered frames: the preview names a piece the
+        # top edge has cut in half, the coach hints it, and the next frame
+        # of the piece's own descent rules that name out. The hint has to
+        # come DOWN — it is a placement for a piece the player does not
+        # have. Before the retraction it stayed up for the rest of the
+        # piece's tenure at the top edge, because the frame that refutes a
+        # hint names no replacement and so holds the committed state.
+        from tetris_coach.app import CoachEngine
+        from tetris_coach.core.pieces import ROTATIONS
+
+        style = STYLES[0]
+        engine = CoachEngine()
+
+        def frame(cells: tuple[tuple[int, int], ...], nxt: str):  # type: ignore[no-untyped-def]
+            return engine.process_frame(
+                render_board(grid_of(rows_of(cells)), style, cell_size=16),
+                render_next_preview(ROTATIONS[nxt][0].cells, style, cell_size=16),
+            )
+
+        for _ in range(2):
+            assert frame((), "T") is None  # the box holds the T
+        one = ((0, 0),)
+        frame(one, "I")  # the T is dealt: the box flips to the I
+        hint = frame(one, "I")
+        assert hint is not None and hint.piece == "T"  # hinted on one cell
+        # The piece descends: a second cell in the same column, which no T
+        # fits. Nothing on screen until it names itself.
+        assert frame(((0, 0), (1, 0)), "I") is None
+        assert frame(((0, 0), (1, 0)), "I") is None
+
     def test_engine_produces_hint_from_synthetic_frames(self) -> None:
         from tetris_coach.app import CoachEngine
         from tetris_coach.core.pieces import ROTATIONS

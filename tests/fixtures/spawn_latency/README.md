@@ -97,4 +97,10 @@ never says when:
 - a hint is dropped by any frame that REFUTES it — the fragment is a
   piece entering from above and no placement of the hinted piece fits
   it. A preview reading is a hypothesis, and a hint briefly withheld
-  beats one confidently wrong.
+  beats one confidently wrong. Dropping the hypothesis is only half of
+  it: the name it already committed is WITHDRAWN on the same frame
+  (PIECE_UNNAMED, and the coach clears the overlay), because the frame
+  that refutes a hint usually names no replacement and so reads OCCLUDED,
+  which holds the committed state — a refuted name left there outlives
+  its refutation by the piece's whole tenure at the top edge, 14-17
+  frames in this game.

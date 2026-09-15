@@ -113,6 +113,14 @@ class Explanation:
     # drops the hypothesis and goes back to naming from shape alone (see
     # :meth:`~tetris_coach.vision.state.GameStateTracker.update`).
     hint_refuted: bool = False
+    # Every piece that could be the one entering from above, given this
+    # frame's fragment — empty when the frame shows no entering fragment
+    # at all. ``hint_refuted`` is this set tested against the hint the
+    # tracker passed IN; the set itself is here so the tracker can run the
+    # same test against a name it has already COMMITTED from a hint, on
+    # frames where there is no live hint left to refute (see
+    # :meth:`~tetris_coach.vision.state.GameStateTracker.update`).
+    entering_names: frozenset[str] = frozenset()
 
 
 def match_cells(cells: frozenset[Cell] | set[Cell] | tuple[Cell, ...]) -> tuple[str, int] | None:
@@ -302,16 +310,27 @@ def _partial_completions(
     return completions | _clipped_completions(fragment, stack_rows, unknown_rows)
 
 
+@dataclass(frozen=True)
+class PartialRead:
+    """What :func:`_partial_piece` made of a 1-3 cell fragment."""
+
+    coherent: bool  # some piece is there, whether or not it can be named
+    piece: FallingPiece | None  # named, when exactly one candidate fits
+    hinted: bool  # the name came from the entering hint, not from shape
+    refuted: bool  # the cells rule the entering hint OUT
+    entering_names: frozenset[str] = frozenset()  # every name still open
+
+
 def _partial_piece(
     fragment: set[Cell],
     stack_rows: tuple[int, ...],
     unknown_rows: tuple[int, ...],
     entering_hint: str | None = None,
-) -> tuple[bool, FallingPiece | None, bool, bool]:
-    """``(is a partly seen piece, name when unique, hinted, hint refuted)``.
+) -> PartialRead:
+    """Read a 1-3 cell fragment: is it a partly seen piece, and which one?
 
-    Ambiguity is reported as ``(True, None, False)``: the frame is
-    coherent — some piece is there — but two horizontally adjacent cells at
+    Ambiguity is reported as coherent with no piece: the frame makes
+    sense — something is there — but two horizontally adjacent cells at
     row 0 fit an O, an S, a Z, a J and an L alike, and a guessed name is a
     guessed hint. Holding beats guessing; the piece names itself as soon as
     it is seen whole.
@@ -330,39 +349,45 @@ def _partial_piece(
     the deliberate trade: the alternative is no name for as long as the
     piece sits at the top edge (measured on the live session: 13 frames,
     ~0.9 s, of a piece nobody could hint), and a misnamed one is corrected
-    by the ordinary rules the moment it descends into full view. The third
-    element says the name came from the hint rather than from structure,
-    so the tracker can refuse to treat a guess as an observation.
+    by the ordinary rules the moment it descends into full view.
+    ``hinted`` says the name came from the hint rather than from
+    structure, so the tracker can refuse to treat a guess as an
+    observation.
 
-    The fourth says the cells REFUTE the hint: they are a piece entering
-    from above and no placement of the hinted piece fits them. A preview
-    reading is a hypothesis, and this is the frame that falsifies it — a
-    piece two cells wide fits an O as well as a T, but its next row down
-    does not, so a misnamed piece contradicts itself within a frame or
-    two of descending. The hypothesis is then dropped rather than carried
-    to the end of the deal, and the piece names itself from shape as
-    usual. Refuted and named are not exclusive: the fragment can rule the
-    hint out and have exactly one completion of its own.
+    ``refuted`` says the cells RULE THE HINT OUT: they are a piece
+    entering from above and no placement of the hinted piece fits them. A
+    preview reading is a hypothesis, and this is the frame that falsifies
+    it — a piece two cells wide fits an O as well as a T, but its next row
+    down does not, so a misnamed piece contradicts itself within a frame
+    or two of descending. The hypothesis is then dropped rather than
+    carried to the end of the deal, and the piece names itself from shape
+    as usual. Refuted and named are not exclusive: the fragment can rule
+    the hint out and have exactly one completion of its own.
+
+    ``entering_names`` is that test's raw material — every piece the
+    fragment still leaves open as the one entering from above, empty when
+    nothing is entering. The tracker runs the same test against a name it
+    has already COMMITTED from a hint, which is a different subject from
+    the live hint: the hint is dropped at the first contradicting frame,
+    and the name it gave the piece on screen has to be taken back on that
+    frame too, or a refuted guess stays on the overlay.
     """
     completions = _partial_completions(fragment, stack_rows, unknown_rows)
     if not completions:
-        return False, None, False, False
+        return PartialRead(False, None, False, False)
     entering = [piece for piece in completions if piece.row < 0]
     # Only a fragment coming in from above is evidence about the hint: a
     # piece sliding under a UI panel was named from its own earlier
     # frames, and the hint says nothing about it either way.
-    refuted = (
-        entering_hint is not None
-        and bool(entering)
-        and not any(piece.piece == entering_hint for piece in entering)
-    )
+    open_names = frozenset(piece.piece for piece in entering)
+    refuted = entering_hint is not None and bool(entering) and entering_hint not in open_names
     if len(completions) == 1:
-        return True, next(iter(completions)), False, refuted
+        return PartialRead(True, next(iter(completions)), False, refuted, open_names)
     if entering_hint is not None:
         hinted = [piece for piece in completions if piece.piece == entering_hint]
         if len(hinted) == 1 and hinted[0].row < 0:
-            return True, hinted[0], True, False
-    return True, None, False, refuted
+            return PartialRead(True, hinted[0], True, False, open_names)
+    return PartialRead(True, None, False, refuted, open_names)
 
 
 # The most content a single frame is ever allowed to hold back as "in
@@ -564,9 +589,9 @@ def _explains(
     # The spawn may still be entering from above the board region, showing
     # only its bottom cells: a clearing lock must not go UNEXPLAINED (and
     # eventually reset the board) because the next piece is half off-grid.
-    coherent, partial_piece, _, _ = _partial_piece(residual, s2_rows, unknown_rows)
-    if coherent:
-        return True, partial_piece
+    read = _partial_piece(residual, s2_rows, unknown_rows)
+    if read.coherent:
+        return True, read.piece
     return False, None
 
 
@@ -623,9 +648,10 @@ def _lock_reveal(
             # the fragment — panel and top-edge hypotheses counted together,
             # since both are hypotheses about the same cells — and its cells
             # are never merged, only ``lock_cells`` are.
-            coherent, spawn_piece, _, _ = _partial_piece(spawn_cells, stack_rows, unknown_rows)
-            if not coherent:
+            read = _partial_piece(spawn_cells, stack_rows, unknown_rows)
+            if not read.coherent:
                 continue
+            spawn_piece = read.piece
         elif spawn_piece.row >= SPAWN_ROWS:
             continue  # ghost-piece defense: spawns appear in the top rows
         lock_piece = _piece_at(lock_cells)
@@ -835,6 +861,7 @@ def _carried_piece(
                         explanation.falling,
                         hinted_name=explanation.hinted_name,
                         hint_refuted=explanation.hint_refuted,
+                        entering_names=explanation.entering_names,
                     )
     return None
 
@@ -903,10 +930,17 @@ def explain_grid(
         # SAME cells, so they are counted together: asking the panel first
         # and answering from it alone reads a fragment three pieces could
         # be entering as a confident fourth (see :func:`_partial_piece`).
-        coherent, piece, hinted, refuted = _partial_piece(added, stack_rows, unknown, entering_hint)
-        if coherent:
-            kind = FrameKind.FALLING if piece is not None else FrameKind.OCCLUDED
-            return Explanation(kind, stack_rows, piece, hinted_name=hinted, hint_refuted=refuted)
+        read = _partial_piece(added, stack_rows, unknown, entering_hint)
+        if read.coherent:
+            kind = FrameKind.FALLING if read.piece is not None else FrameKind.OCCLUDED
+            return Explanation(
+                kind,
+                stack_rows,
+                read.piece,
+                hinted_name=read.hinted,
+                hint_refuted=read.refuted,
+                entering_names=read.entering_names,
+            )
 
     # Step 2 — lock revealed by the next spawn, no clears. A reveal whose
     # locked piece is partly hidden — or whose SPAWN is still cut by the top

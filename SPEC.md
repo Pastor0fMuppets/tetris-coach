@@ -731,7 +731,10 @@ vision/
                   # frames touch nothing (line-clear animations, torn frames);
                   # PIECE_LOCKED fires when a lock is structurally verified, not at
                   # touchdown; BOARD_RESET only after several consecutive identical
-                  # unexplainable frames (new game, garbage, mid-game attach).
+                  # unexplainable frames (new game, garbage, mid-game attach);
+                  # PIECE_UNNAMED when a name the preview hint supplied is
+                  # ruled out by a later frame — the name is withdrawn and
+                  # the consumer takes the hint off the screen (rule (4)).
                   # A resync adopts the observed board as the stack MINUS
                   # the piece in flight (strip_piece_in_flight): the one
                   # component that rests on nothing AND touches row 0,
@@ -828,8 +831,24 @@ vision/
                   # flips O -> I on the frame the O's first two cells reach
                   # the top edge, and the reset four frames later threw
                   # away the hint naming the very piece it was resyncing
-                  # ONTO. (4) And the hint is dropped outright by any frame
-                  # that refutes it (hint_refuted, above).
+                  # ONTO. (4) And a frame that REFUTES a hint both drops
+                  # the hypothesis (hint_refuted, above) and RETRACTS the
+                  # name that hypothesis already committed: the frame that
+                  # contradicts a hint normally names no replacement (the
+                  # piece has shown a second cell, which rules the hinted
+                  # name out while still fitting several others), so it is
+                  # OCCLUDED, and OCCLUDED holds the committed snapshot —
+                  # the refuted name stayed on screen for the rest of the
+                  # piece's tenure at the top edge, 14-17 frames in this
+                  # game. The tracker therefore keeps which committed name
+                  # came from a hint, tests it against every later frame's
+                  # entering_names, and on a contradiction commits the
+                  # falling piece back to None and fires PIECE_UNNAMED. The
+                  # retraction is NOT debounced: the debounce exists to
+                  # stop a torn frame committing something, and withdrawing
+                  # a claim is the safe direction. A name structure has
+                  # produced — or confirmed — stops being a hypothesis and
+                  # is never retracted.
                   # Measured over tests/fixtures/spawn_latency (161 frames,
                   # 124 accepted): OCCLUDED 43 -> 31, frames with a hint on
                   # screen 108 -> 120, and the per-piece sighting -> hint

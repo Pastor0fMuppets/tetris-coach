@@ -25,6 +25,11 @@ Events:
   lock delay from lock without the game's timer, so PIECE_LOCKED fires at
   the verification point, not at touchdown. A piece resting on the stack
   stays FALLING (and the hint stays up) until the lock is revealed.
+- ``PIECE_UNNAMED``: the committed falling piece's NAME came from the
+  preview hint and this frame ruled it out. The name is withdrawn (the
+  committed falling piece goes back to ``None``) and the consumer takes
+  its hint off the screen. The stack is untouched: a hinted name was
+  never evidence, so nothing structural was ever decided on it.
 - ``BOARD_RESET``: ``reset_confirm_frames`` consecutive IDENTICAL
   unexplainable frames — a stable new world memory cannot explain (new
   game, garbage rising, mid-game attach). The tracker re-anchors on the
@@ -87,6 +92,7 @@ MAX_PREVIEW_GAP = 12
 class GameEvent(Enum):
     PIECE_SPAWNED = auto()
     PIECE_LOCKED = auto()
+    PIECE_UNNAMED = auto()
     BOARD_RESET = auto()
 
 
@@ -161,6 +167,11 @@ class GameStateTracker:
         # A flip is only news of the deal happening NOW when the gap it is
         # dated across is too short to hide a whole tenure (see update()).
         self._preview_gap = 0
+        # The name the committed falling piece was given by a hint and that
+        # nothing structural has confirmed since. It is the subject of the
+        # retraction rule in update(): a hypothesis that has been SHOWN has
+        # to be takeable back, not merely droppable.
+        self._hinted_commit: str | None = None
         # Frames since the hint was set. A hint is evidence about ONE deal,
         # so it must not outlive it, and its age is how the rules below
         # tell the flip reporting the deal now committing from a flip left
@@ -267,6 +278,45 @@ class GameStateTracker:
             # hint rather than a confidently wrong one.
             self._entering_hint = None
 
+        if explanation.falling is not None and not explanation.hinted_name:
+            # Structure has named the piece in flight. Whatever the hint
+            # called it, the name on screen is no longer a guess, so it is
+            # no longer the retraction rule's business (and a later,
+            # unrelated fragment must not be read as contradicting it).
+            self._hinted_commit = None
+        elif (
+            self._hinted_commit is not None
+            and explanation.entering_names
+            and self._hinted_commit not in explanation.entering_names
+        ):
+            # RETRACTION. Dropping the hypothesis is not enough on its own:
+            # by the time a frame contradicts it, the name it picked has
+            # usually been committed and drawn — and the contradicting
+            # frame is normally an OCCLUDED one (the piece has shown a
+            # second cell, which rules the hinted name out without naming
+            # a replacement), which HOLDS the committed snapshot. The
+            # refuted name then stayed on screen for the rest of the
+            # piece's tenure at the top edge (measured in this game:
+            # 14-17 frames, ~1 s), which is the user's "confused two
+            # pieces" report made persistent. So the name is taken back on
+            # the frame that refutes it, and the coach goes back to showing
+            # nothing — what it shows for any piece it cannot name.
+            #
+            # Undebounced on purpose: the debounce exists to stop a torn
+            # frame COMMITTING something, and this commits nothing. It
+            # withdraws a claim, which is the safe direction — the cost of
+            # a retraction a glitch frame caused is a hint missing for a
+            # frame or two, against a confidently wrong hint for a second.
+            self._hinted_commit = None
+            self._entering_hint = None
+            self._committed = Snapshot(self._committed.stack_rows, None, self._committed.next_piece)
+            self._pending = None
+            self._pending_kind = None
+            self._pending_count = 0
+            self._unexplained_rows = None
+            self._unexplained_count = 0
+            return [GameEvent.PIECE_UNNAMED]
+
         if explanation.kind is FrameKind.OCCLUDED:
             # Coherent: the covered region is hiding a piece. Hold the
             # committed state (and any pending transition), and — the whole
@@ -309,6 +359,7 @@ class GameStateTracker:
                 self._unexplained_rows = None
                 self._unexplained_count = 0
                 self._last_falling = None
+                self._hinted_commit = None
                 # A resync is a new world (a new game, garbage, a mid-game
                 # attach). What the preview shows still holds, but which
                 # piece was dealt into THIS board does not — UNLESS the
@@ -377,6 +428,9 @@ class GameStateTracker:
         self._pending = None
         self._pending_kind = None
         self._pending_count = 0
+        # Remember whether this name is a hypothesis, so the frame that
+        # contradicts it can take it back (see the retraction rule above).
+        self._hinted_commit = candidate.falling_piece if explanation.hinted_name else None
         if kind is FrameKind.LOCKED:
             # The pre-lock piece is absorbed into the stack; from now on
             # the anchor is the residual spawn (or nothing).
