@@ -319,8 +319,10 @@ class TestIdentifyNextPalePiece:
 
     def test_the_pale_piece_window_is_named_too(self) -> None:
         # The board-side window's own preview crops: 47 of 61, all T. The
-        # 14 that are not are the game's end-of-round panel (00687-00700),
-        # which covers the box as well as the board.
+        # 14 that are not are the fourteen captures another application is
+        # on screen for (00687-00700, an event-schedule page rather than
+        # the end-of-round panel this once claimed), which covers the box
+        # as well as the board.
         seen = [identify_next(pale_preview(f"00{n}", PALE_BOARD)) for n in range(640, 701)]
         assert seen == ["T"] * 47 + [None] * 14
 

@@ -36,8 +36,10 @@ AFTER (same frames, same gate):
     confidence 0.206               honest: the band against the ground
 
 The 16 frames at the head are the window opening mid-session on a board
-the tracker has never seen, and 00687 on is the game's own end-of-round
-panel over the whole board — correctly refused at 0.009, hint held.
+the tracker has never seen, and 00687 on is not the game at all: a
+different application is on screen — an event-schedule page, once wrongly
+recorded here as an end-of-round panel — correctly refused at 0.009, hint
+held.
 """
 
 from __future__ import annotations
@@ -81,8 +83,10 @@ T_AT = {
 SETTLED_PERIWINKLE = frozenset({(11, 5), (11, 8)})
 FLOOR_ROW = "#....#..##"
 
-# The frames the game's end-of-round panel covers the board on.
-PANEL_FRAMES = tuple(f"00{n}" for n in range(687, 701))
+# The frames another application covers the capture region on: an
+# event-schedule page, not the game. (Recorded here as the game's own
+# end-of-round panel until the pixels of 00690 were looked at.)
+NOT_THE_GAME = tuple(f"00{n}" for n in range(687, 701))
 
 
 def load(name: str) -> np.ndarray:
@@ -209,11 +213,11 @@ def test_the_piece_is_really_there_and_really_is_pale() -> None:
     """The premise, off the raw pixels rather than through the classifier.
 
     A whole T of periwinkle plus the two settled cells, on every frame of
-    the window that is not the end-of-round panel — and 53 uint8 units
+    the window that is the game at all — and 53 uint8 units
     from the board it sits on, where the blue stack beside it is 294.
     """
     for number in frame_numbers():
-        if number in PANEL_FRAMES:
+        if number in NOT_THE_GAME:
             continue
         painted = cells_colored(FIXTURES / f"board_{number}.png", PERIWINKLE)
         assert painted - SETTLED_PERIWINKLE in set(T_AT.values()), f"{number}: {sorted(painted)}"
@@ -281,8 +285,9 @@ def test_one_stable_hint_for_the_whole_descent() -> None:
     """The user-visible outcome: an overlay, and one that does not wander.
 
     Before: no hint on any of the 61 frames, the tail of a 90-frame
-    (~6 s) dropout. The hint holds through the end-of-round panel because
-    a refused frame holds the last one.
+    (~6 s) dropout. The hint holds through the fourteen frames another
+    application covers the region on, because a refused frame holds the
+    last one.
     """
     hinted = [t for t in replay() if t.hint is not None]
     assert [t.number for t in hinted] == [f"00{n}" for n in range(656, 701)]
@@ -304,7 +309,7 @@ def test_nothing_phantom_locks_and_the_board_resets_only_on_the_attach() -> None
 def test_the_end_of_round_panel_is_refused_rather_than_read() -> None:
     """The window's last 14 frames are not a board and must not read as one."""
     for t in replay():
-        if t.number in PANEL_FRAMES:
+        if t.number in NOT_THE_GAME:
             assert not t.accepted, f"{t.number}: panel accepted at {t.confidence:.3f}"
             assert t.hint is not None, f"{t.number}: the held hint was dropped"
 

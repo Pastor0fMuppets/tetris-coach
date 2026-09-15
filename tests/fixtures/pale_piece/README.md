@@ -64,5 +64,13 @@ Replayed here (`tests/test_pale_piece.py`), before -> after:
     LOCKED 0 -> 0           BOARD_RESET 1 -> 1 (the mid-game attach)
 
 The 16 hintless frames at the head are the window opening mid-session;
-00687-00700 are the game's own end-of-round panel over the whole board,
-refused at 0.009 with the last hint held.
+00687-00700 are NOT the game at all, which is what this file used to call
+them ("the game's own end-of-round panel"). A different application is on
+screen for those fourteen captures - an event-schedule page with its own
+headings and photographs - and nothing in them is a board. Read the pixels
+of 00690 rather than this sentence; that is how the error was found.
+`vision.grid` refuses them at 0.009 with the last hint held, and the
+colour-first tracker refuses them on its own premise (they are drawn as
+flat cells on only 0.51 of the board, against 0.89 or better on every real
+frame of all six windows) - see
+tests/test_colour_tracker_sessions.py::test_the_gate_refuses_the_web_page_and_nothing_else.
