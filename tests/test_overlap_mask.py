@@ -47,9 +47,13 @@ class TestComputeOverlapMask:
         assert mask == frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
 
     def test_real_rects_cover_more_rows_at_20(self) -> None:
-        # Same pixels, a taller grid: the box spans the top three rows.
+        # Same pixels, a taller grid: the box reaches into four rows. The
+        # fourth is the one a centre-in-rect test used to leave out -- the
+        # panel stops 1 px past the top of row 3's sampled patch, which is
+        # 11 px short of its centre, and 1 px of panel inside the patch is
+        # a cell whose mean is no longer the board's.
         mask = compute_overlap_mask(ROAS_BOARD, ROAS_NEXT, rows=20)
-        assert mask == frozenset({(0, 8), (0, 9), (1, 8), (1, 9), (2, 8), (2, 9)})
+        assert mask == frozenset({(0, 8), (0, 9), (1, 8), (1, 9), (2, 8), (2, 9), (3, 8), (3, 9)})
 
     def test_next_fully_inside_board_top_right(self) -> None:
         # A clean synthetic case: 100x120 board, 10x12 cells (10x10 px each);
@@ -59,9 +63,10 @@ class TestComputeOverlapMask:
         assert compute_overlap_mask(board, nxt, rows=12) == frozenset(
             {(0, 8), (0, 9), (1, 8), (1, 9)}
         )
-        # The same rects on a 20-row grid (6 px tall cells) cover one more row.
+        # The same rects on a 20-row grid (6 px tall cells) reach into two
+        # more rows: the box ends at y=20, inside row 3's patch (19.5-22.5).
         assert compute_overlap_mask(board, nxt, rows=20) == frozenset(
-            {(0, 8), (0, 9), (1, 8), (1, 9), (2, 8), (2, 9)}
+            {(0, 8), (0, 9), (1, 8), (1, 9), (2, 8), (2, 9), (3, 8), (3, 9)}
         )
 
     def test_no_overlap_returns_empty_mask(self) -> None:
@@ -77,17 +82,31 @@ class TestComputeOverlapMask:
         assert compute_overlap_mask(Rect(0, 0, 100, 120), None, rows=20) == frozenset()
 
     def test_partial_overlap_masks_only_covered_cells(self) -> None:
-        # A next box grazing only the last column's cell centers.
+        # A next box over the last column's sampled patch (92.5-97.5 px).
         board = Rect(0, 0, 100, 120)
-        nxt = Rect(90, 0, 40, 20)  # x in [0.9, 1.3]: only col 9's center (0.95)
+        nxt = Rect(90, 0, 40, 20)  # x in [0.9, 1.3]
         assert compute_overlap_mask(board, nxt, rows=12) == frozenset({(0, 9), (1, 9)})
 
-    def test_border_graze_does_not_mask(self) -> None:
-        # A next box whose right edge stops just before col 9's center
-        # (95 px) but past col 8's (85 px): only col 8 is masked, not col 9.
+    def test_a_panel_that_reaches_a_patch_masks_that_cell(self) -> None:
+        # THE CASE THAT USED TO COST THE WHOLE SESSION. The box stops at
+        # 93 px: into col 9's patch (92.5-97.5) and short of col 9's
+        # CENTRE at 95, so a centre-in-rect test called col 9 clean while
+        # the panel was covering a third of it -- enough to change the
+        # mean read off the cell, which arrives as a stray content cell.
         board = Rect(0, 0, 100, 120)
-        nxt = Rect(80, 0, 10, 20)  # x in [0.80, 0.90]
-        assert compute_overlap_mask(board, nxt, rows=12) == frozenset({(0, 8), (1, 8)})
+        nxt = Rect(80, 0, 13, 20)  # x in [0.80, 0.93]
+        assert compute_overlap_mask(board, nxt, rows=12) == frozenset(
+            {(0, 8), (1, 8), (0, 9), (1, 9)}
+        )
+
+    def test_border_graze_does_not_mask(self) -> None:
+        # A panel that only overlaps a cell's outer margin changes nothing
+        # a reader looks at: both sample the inset patch. The box here
+        # stops at 81 px, inside col 8's rect but 1.5 px short of its
+        # patch, so col 8 stays readable.
+        board = Rect(0, 0, 100, 120)
+        nxt = Rect(70, 0, 11, 20)  # x in [0.70, 0.81]
+        assert compute_overlap_mask(board, nxt, rows=12) == frozenset({(0, 7), (1, 7)})
 
     def test_degenerate_board_rect_returns_empty(self) -> None:
         assert compute_overlap_mask(Rect(0, 0, 0, 120), ROAS_NEXT, rows=12) == frozenset()
@@ -282,6 +301,36 @@ class TestRealFixtureFrames:
                 outside[r, c] = False
             assert np.array_equal(blanked, outside)
         assert any_contaminated, "fixtures no longer exhibit the corner contamination"
+
+    def test_the_colour_reader_survives_a_corner_the_mask_does_not_name(self) -> None:
+        """A couple of stray cells must cost accuracy, not the whole session.
+
+        The mask above is what SHOULD catch the panel, and with it these
+        frames read 4 cells over the void -- one piece in flight, which
+        was the entire old budget. Drop it (which is what a board
+        rectangle drawn a few pixels differently produces) and the count
+        is 6 on every frame: two cells of the NEXT panel beside the real
+        piece. Under a total budget of exactly one tetromino that refused
+        every frame of the session, silently -- board_visible False from
+        the first frame to the last, the coach never speaking, and
+        ``selection_warning`` saying nothing because it only knows about
+        the whole-top-row case.
+        """
+        from PIL import Image
+
+        from tetris_coach.vision.colour_tracker import ColourTracker
+
+        covered = compute_overlap_mask(ROAS_BOARD, ROAS_NEXT, rows=12)
+        frames = sorted(self.FIXTURES.glob("live_board_*.png")) + [
+            self.FIXTURES / f"live2_board_00{n}.png" for n in (500, 600, 700, 800)
+        ]
+        assert len(frames) == 8
+        for path in frames:
+            board = np.asarray(Image.open(path).convert("RGB"))[:, :, ::-1].copy()
+            for mask in (covered, frozenset()):
+                tracker = ColourTracker(rows=12, cols=10, unobservable_cells=mask)
+                report = tracker.update(board)
+                assert report.board_visible, f"{path.name}: refused with mask={bool(mask)}"
 
 
 # A near-top-out 12-row board: the right-hand columns reach row 3, so a

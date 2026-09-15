@@ -486,14 +486,16 @@ def test_the_two_premises_refuse_the_web_page_independently(
     CANNOT see (a flat panel). They are only alternatives on paper unless
     the second is checked against real pixels, so here the flatness test is
     stubbed away and the page is fed to the tracker anyway: 58 of its cells
-    rest on nothing, in one component, against a budget of 4 and a corpus
-    maximum of 4. The frame is still refused, and the palette still ends
-    the window with the window's own two piece colours rather than the
-    eight it used to carry away.
+    rest on nothing, IN ONE COMPONENT, against a per-component budget of 4
+    and a corpus maximum of 4. The frame is still refused, and the palette
+    still ends the window with the window's own two piece colours rather
+    than the eight it used to carry away.
     """
     monkeypatch.setattr(colour_tracker, "board_readable", lambda *a, **k: True)
 
-    monkeypatch.setattr(colour_tracker, "PIECE_CELLS", 10**6)  # measure, don't refuse
+    # Measure, don't refuse: both budgets lifted out of the way.
+    monkeypatch.setattr(colour_tracker, "PIECE_CELLS", 10**6)
+    monkeypatch.setattr(colour_tracker, "AIRBORNE_CELLS", 10**6)
     tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
     measured = {}
     for board in sorted((FIXTURES / "pale_piece").glob("board_*.png")):
@@ -506,6 +508,7 @@ def test_the_two_premises_refuse_the_web_page_independently(
     assert max(v for n, v in measured.items() if n not in page) == 4
 
     monkeypatch.setattr(colour_tracker, "PIECE_CELLS", 4)
+    monkeypatch.setattr(colour_tracker, "AIRBORNE_CELLS", 8)
     tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
     refused = []
     for board in sorted((FIXTURES / "pale_piece").glob("board_*.png")):

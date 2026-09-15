@@ -35,8 +35,14 @@ class WindowSpec:
         return Geometry(rows=self.rows, cols=10, unobservable=overlap_mask(self))
 
 
+#: Fraction of a cell inset on every side before a reader samples it. The
+#: same margin both readers use, written out here rather than imported for
+#: the reason the mask below is written out here.
+SAMPLED_MARGIN = 0.25
+
+
 def overlap_mask(spec: WindowSpec, cols: int = 10) -> frozenset[Cell]:
-    """Board cells whose centre lies under the NEXT preview box.
+    """Board cells whose sampled patch lies under the NEXT preview box.
 
     The same board-relative fraction test ``app.compute_overlap_mask``
     does, written out here so the oracle owes the engine nothing;
@@ -54,7 +60,10 @@ def overlap_mask(spec: WindowSpec, cols: int = 10) -> frozenset[Cell]:
         (r, c)
         for r in range(spec.rows)
         for c in range(cols)
-        if fx0 < (c + 0.5) / cols < fx1 and fy0 < (r + 0.5) / spec.rows < fy1
+        if fx0 < (c + 1 - SAMPLED_MARGIN) / cols
+        and fx1 > (c + SAMPLED_MARGIN) / cols
+        and fy0 < (r + 1 - SAMPLED_MARGIN) / spec.rows
+        and fy1 > (r + SAMPLED_MARGIN) / spec.rows
     }
     return frozenset(masked)
 

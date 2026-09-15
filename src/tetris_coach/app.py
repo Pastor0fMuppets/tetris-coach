@@ -42,6 +42,7 @@ from .capture.screen import FrameSource, Rect
 from .core.board import DEFAULT_HEIGHT, FULL_ROW, WIDTH, Board
 from .solver.evaluate import DELLACHERIE, evaluate_drop
 from .solver.search import TOP_OUT_SCORE, Move, best_move, enumerate_drops
+from .vision.colour_palette import CELL_MARGIN
 from .vision.colour_tracker import ColourTracker
 from .vision.grid import GridClassifier, OwnPaint
 from .vision.readers import (
@@ -182,7 +183,7 @@ def compute_overlap_mask(
     rows: int,
     width: int = WIDTH,
 ) -> frozenset[tuple[int, int]]:
-    """Board cells whose center falls under the next-piece preview box.
+    """Board cells whose SAMPLED PATCH falls under the next-piece preview box.
 
     Some games (e.g. ROAS Stacker) float the NEXT preview on top of the
     top corner of the playfield, inside the region the user must select as
@@ -203,9 +204,23 @@ def compute_overlap_mask(
     Geometry is done in board-relative fractions so it is Retina-agnostic
     (the capture may be scaled; only ratios matter): the next box is
     projected into the board rectangle's unit square, and a cell is masked
-    when its center ``((c + 0.5) / width, (r + 0.5) / rows)`` lies inside
-    that projection. Center-in-rect tolerates a slightly loose next
-    selection without masking a cell merely grazed at its border.
+    when the box reaches the part of it vision actually READS -- the
+    central patch both readers sample, inset :data:`CELL_MARGIN` on every
+    side.
+
+    That is the criterion rather than centre-in-rect, which this used to
+    use, because the panel corrupts a cell exactly when it reaches the
+    patch: a panel that only grazes a cell's border changes nothing about
+    the mean read off its middle, and one that covers a quarter of the cell
+    changes that mean whether or not it has reached the centre. Measured on
+    the 8 committed live ROAS Stacker frames, a board rectangle that leaves
+    the panel covering a column's cells without covering their centres puts
+    two extra content cells in the reading -- and with the airborne budget
+    at exactly 4 that refused EVERY frame of the session, silently, with
+    the coach never speaking. Centre-in-rect had no slack to give; the
+    patch test has a quarter of a cell of it on each side, and none of the
+    committed windows' masks change (``tests/test_truth_oracle.py`` pins
+    that this and the oracle's own copy still agree).
 
     When ``next_rect`` is ``None`` or does not overlap ``board_rect`` (the
     general case: a next box drawn in a separate area outside the board),
@@ -222,12 +237,12 @@ def compute_overlap_mask(
         return frozenset()
     masked: set[tuple[int, int]] = set()
     for r in range(rows):
-        cy = (r + 0.5) / rows
-        if not (fy0 <= cy <= fy1):
+        top, bottom = (r + CELL_MARGIN) / rows, (r + 1 - CELL_MARGIN) / rows
+        if fy1 <= top or fy0 >= bottom:
             continue
         for c in range(width):
-            cx = (c + 0.5) / width
-            if fx0 <= cx <= fx1:
+            left, right = (c + CELL_MARGIN) / width, (c + 1 - CELL_MARGIN) / width
+            if fx0 < right and fx1 > left:
                 masked.add((r, c))
     return frozenset(masked)
 
@@ -358,8 +373,10 @@ class CoachEngine:
         # replay harness in race/engine.py). Never read by the policy.
         self.last_reading: FrameReading | None = None
         # Consecutive frames vision has refused. The hint is withdrawn
-        # once this passes config.max_stale_frames (see process_frame).
+        # once this passes config.max_stale_frames (see process_frame),
+        # and the user is told once why (see _report_silence).
         self._stale_frames = 0
+        self._told_about_silence = False
 
     @property
     def tracker(self) -> GameStateTracker | ColourTracker:
@@ -420,10 +437,43 @@ class CoachEngine:
                 # confidently wrong; the tracker's own state is untouched,
                 # so a readable frame re-solves immediately.
                 self._withdraw()
+                self._report_silence(reading)
             return self.current_hint  # a brief hold rides out a glitch
         self._stale_frames = 0
+        self._told_about_silence = False
         self._update_hint(reading)
         return self.current_hint
+
+    def _report_silence(self, reading: FrameReading) -> None:
+        """Say once why the coach has stopped talking, when it stays stopped.
+
+        A refused frame is invisible to the user: the overlay simply has
+        nothing on it, and the one thing they can see is a tool that does
+        not work. Every way vision can fail wholesale looks identical from
+        the outside -- a board rectangle that is not over the board, a
+        selection that includes the game's NEXT panel, a theme neither
+        reader can read, a game that has been closed -- so the frame's own
+        reason for refusing is the only thing that tells them apart, and it
+        costs nothing to print it.
+
+        Once per silence, at the same point the hint comes down, and reset
+        by the first frame that reads: a message per frame at 15 fps is a
+        different way of telling the user nothing.
+        """
+        if self._told_about_silence:
+            return
+        self._told_about_silence = True
+        seconds = self._stale_frames / max(self.config.poll_rate, 1e-9)
+        because = reading.refused_because or "no reason given"
+        print(
+            f"tetris-coach: no frame has been readable for {self._stale_frames} "
+            f"frames ({seconds:.0f} s) -- {because}. The hint is off screen "
+            "until one is. If this does not clear, the board rectangle may "
+            "not be over the board, or may take in the game's own panels; "
+            "restart to re-select the regions.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def _withdraw(self) -> None:
         """Take the hint off the screen, and forget what was planned on it."""

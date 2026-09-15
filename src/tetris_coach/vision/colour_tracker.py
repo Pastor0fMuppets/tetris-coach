@@ -110,11 +110,22 @@ Cell = tuple[int, int]
 # Frames a cell must hold its colour before it counts as settled board.
 SETTLE_FRAMES = 3
 
-# A tetromino. Also the whole budget for content hanging OVER THE VOID: a
+# A tetromino. Also the budget for any ONE thing hanging over the void: a
 # Tetris board has one piece in flight and everything else is held up by
-# what is under it, so a frame showing more than this is not a board. See
-# :meth:`ColourTracker._blind`.
+# what is under it. See :meth:`ColourTracker._blind`.
 PIECE_CELLS = 4
+
+# ...and the budget for everything airborne added together, which is looser
+# on purpose. A frame is not a board when it shows a SLAB resting on
+# nothing, and that is what the per-component budget above is for; refusing
+# a frame because one stray cell sits beside a real piece is a cliff with
+# nothing at the bottom of it. It had one: measured on the 8 committed live
+# ROAS Stacker frames, a board rectangle that leaves the NEXT panel
+# covering two cells the mask does not name reads 6 airborne on every
+# single frame against a budget of exactly 4, so every frame of the session
+# was refused and the coach never spoke, silently. The largest airborne
+# reading anywhere in the committed corpus is 4, in one component.
+AIRBORNE_CELLS = 2 * PIECE_CELLS
 
 
 class Event(Enum):
@@ -209,6 +220,11 @@ def _completed_row(labels: NDArray[np.int16]) -> int | None:
     flashes it) is not the board. A row holding a cell the capture cannot
     see can never read as complete, which is the honest answer there --
     the panel that hides it could be hiding a gap.
+
+    The same fact the shipped classifier's ``_claims_a_completed_row``
+    rests on (``grid.py``) and the same one the oracle abstains on
+    (``truth/oracle.py``); this reader was the only one of the three not
+    using it.
     """
     full = np.flatnonzero(np.all(labels != EMPTY, axis=1))
     return int(full[0]) if full.size else None
@@ -290,7 +306,10 @@ class ColourTracker:
                 return self._blind("cells are neither the board's ground nor content")
         labels = self.palette.classify(colours, self._observable, painted)
         grounded = _grounded(labels)
-        if int(np.count_nonzero((labels != EMPTY) & ~grounded)) > PIECE_CELLS:
+        airborne = np.where(grounded, EMPTY, labels).astype(np.int16)
+        if int(np.count_nonzero(airborne != EMPTY)) > AIRBORNE_CELLS or any(
+            len(cells) > PIECE_CELLS for _, cells in _components(airborne)
+        ):
             self.palette.restore(mark)
             return self._blind("more than a tetromino is resting on nothing")
         if _completed_row(labels) is not None:
@@ -347,18 +366,30 @@ class ColourTracker:
         cells flat against 0.89 or better on every real frame of all six
         windows) and it is blind by construction to a cover that IS flat.
 
-        (2) At most a tetromino of content hangs OVER THE VOID: everything
-        else on a Tetris board is held up by what is under it, sideways
-        links included (:func:`_grounded`), and there is only ever one
-        piece in flight. This is the premise the shipped engine's
-        confidence gate rests on too (SPEC.md, grid.py), and it catches
-        what (1) cannot: a flat panel floating over the playfield -- ROAS
-        Stacker's own "ROW CLEARED" card, a leaderboard, any modal drawn in
-        one colour -- arrives as dozens of cells resting on nothing.
-        Measured, it costs the corpus NOTHING: over all 528 accepted board
+        (2) Nothing bigger than a tetromino hangs OVER THE VOID, and not
+        much more than one does in total: everything else on a Tetris board
+        is held up by what is under it, sideways links included
+        (:func:`_grounded`), and there is only ever one piece in flight.
+        This is the premise the shipped engine's confidence gate rests on
+        too (SPEC.md, grid.py), and it catches what (1) cannot: a flat
+        panel floating over the playfield -- a leaderboard, any modal drawn
+        in one colour -- arrives as dozens of cells resting on nothing.
+        Measured, it costs the corpus NOTHING: over all accepted board
         frames of the six windows the largest airborne reading is 4 cells,
         exactly one tetromino, never once more; the web page, fed past (1),
         shows 58 in a single component.
+
+        The two budgets are separate because they answer different
+        questions and a single one cannot do both. What says "not a board"
+        is a SLAB resting on nothing, which :data:`PIECE_CELLS` catches per
+        component. What a total of exactly 4 also caught was one stray cell
+        beside a real piece -- and a couple of stray cells is what a board
+        rectangle a few pixels off produces, which made a slightly wrong
+        selection refuse every frame of the session in silence rather than
+        cost a little accuracy (see
+        :func:`~tetris_coach.app.compute_overlap_mask`, which is where that
+        is properly fixed). :data:`AIRBORNE_CELLS` is the slack that turns
+        the cliff into a slope.
 
         (3) Every cell is either the board's own ground or content
         (:func:`off_ground`). The two premises above are both blind to a

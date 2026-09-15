@@ -98,6 +98,51 @@ def test_a_hint_vision_cannot_justify_comes_down() -> None:
     assert back is not None and back.piece == "O"
 
 
+def test_the_user_is_told_why_the_coach_went_quiet(capsys: pytest.CaptureFixture[str]) -> None:
+    """A refusal is invisible: the overlay is simply empty, once per frame.
+
+    Every wholesale vision failure looks the same from outside -- a board
+    rectangle that is not over the board, a selection that takes in the
+    game's own panels, a game that has been closed -- so the frame's own
+    reason is the only thing that tells them apart, and it is free to
+    print. Once per silence, at the same point the hint comes down, and
+    reset by the first frame that reads.
+    """
+    coach = engine(max_stale_frames=4, poll_rate=15.0)
+    box = preview(O_CELLS, GREEN_O)
+    coach.process_frame(render({(0, 4): GREEN_O, (0, 5): GREEN_O}), box)
+    noise = np.random.default_rng(0).integers(
+        0, 256, size=(ROWS * CELL, COLS * CELL, 3), dtype=np.uint8
+    )
+    for _ in range(12):
+        coach.process_frame(noise, box)
+    said = capsys.readouterr().err
+    assert said.count("no frame has been readable") == 1, "once per silence, not per frame"
+    assert "not drawn as flat cells" in said, "and it says which premise refused"
+
+    # A readable frame arms it again, so a second silence is reported too.
+    coach.process_frame(render({(0, 4): GREEN_O, (0, 5): GREEN_O}), box)
+    for _ in range(12):
+        coach.process_frame(noise, box)
+    assert capsys.readouterr().err.count("no frame has been readable") == 1
+
+
+def test_the_shape_reader_says_why_it_refused_too(capsys: pytest.CaptureFixture[str]) -> None:
+    # The message is the engine's, so it has to be true of either reader:
+    # the shipped one refuses on its confidence gate and says so. The gate
+    # is lifted above what any frame can score rather than a frame found
+    # that it happens to dislike -- what is under test is the reporting.
+    coach = CoachEngine(
+        CoachConfig(rows=ROWS, tracker="shape", min_confidence=0.9, max_stale_frames=4)
+    )
+    noise = np.random.default_rng(0).integers(
+        0, 256, size=(ROWS * CELL, COLS * CELL, 3), dtype=np.uint8
+    )
+    for _ in range(12):
+        coach.process_frame(noise, None)
+    assert "the confidence gate scored this frame" in capsys.readouterr().err
+
+
 def test_the_coach_never_reads_its_own_paint_as_the_board() -> None:
     # The coach captures its own overlay. Drawing the hint it just chose
     # over the board must change nothing it believes: same piece, same

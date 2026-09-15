@@ -673,27 +673,43 @@ def test_a_flat_panel_floating_over_the_board_is_not_a_board() -> None:
     assert Event.LINES_CLEARED not in back.events
 
 
-def test_the_budget_for_what_rests_on_nothing_is_exactly_one_tetromino() -> None:
-    """Four airborne cells are a piece; five are something else.
+def test_the_budget_for_what_rests_on_nothing_is_a_piece_and_a_bit() -> None:
+    """A slab over the void is not a board; a stray cell beside a piece is.
 
     Both directions are the point. A whole piece hovering with an empty
     board under it is the ordinary frame of this game -- no gravity, so it
     hangs there until the player drags it -- and refusing THAT would be a
-    coach that goes blind every time a piece spawns. One cell more cannot
-    be a piece, and what it is in practice is a cover.
+    coach that goes blind every time a piece spawns. One component larger
+    than a tetromino cannot be a piece, and what it is in practice is a
+    cover.
 
-    The cost, stated plainly: one stray airborne cell beside a real piece
-    refuses the frame. Measured over the 528 accepted board frames of the
-    six committed windows, that never happens once -- the largest airborne
-    reading in the whole corpus is 4.
+    The TOTAL is deliberately looser than the per-component budget. At
+    exactly one tetromino it also refused a real piece with one stray cell
+    beside it, and a stray cell or two is what a board rectangle a few
+    pixels off produces: measured on the 8 committed live ROAS Stacker
+    frames, a selection that leaves the NEXT panel covering two unmasked
+    cells reads 6 airborne on every frame, and refused every frame of the
+    session in silence. Accuracy there should degrade, not stop.
     """
     piece = {(4, c): BLUE_I for c in range(4)}
     hovering = tracker().update(render(piece))
     assert hovering.board_visible
     assert hovering.falling is not None and hovering.falling.piece == "I"
 
+    # A stray cell beside the piece: read, and the piece is still named.
     stray = tracker().update(render(piece | {(7, 7): GREEN_O}))
-    assert not stray.board_visible
+    assert stray.board_visible
+    assert stray.falling is not None and stray.falling.piece == "I"
+
+    # Five cells of one colour resting on nothing are not a tetromino.
+    slab = tracker().update(render({(4, c): BLUE_I for c in range(5)}))
+    assert not slab.board_visible
+    assert slab.refused_because == "more than a tetromino is resting on nothing"
+
+    # Nor are nine cells over the void, however they are broken up.
+    scattered = {(2, 0), (2, 1), (4, 4), (4, 5), (6, 8), (6, 9), (8, 2), (8, 3), (8, 4)}
+    many = tracker().update(render(dict.fromkeys(scattered, GREEN_O)))
+    assert not many.board_visible
 
 
 def test_a_cover_is_a_gap_in_the_motion_evidence_too() -> None:

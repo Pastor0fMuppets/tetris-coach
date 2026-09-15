@@ -98,6 +98,11 @@ class FrameReading:
     #: the reader is constructed with ``debug=True``; empty otherwise, so
     #: an ordinary session formats nothing it will not show.
     notes: tuple[str, ...] = field(default=())
+    #: Why this frame was not accepted, in one phrase, for a caller that
+    #: has to tell the user why the coach has gone quiet. ``None`` on an
+    #: accepted frame. Diagnostics only: nothing in the hint policy reads
+    #: it, and a reader that has nothing to say leaves it None.
+    refused_because: str | None = None
 
     @property
     def inputs(self) -> tuple[str | None, tuple[int, ...], str | None]:
@@ -284,6 +289,10 @@ class ShapeVision:
                 stack_rows=held.stack_rows,
                 next_piece=held.next_piece,
                 notes=tuple(notes),
+                refused_because=(
+                    f"the confidence gate scored this frame {confidence:.2f}, "
+                    f"under {self._min_confidence}"
+                ),
             )
         # Drop what the capture read under the preview box: confidence above
         # was judged on the full grid, but neither the tracker nor the debug
@@ -427,6 +436,7 @@ class ColourVision:
             next_piece=report.next_piece,
             events=tuple(_COLOUR_EVENTS[event] for event in report.events),
             notes=tuple(notes),
+            refused_because=report.refused_because,
         )
 
 
