@@ -214,6 +214,11 @@ class GameStateTracker:
         cause one. Measured on tests/fixtures/spawn_latency: the gate
         rejects 00127-00157 (31 captures, ~2.1 s) and the headline flip on
         00158 used to be dated against 00126, 32 captures earlier.
+
+        Separate from the private ``_observe_preview`` :meth:`update`
+        calls, so that overriding this on an instance (as the fixture
+        replays do, to log what the box said on a rejected capture)
+        cannot double-count the captures that carry a board frame too.
         """
         self._observe_preview(next_piece)
 
@@ -226,6 +231,20 @@ class GameStateTracker:
         # them there for seconds. Only a change of a KNOWN preview counts:
         # the preview reading is None whenever the box is mid-animation or
         # unreadable, and None -> X says nothing about what was dealt.
+        # ...and only a CHANGE the box holds. The preview is read by the
+        # same vision as everything else, and a single frame of it can be
+        # wrong (a fade, a flash, a piece drawn against a colour close to
+        # its own). One misread capture is not one bad flip but TWO — X ->
+        # W and then W -> X — and the second is the dangerous one: it
+        # names W, a piece the game never dealt, and applies it to
+        # whatever fragment happens to be parked at the top edge, which
+        # the structural rules had correctly refused to name. So a reading
+        # becomes the box's content only when a second consecutive
+        # readable capture agrees with it, exactly as every other
+        # observation here is debounced before it is believed; a value
+        # that comes and goes inside one capture flips nothing, in either
+        # direction. The cost is one capture of latency on a real flip,
+        # which the hint's age then carries honestly.
         # ...and only a flip the box is in a position to be REPORTING. A
         # flip says "the piece that was here has been dealt"; it does not
         # say WHEN. The box goes unreadable in bursts (mid-animation,
@@ -243,20 +262,6 @@ class GameStateTracker:
         # carried the I before it — refused; the wipe at 00152-00157
         # hides the box for 6, and the flip at 00158 names the O that the
         # wipe dealt — accepted.
-        # ...and only a CHANGE the box holds. The preview is read by the
-        # same vision as everything else, and a single frame of it can be
-        # wrong (a fade, a flash, a piece drawn against a colour close to
-        # its own). One misread capture is not one bad flip but TWO — X ->
-        # W and then W -> X — and the second is the dangerous one: it
-        # names W, a piece the game never dealt, and applies it to
-        # whatever fragment happens to be parked at the top edge, which
-        # the structural rules had correctly refused to name. So a reading
-        # becomes the box's content only when a second consecutive
-        # readable capture agrees with it, exactly as every other
-        # observation here is debounced before it is believed; a value
-        # that comes and goes inside one capture flips nothing, in either
-        # direction. The cost is one capture of latency on a real flip,
-        # which the hint's age then carries honestly.
         self._hint_age += 1
         if self._preview_pending is not None:
             self._pending_age += 1

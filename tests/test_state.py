@@ -713,6 +713,26 @@ class TestTheEnteringPieceHint:
         assert tracker.committed.falling_piece is None
         assert tracker._entering_hint is None
 
+    def test_a_deal_inside_a_rejected_burst_names_the_piece_that_entered(self) -> None:
+        # The straddle, end to end, in the form it actually reaches the
+        # tracker. The board's confidence gate rejects a burst of captures
+        # (a wipe, a flash), the consumer returns before update() on every
+        # one of them, and inside the burst a whole deal happens: the J is
+        # dealt and locks, and an S is dealt. The first frame the gate
+        # accepts afterwards shows the S at the top edge and a box reading
+        # T. Reading that as one flip (J -> T) names the J — a piece that
+        # locked inside the burst — and pins it on the S. With the box read
+        # on the rejected captures too, both flips are seen in order and
+        # the hint names the S that is actually on screen.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "J")
+        assert feed(tracker, self.STACK, "J") == []  # the box holds the J
+        for piece in ("S", "S", "S", "S", "T", "T", "T"):
+            tracker.observe_preview(piece)  # rejected captures, box readable
+        entering = merge(self.STACK, self.FRAGMENT)
+        assert feed(tracker, entering, "T", times=2) == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "S"
+
     def test_a_hint_whose_own_deal_ended_under_it_names_no_later_fragment(self) -> None:
         # A hint is evidence about ONE deal and expires with it. The
         # preview reports a deal by changing at the moment the new piece
