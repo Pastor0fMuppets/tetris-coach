@@ -61,6 +61,25 @@ def test_cli_demo_runs_on_12_rows(capsys: pytest.CaptureFixture[str]) -> None:
     assert len(board_lines) == 12
 
 
+def test_cli_tracker_flag_names_the_tracker_and_defaults_to_colour() -> None:
+    from tetris_coach.app import CoachConfig
+    from tetris_coach.cli import build_parser, coach_config
+
+    parser = build_parser()
+    assert coach_config(parser.parse_args([])).tracker == "colour"
+    assert CoachConfig().tracker == "colour"  # the library default agrees
+    assert coach_config(parser.parse_args(["--tracker", "shape"])).tracker == "shape"
+
+
+def test_cli_rejects_a_tracker_that_does_not_exist(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A typo must fail at the flag, not three modules later.
+    with pytest.raises(SystemExit):
+        main(["--tracker", "wobble"])
+    assert "invalid choice" in capsys.readouterr().err
+
+
 def test_cli_rejects_too_few_rows(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--demo", "--rows", "4"]) == 2
     assert "--rows must be at least 5" in capsys.readouterr().err
@@ -138,11 +157,11 @@ class TestCoachEngine:
         # have. Before the retraction it stayed up for the rest of the
         # piece's tenure at the top edge, because the frame that refutes a
         # hint names no replacement and so holds the committed state.
-        from tetris_coach.app import CoachEngine
+        from tetris_coach.app import CoachConfig, CoachEngine
         from tetris_coach.core.pieces import ROTATIONS
 
         style = STYLES[0]
-        engine = CoachEngine()
+        engine = CoachEngine(CoachConfig(tracker="shape"))
 
         def frame(cells: tuple[tuple[int, int], ...], nxt: str):  # type: ignore[no-untyped-def]
             return engine.process_frame(
@@ -163,10 +182,10 @@ class TestCoachEngine:
         assert frame(((0, 0), (1, 0)), "I") is None
 
     def test_engine_produces_hint_from_synthetic_frames(self) -> None:
-        from tetris_coach.app import CoachEngine
+        from tetris_coach.app import CoachConfig, CoachEngine
         from tetris_coach.core.pieces import ROTATIONS
 
-        engine = CoachEngine()
+        engine = CoachEngine(CoachConfig(tracker="shape"))
         grid = np.zeros((20, 10), dtype=bool)
         # A falling T near the top of an otherwise empty board.
         for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):
@@ -188,7 +207,7 @@ class TestCoachEngine:
         # F9: the preview image is byte-identical on most frames; the full
         # identify_next pass must run only when the pixels change.
         import tetris_coach.vision.readers as readers_module
-        from tetris_coach.app import CoachEngine
+        from tetris_coach.app import CoachConfig, CoachEngine
         from tetris_coach.core.pieces import ROTATIONS
 
         calls = 0
@@ -200,7 +219,7 @@ class TestCoachEngine:
             return real(image, **kwargs)
 
         monkeypatch.setattr(readers_module, "identify_next", counting)
-        engine = CoachEngine()
+        engine = CoachEngine(CoachConfig(tracker="shape"))
         grid = np.zeros((20, 10), dtype=bool)
         for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):
             grid[r, c] = True
@@ -233,7 +252,7 @@ class TestCoachEngine:
         from tetris_coach.app import CoachConfig, CoachEngine, render_debug_frame
         from tetris_coach.core.pieces import ROTATIONS
 
-        engine = CoachEngine(CoachConfig(debug=True))
+        engine = CoachEngine(CoachConfig(debug=True, tracker="shape"))
         grid = np.zeros((20, 10), dtype=bool)
         for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):
             grid[r, c] = True
@@ -268,10 +287,10 @@ class TestCoachEngine:
         assert "confidence: 0.42" in text
 
     def test_engine_flips_to_precomputed_hint_on_lock(self) -> None:
-        from tetris_coach.app import CoachEngine
+        from tetris_coach.app import CoachConfig, CoachEngine
         from tetris_coach.core.pieces import ROTATIONS
 
-        engine = CoachEngine()
+        engine = CoachEngine(CoachConfig(tracker="shape"))
         style = STYLES[2]
 
         falling_t = np.zeros((20, 10), dtype=bool)
@@ -318,7 +337,7 @@ class TestFrameWorker:
     NEXT_RECT = Rect(200, 0, 96, 64)
 
     def _worker(self):  # type: ignore[no-untyped-def]
-        from tetris_coach.app import CoachEngine, FrameWorker
+        from tetris_coach.app import CoachConfig, CoachEngine, FrameWorker
         from tetris_coach.core.pieces import ROTATIONS
 
         style = STYLES[0]
@@ -333,7 +352,9 @@ class TestFrameWorker:
             def grab(self, rect: Rect) -> np.ndarray:
                 return board_image if rect == board_rect else next_image
 
-        return FrameWorker(CoachEngine(), Source(), board_rect, next_rect)
+        return FrameWorker(
+            CoachEngine(CoachConfig(tracker="shape")), Source(), board_rect, next_rect
+        )
 
     def test_tick_processes_frames_and_reports_hint(self) -> None:
         worker = self._worker()
@@ -351,6 +372,7 @@ class TestFrameWorker:
     ) -> None:
         from tetris_coach.app import (
             MAX_CONSECUTIVE_TICK_FAILURES,
+            CoachConfig,
             CoachEngine,
             FrameWorker,
         )
@@ -359,7 +381,9 @@ class TestFrameWorker:
             def grab(self, rect: Rect) -> np.ndarray:
                 raise OSError("display gone")
 
-        worker = FrameWorker(CoachEngine(), Broken(), self.BOARD_RECT, None)
+        worker = FrameWorker(
+            CoachEngine(CoachConfig(tracker="shape")), Broken(), self.BOARD_RECT, None
+        )
         results = [worker.run_tick() for _ in range(MAX_CONSECUTIVE_TICK_FAILURES)]
         assert all(not r.ok and r.hint is None for r in results)
         # Every failed tick below the cap asks the loop to carry on ...
@@ -403,9 +427,9 @@ class TestCoachEngineScenarios:
     CELL = 14
 
     def _engine_with_spy(self):  # type: ignore[no-untyped-def]
-        from tetris_coach.app import CoachEngine
+        from tetris_coach.app import CoachConfig, CoachEngine
 
-        engine = CoachEngine()
+        engine = CoachEngine(CoachConfig(tracker="shape"))
         events_log: list[GameEvent] = []
         original = engine.tracker.update
 
@@ -714,9 +738,9 @@ class TestBackgroundMemoryScenarios:
 
     @staticmethod
     def _engine_with_spy():  # type: ignore[no-untyped-def]
-        from tetris_coach.app import CoachEngine
+        from tetris_coach.app import CoachConfig, CoachEngine
 
-        engine = CoachEngine()
+        engine = CoachEngine(CoachConfig(tracker="shape"))
         events_log: list[GameEvent] = []
         original = engine.tracker.update
 
@@ -814,7 +838,7 @@ class TestTwelveRowEngine:
     def _engine(self, **overrides):  # type: ignore[no-untyped-def]
         from tetris_coach.app import CoachConfig, CoachEngine
 
-        return CoachEngine(CoachConfig(rows=self.ROWS, **overrides))
+        return CoachEngine(CoachConfig(rows=self.ROWS, tracker="shape", **overrides))
 
     def _process(self, engine, style, rows, next_piece, times=1):  # type: ignore[no-untyped-def]
         from tetris_coach.core.pieces import ROTATIONS
@@ -915,7 +939,7 @@ class TestStaleHintWithdrawal:
         # CoachConfig.max_stale_frames, chosen from measured run lengths.
         from tetris_coach.app import CoachConfig, CoachEngine
 
-        return CoachEngine(CoachConfig(max_stale_frames=max_stale))
+        return CoachEngine(CoachConfig(max_stale_frames=max_stale, tracker="shape"))
 
     def _hinted_board(self, engine):  # type: ignore[no-untyped-def]
         from tetris_coach.core.pieces import ROTATIONS

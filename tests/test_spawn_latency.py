@@ -135,7 +135,7 @@ class Tick:
 def replay() -> tuple[Tick, ...]:
     """Feed the whole window through CoachEngine, wired as app.run wires it."""
     covered = compute_overlap_mask(SESSION_BOARD, SESSION_NEXT, rows=ROWS)
-    engine = CoachEngine(CoachConfig(rows=ROWS), unobservable_cells=covered)
+    engine = CoachEngine(CoachConfig(rows=ROWS, tracker="shape"), unobservable_cells=covered)
     update = engine.tracker.update
     seen: list[GameEvent] = []
     handed: list[np.ndarray] = []
@@ -233,7 +233,7 @@ class Replay(NamedTuple):
 def replay_window() -> Replay:
     """The window again, on a fresh engine, reading the preview as patched."""
     covered = compute_overlap_mask(SESSION_BOARD, SESSION_NEXT, rows=ROWS)
-    engine = CoachEngine(CoachConfig(rows=ROWS), unobservable_cells=covered)
+    engine = CoachEngine(CoachConfig(rows=ROWS, tracker="shape"), unobservable_cells=covered)
     events: Counter[GameEvent] = Counter()
     update = engine.tracker.update
 
@@ -269,7 +269,7 @@ def hint_life() -> list[HintLife]:
     MEASURABLY does here rather than against a description of it.
     """
     covered = compute_overlap_mask(SESSION_BOARD, SESSION_NEXT, rows=ROWS)
-    engine = CoachEngine(CoachConfig(rows=ROWS), unobservable_cells=covered)
+    engine = CoachEngine(CoachConfig(rows=ROWS, tracker="shape"), unobservable_cells=covered)
     out: list[HintLife] = []
     for number in frame_numbers():
         preview = FIXTURES / f"next_{number}.png"

@@ -48,6 +48,12 @@ def totals(tracker: str) -> Shown:
     return overall(scores(), tracker)
 
 
+def test_the_default_tracker_is_the_colour_one() -> None:
+    # The whole point of the adoption: what a user gets without a flag.
+    assert CoachConfig().tracker == "colour"
+    assert TRACKERS[0] == "colour"
+
+
 @pytest.mark.parametrize(
     ("tracker", "hints", "misnamed", "stale", "moves", "hintless"),
     [

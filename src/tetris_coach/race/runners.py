@@ -91,7 +91,7 @@ def next_crops(root: Path, spec: WindowSpec, names: list[str]) -> list[NDArray[n
 
 def run_shipped(root: Path, spec: WindowSpec) -> list[FrameOutput]:
     """Replay a window through ``CoachEngine``, wired as ``app.run`` wires it."""
-    config = CoachConfig(rows=spec.rows)
+    config = CoachConfig(rows=spec.rows, tracker="shape")
     engine = CoachEngine(config, unobservable_cells=spec.geometry().unobservable)
     names, boards = load_window(root, spec)
     crops = next_crops(root, spec, names)

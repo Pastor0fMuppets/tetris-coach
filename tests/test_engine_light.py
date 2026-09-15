@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from tetris_coach.app import CoachEngine
+from tetris_coach.app import CoachConfig, CoachEngine
 from tetris_coach.vision.state import GameEvent
 
 from .boards import EMPTY, grid_of, merge, piece_cells, rows_of
@@ -25,7 +25,7 @@ CELL = 20
 
 
 def _engine_with_spy():  # type: ignore[no-untyped-def]
-    engine = CoachEngine()
+    engine = CoachEngine(CoachConfig(tracker="shape"))
     events_log: list[GameEvent] = []
     original = engine.tracker.update
 

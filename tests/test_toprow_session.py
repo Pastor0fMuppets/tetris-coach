@@ -245,7 +245,7 @@ class TestEngineOverTheRealSession:
     @staticmethod
     def _engine_with_spy():  # type: ignore[no-untyped-def]
         covered = compute_overlap_mask(SESSION_BOARD, SESSION_NEXT, rows=ROWS)
-        engine = CoachEngine(CoachConfig(rows=ROWS), unobservable_cells=covered)
+        engine = CoachEngine(CoachConfig(rows=ROWS, tracker="shape"), unobservable_cells=covered)
         accepted: list[np.ndarray] = []
         original = engine.tracker.update
 

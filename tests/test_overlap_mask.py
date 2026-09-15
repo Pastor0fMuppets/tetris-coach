@@ -116,7 +116,7 @@ class TestWholeTopRowCovered:
         warning = selection_warning(mask)
         assert warning is not None
         assert "next-piece box covers the whole top row" in warning
-        engine = CoachEngine(CoachConfig(rows=12), unobservable_cells=mask)
+        engine = CoachEngine(CoachConfig(rows=12, tracker="shape"), unobservable_cells=mask)
         image = np.zeros((240, 200, 3), dtype=np.uint8)
         image[:, :] = (245, 240, 228)
         image[80:, :] = (150, 140, 120)
@@ -149,7 +149,7 @@ class TestEngineTreatsPreviewCellsAsUnknown:
     @staticmethod
     def _engine_with_spy(covered: bool):  # type: ignore[no-untyped-def]
         cells = compute_overlap_mask(ROAS_BOARD, ROAS_NEXT, rows=12) if covered else frozenset()
-        engine = CoachEngine(CoachConfig(rows=12), unobservable_cells=cells)
+        engine = CoachEngine(CoachConfig(rows=12, tracker="shape"), unobservable_cells=cells)
         events_log: list[GameEvent] = []
         original = engine.tracker.update
 
@@ -238,7 +238,7 @@ class TestRealFixtureFrames:
         covered = compute_overlap_mask(ROAS_BOARD, ROAS_NEXT, rows=12)
         assert covered == frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
         # Reuse the engine's own blanking so the fixture pins the real path.
-        engine = CoachEngine(CoachConfig(rows=12), unobservable_cells=covered)
+        engine = CoachEngine(CoachConfig(rows=12, tracker="shape"), unobservable_cells=covered)
 
         any_contaminated = False
         for name in self.FRAMES:
@@ -295,7 +295,9 @@ class TestPieceRestingUnderThePreview:
         return render_board(grid_of(rows), self.STYLE, cell_size=self.CELL)
 
     def _run(self):  # type: ignore[no-untyped-def]
-        engine = CoachEngine(CoachConfig(rows=self.ROWS), unobservable_cells=self.COVERED)
+        engine = CoachEngine(
+            CoachConfig(rows=self.ROWS, tracker="shape"), unobservable_cells=self.COVERED
+        )
         events: list[GameEvent] = []
         original = engine.tracker.update
 
@@ -350,7 +352,9 @@ class TestSolverNeverPlansIntoCoveredCells:
     COVERED = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
 
     def _engine(self) -> CoachEngine:
-        return CoachEngine(CoachConfig(rows=self.ROWS), unobservable_cells=self.COVERED)
+        return CoachEngine(
+            CoachConfig(rows=self.ROWS, tracker="shape"), unobservable_cells=self.COVERED
+        )
 
     @staticmethod
     def _reaches_covered_columns(board: Board, piece: str) -> bool:
@@ -382,6 +386,6 @@ class TestSolverNeverPlansIntoCoveredCells:
 
     def test_believed_stack_under_the_box_is_not_re_derived(self) -> None:
         # An engine with no covered cells (the ordinary game) is untouched.
-        engine = CoachEngine(CoachConfig(rows=self.ROWS))
+        engine = CoachEngine(CoachConfig(rows=self.ROWS, tracker="shape"))
         stack = rows_of([(r, 8) for r in range(2, self.ROWS)], height=self.ROWS)
         assert engine._solver_board(stack).rows == stack

@@ -90,12 +90,28 @@ class CoachConfig:
     # committed one, so only a contiguous run can replay live tracking
     # offline. ~700 frames is ~47 s at the default 15 fps.
     dump_limit: int = 700
-    # Which tracker reads the frames: "shape" is the shipped one, which
-    # matches binary occupancy against one committed stack memory;
-    # "colour" names a piece by the colour it is drawn in, per cell and per
-    # frame. Both are wired through the same reading (vision/readers.py) so
-    # everything the user sees is decided by the same policy either way.
-    tracker: str = "shape"
+    # Which tracker reads the frames. "colour" names a piece by the colour
+    # it is drawn in, cell by cell, with the board re-derived from every
+    # frame; "shape" is the shipped one, which matches binary occupancy
+    # against one committed stack memory. Both are wired through the same
+    # reading (vision/readers.py), so everything the user sees is decided
+    # by the same policy either way.
+    #
+    # The default is the colour reader because of what the two put ON
+    # SCREEN over the six committed windows, replayed through this very
+    # class (`python -m tetris_coach.race`, pinned in
+    # tests/test_engine_race.py): over 422 frames it drew 0 hints for the
+    # wrong piece against the shipped reader's 6, was never late (median 0
+    # frames from a piece appearing to its hint, against 1 and a worst case
+    # of 3), never moved a target mid-flight against 3, and left the
+    # overlay blank on 7 frames against 25.
+    #
+    # "shape" stays reachable as an escape hatch (--tracker shape). The two
+    # fail on different evidence -- the colour reader refuses a frame whose
+    # cells are not drawn flat, the shipped one a frame its confidence gate
+    # dislikes -- so a theme or a game the colour rules cannot read is a
+    # flag away from the old behaviour rather than a rebuild.
+    tracker: str = "colour"
 
 
 # The overlay loop exits after this many CONSECUTIVE failed ticks (~3 s at

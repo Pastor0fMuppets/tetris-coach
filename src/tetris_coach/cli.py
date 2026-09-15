@@ -14,6 +14,7 @@ import argparse
 import random
 import sys
 import time
+from typing import TYPE_CHECKING
 
 from .capture.screen import Rect
 from .core.board import DEFAULT_HEIGHT, WIDTH, Board
@@ -21,6 +22,9 @@ from .core.pieces import PIECES
 from .region_select import MIN_BOARD_SIZE, MIN_PREVIEW_SIZE
 from .solver.search import Move, best_move
 from .vision.pieces_vision import SPAWN_ROWS
+
+if TYPE_CHECKING:  # pragma: no cover - import-time cost, not behaviour
+    from .app import CoachConfig
 
 
 def _rect_error(rect: Rect, min_size: tuple[int, int], what: str) -> str | None:
@@ -96,9 +100,29 @@ def run_demo(pieces: int, seed: int, delay: float, rows: int = DEFAULT_HEIGHT) -
     return 0
 
 
+def coach_config(args: argparse.Namespace) -> CoachConfig:
+    """The engine configuration these arguments ask for.
+
+    Split out of :func:`_run_overlay`, which cannot run off macOS, so that
+    what the flags MEAN is testable headlessly -- ``--tracker`` in
+    particular, since it decides which tracker reads every frame.
+    """
+    from .app import CoachConfig
+
+    return CoachConfig(
+        poll_rate=args.poll_rate,
+        hint_color=args.hint_color,
+        rows=args.rows,
+        debug=args.debug,
+        dump_dir=args.dump_frames,
+        dump_limit=args.dump_limit,
+        tracker=args.tracker,
+    )
+
+
 def _run_overlay(args: argparse.Namespace) -> int:  # pragma: no cover - macOS only
     try:
-        from .app import CoachConfig, run
+        from .app import run
         from .region_select import select_region
     except Exception as exc:  # noqa: BLE001
         print(f"Failed to start GUI mode: {exc}", file=sys.stderr)
@@ -130,19 +154,11 @@ def _run_overlay(args: argparse.Namespace) -> int:  # pragma: no cover - macOS o
         return 1
     print(f"Board region: {board_rect}", flush=True)
     print(f"Next-piece region: {next_rect}", flush=True)
-    config = CoachConfig(
-        poll_rate=args.poll_rate,
-        hint_color=args.hint_color,
-        rows=args.rows,
-        debug=args.debug,
-        dump_dir=args.dump_frames,
-        dump_limit=args.dump_limit,
-    )
-    run(board_rect, next_rect, config=config)
+    run(board_rect, next_rect, config=coach_config(args))
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tetris-coach",
         description="Game-agnostic Tetris training overlay (macOS) and solver demo.",
@@ -180,6 +196,18 @@ def main(argv: list[str] | None = None) -> int:
         "(grid, falling/next piece, confidence, events) per committed frame",
     )
     parser.add_argument(
+        "--tracker",
+        choices=("colour", "shape"),
+        default="colour",
+        help="overlay: which tracker reads the frames. colour (the default) "
+        "names each piece by the colour it is drawn in and re-derives the "
+        "board from every frame; shape matches occupancy against a committed "
+        "stack memory. Measured on this project's six capture windows the "
+        "colour reader drew no hint for the wrong piece where shape drew six, "
+        "and was never late where shape was up to 3 frames behind; shape is "
+        "kept as an escape hatch for a theme the colour rules cannot read",
+    )
+    parser.add_argument(
         "--dump-frames",
         metavar="DIR",
         default=None,
@@ -193,7 +221,11 @@ def main(argv: list[str] | None = None) -> int:
         help="overlay: how many consecutive frames --dump-frames saves "
         "before thinning to every 100th (default 700, ~47s at 15 fps)",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     if args.rows < SPAWN_ROWS + 1:
         print(

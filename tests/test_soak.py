@@ -139,10 +139,10 @@ def test_tracker_soak_self_play(rows: int) -> None:
 
 
 def test_engine_soak_self_play() -> None:
-    from tetris_coach.app import CoachEngine
+    from tetris_coach.app import CoachConfig, CoachEngine
 
     style = STYLES[2]
-    engine = CoachEngine()
+    engine = CoachEngine(CoachConfig(tracker="shape"))
     events_log: list[GameEvent] = []
     original = engine.tracker.update
 
