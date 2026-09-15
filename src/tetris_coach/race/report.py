@@ -6,6 +6,13 @@ One block per window plus an overall block, two rows each. Every number
 is a count or a percentage of a stated denominator -- nothing here is a
 score out of ten, because the point of the race is to be able to say WHICH
 frames a tracker got wrong, not how it feels.
+
+``frames`` is the SCORED frames of a window, not its length: both trackers
+are replayed from the window's first frame, and the first
+``measures.WARMUP`` of them are scored for neither. See that module for why
+-- briefly, every window is a mid-session excerpt, so scoring the head
+charges a design that carries memory across frames for a bootstrap the live
+session paid once before the capture began.
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tetris_coach.race.measures import (
+    WARMUP,
     Identity,
     Score,
     load_truth,
@@ -20,7 +28,7 @@ from tetris_coach.race.measures import (
 from tetris_coach.race.measures import (
     score as score_window,
 )
-from tetris_coach.race.runners import RUNNERS
+from tetris_coach.race.runners import RUNNERS, FrameOutput
 from tetris_coach.truth.windows import CONSECUTIVE, WindowSpec
 
 DEFAULT_FIXTURES = Path(__file__).resolve().parents[3] / "tests" / "fixtures"
@@ -36,20 +44,44 @@ HEADER = (
 )
 
 
+def replays(
+    fixtures: Path = DEFAULT_FIXTURES,
+    windows: tuple[WindowSpec, ...] = CONSECUTIVE,
+) -> dict[str, dict[str, list[FrameOutput]]]:
+    """Every window through both trackers, unscored.
+
+    Split out from :func:`race` so the same replay can be scored under more
+    than one warm-up without paying for the replay again -- which is how
+    the verdict's insensitivity to that choice is checked.
+    """
+    return {
+        spec.name: {name: runner(fixtures, spec) for name, runner in RUNNERS.items()}
+        for spec in windows
+    }
+
+
+def score_replays(
+    outputs: dict[str, dict[str, list[FrameOutput]]],
+    warmup: int = WARMUP,
+) -> dict[str, dict[str, Score]]:
+    """Score an existing set of replays under one warm-up."""
+    truth = load_truth()
+    return {
+        window: {
+            tracker: score_window(tracker, frames, truth[window], warmup)
+            for tracker, frames in trackers.items()
+        }
+        for window, trackers in outputs.items()
+    }
+
+
 def race(
     fixtures: Path = DEFAULT_FIXTURES,
     windows: tuple[WindowSpec, ...] = CONSECUTIVE,
+    warmup: int = WARMUP,
 ) -> dict[str, dict[str, Score]]:
     """Replay every window through both trackers and score them."""
-    truth = load_truth()
-    out: dict[str, dict[str, Score]] = {}
-    for spec in windows:
-        window = truth[spec.name]
-        out[spec.name] = {
-            name: score_window(name, runner(fixtures, spec), window)
-            for name, runner in RUNNERS.items()
-        }
-    return out
+    return score_replays(replays(fixtures, windows), warmup)
 
 
 def overall(scores: dict[str, dict[str, Score]], tracker: str) -> Score:
@@ -66,6 +98,7 @@ def overall(scores: dict[str, dict[str, Score]], tracker: str) -> Score:
             silent=sum(part.identity.silent for part in parts),
         ),
     )
+    total.warmup = sum(part.warmup for part in parts)
     total.board_right = sum(part.board_right for part in parts)
     total.refused_frames = sum(part.refused_frames for part in parts)
     total.worst_wrong_run = max(part.worst_wrong_run for part in parts)
@@ -101,7 +134,12 @@ def row(score: Score) -> str:
 
 def table(scores: dict[str, dict[str, Score]]) -> str:
     """The head-to-head table, per window and overall."""
-    lines = [HEADER, "-" * len(HEADER)]
+    warmed = {part.warmup for window in scores.values() for part in window.values()}
+    head = (
+        f"scored from frame {min(warmed)} of each window; "
+        f"the head is replayed into both trackers and scored for neither"
+    )
+    lines = [head, "", HEADER, "-" * len(HEADER)]
     for window in scores.values():
         for tracker in RUNNERS:
             lines.append(row(window[tracker]))
@@ -155,7 +193,17 @@ def main(fixtures: Path = DEFAULT_FIXTURES) -> None:  # pragma: no cover
     print(stuck_detail(scores))
 
 
-__all__ = ["main", "overall", "race", "row", "streak_detail", "stuck_detail", "table"]
+__all__ = [
+    "main",
+    "overall",
+    "race",
+    "replays",
+    "row",
+    "score_replays",
+    "streak_detail",
+    "stuck_detail",
+    "table",
+]
 
 if __name__ == "__main__":  # pragma: no cover
     main()

@@ -4,19 +4,28 @@ These are the numbers the head-to-head verdict rests on, so they are
 asserted rather than printed. Run ``python -m tetris_coach.race`` for the
 table; this file is what stops it drifting.
 
-Read the numbers as: of the 517 frames the oracle will be quoted on, how
+Read the numbers as: of the 397 frames the oracle will be quoted on, how
 many does each tracker name right, name WRONG, or not name at all.
 
-    shipped     412 right    7 wrong   98 silent   board right 439/517
-    prototype   502 right    0 wrong   15 silent   board right 517/517
+    shipped     366 right    6 wrong   25 silent   board right 365/397
+    prototype   397 right    0 wrong    0 silent   board right 397/397
 
-The shipped tracker's seven wrong names are each exactly one frame long,
-and each is the frame a new piece arrives on, where its committed state
-still holds the piece that just locked. It is a lag, not a guess -- worth
-saying plainly, because the user's report was that it "often guesses the
-piece wrong" and on THESE windows it does not guess wrong at all. What it
-does instead is go quiet: 98 frames with no piece named, in runs of up to
-23.
+Scored from frame :data:`WARMUP` of each window, because every window is a
+mid-session excerpt and both trackers are built fresh at its first frame.
+The uncorrected race -- scoring from frame 0 -- reads 412/7/98 and 439/517
+against 502/0/15 and 517/517, and roughly HALF that gap is the harness
+rather than the representation: 73 of the shipped tracker's 98 silences and
+46 of its 78 wrong boards are in a window's first twenty frames.
+``test_the_window_head_is_a_bootstrap_tax_not_a_result`` pins both readings
+side by side so the correction cannot be quietly undone in either
+direction.
+
+The shipped tracker's six wrong names are each exactly one frame long, and
+each is the frame a new piece arrives on, where its committed state still
+holds the piece that just locked. It is a lag, not a guess -- worth saying
+plainly, because the user's report was that it "often guesses the piece
+wrong" and on THESE windows it does not guess wrong at all. What it does
+instead is go quiet.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ import pytest
 
 from tetris_coach.race.measures import (
     STUCK_FLOOR,
+    WARMUP,
     Episode,
     TruthFrame,
     TruthWindow,
@@ -35,7 +45,7 @@ from tetris_coach.race.measures import (
     measurable,
     score,
 )
-from tetris_coach.race.report import overall, race, table
+from tetris_coach.race.report import overall, replays, score_replays, table
 from tetris_coach.race.runners import FrameOutput
 
 WINDOWS = (
@@ -49,22 +59,43 @@ WINDOWS = (
 
 
 @lru_cache(maxsize=1)
+def raw():  # type: ignore[no-untyped-def]
+    """Both trackers over every window, replayed once and scored never.
+
+    Cached because the replay is the expensive half and several tests want
+    it scored under a different warm-up.
+    """
+    return replays()
+
+
+@lru_cache(maxsize=8)
+def at(warmup: int):  # type: ignore[no-untyped-def]
+    return score_replays(raw(), warmup)
+
+
 def scores() -> dict[str, dict[str, object]]:
-    return race()  # type: ignore[return-value]
+    return at(WARMUP)  # type: ignore[no-any-return]
 
 
 def part(window: str, tracker: str):  # type: ignore[no-untyped-def]
     return scores()[window][tracker]
 
 
-def test_both_trackers_see_every_frame_of_every_window() -> None:
-    """Same frames, same order, both runners -- or the race means nothing."""
+def test_both_trackers_see_every_frame_and_are_scored_on_the_same_ones() -> None:
+    """Same frames, same order, same warm-up -- or the race means nothing."""
     truth = load_truth()
+    outputs = raw()
     for window in WINDOWS:
         shipped = part(window, "shipped")
         prototype = part(window, "prototype")
-        assert shipped.frames == prototype.frames == len(truth[window].frames)
-    assert sum(part(w, "shipped").frames for w in WINDOWS) == 542
+        # Replayed whole...
+        assert len(outputs[window]["shipped"]) == len(truth[window].frames)
+        assert len(outputs[window]["prototype"]) == len(truth[window].frames)
+        # ...and scored from the same frame of it.
+        assert shipped.warmup == prototype.warmup == WARMUP
+        assert shipped.frames == prototype.frames == len(truth[window].frames) - WARMUP
+    assert sum(len(outputs[w]["shipped"]) for w in WINDOWS) == 542
+    assert sum(part(w, "shipped").frames for w in WINDOWS) == 422
 
 
 def test_the_episodes_are_the_pieces_the_oracle_saw() -> None:
@@ -111,17 +142,78 @@ def test_only_a_piece_change_can_time_a_tracker() -> None:
 
 @pytest.mark.parametrize(
     ("tracker", "right", "wrong", "silent"),
-    [("shipped", 412, 7, 98), ("prototype", 502, 0, 15)],
+    [("shipped", 366, 6, 25), ("prototype", 397, 0, 0)],
 )
 def test_identity_over_every_window(tracker: str, right: int, wrong: int, silent: int) -> None:
     """The headline: who names the falling piece, and who names it wrong."""
     total = overall(scores(), tracker)  # type: ignore[arg-type]
-    assert total.identity.judged == 517
+    assert total.identity.judged == 397
     assert (total.identity.correct, total.identity.wrong, total.identity.silent) == (
         right,
         wrong,
         silent,
     )
+
+
+def test_the_window_head_is_a_bootstrap_tax_not_a_result() -> None:
+    """Both readings, side by side, so the correction cannot be undone quietly.
+
+    Scored from frame 0 the shipped tracker reads 412/517 right and 439/517
+    board. Scored from frame 20 it reads 366/397 and 365/397. The prototype
+    barely moves. The difference is not a fix to either tracker: it is six
+    fresh constructions of a design that carries state across frames, in
+    six excerpts that each begin in the middle of a session.
+
+    That the head is where the shipped tracker's trouble lives, rather than
+    trouble being uniform and the head merely shorter, is the whole claim,
+    so it is asserted directly: 73 of its 98 silences are in the first
+    twenty frames of a window.
+    """
+    cold, warm = at(0), at(WARMUP)
+    cold_shipped, warm_shipped = overall(cold, "shipped"), overall(warm, "shipped")
+    cold_proto, warm_proto = overall(cold, "prototype"), overall(warm, "prototype")
+
+    assert (cold_shipped.identity.correct, cold_shipped.identity.judged) == (412, 517)
+    assert cold_shipped.board_right == 439
+    assert (cold_proto.identity.correct, cold_proto.identity.judged) == (502, 517)
+    assert cold_proto.board_right == 517
+
+    # The head holds 73 of 98 silent frames and 46 of 78 wrong boards.
+    assert cold_shipped.identity.silent - warm_shipped.identity.silent == 73
+    cold_wrong_board = cold_shipped.identity.judged - cold_shipped.board_right
+    warm_wrong_board = warm_shipped.identity.judged - warm_shipped.board_right
+    assert (cold_wrong_board, warm_wrong_board) == (78, 32)
+
+    # Roughly half the published identity gap was the harness. The prototype
+    # still wins on the corrected measure, by about half as much.
+    cold_gap = cold_proto.identity.rate(cold_proto.identity.correct) - cold_shipped.identity.rate(
+        cold_shipped.identity.correct
+    )
+    warm_gap = warm_proto.identity.rate(warm_proto.identity.correct) - warm_shipped.identity.rate(
+        warm_shipped.identity.correct
+    )
+    assert round(cold_gap, 1) == 17.4
+    assert round(warm_gap, 1) == 7.8
+    assert warm_gap > 0, "the prototype still wins once the harness is corrected"
+
+
+@pytest.mark.parametrize("warmup", [15, 20, 25, 30])
+def test_the_warm_up_length_does_not_decide_the_verdict(warmup: int) -> None:
+    """Anywhere the head effect is spent, the same thing is true.
+
+    A correction chosen to produce an answer is not a correction. The
+    shipped tracker sits between 90% and 93% and the prototype at 100% for
+    every warm-up from a second to two seconds of capture, so the number 20
+    is doing no work beyond naming where the bootstrap ends.
+    """
+    shipped = overall(at(warmup), "shipped")  # type: ignore[arg-type]
+    prototype = overall(at(warmup), "prototype")  # type: ignore[arg-type]
+    right = shipped.identity.rate(shipped.identity.correct)
+    board = 100.0 * shipped.board_right / shipped.identity.judged
+    assert 90.0 <= right <= 93.0, right
+    assert 90.0 <= board <= 92.0, board
+    assert prototype.identity.correct == prototype.identity.judged
+    assert prototype.board_right == prototype.identity.judged
 
 
 def test_no_wrong_name_survives_a_single_frame_on_either_tracker() -> None:
@@ -137,37 +229,48 @@ def test_no_wrong_name_survives_a_single_frame_on_either_tracker() -> None:
 
 
 def test_silence_is_the_shipped_failure_mode_and_it_is_long() -> None:
-    """98 frames with nothing named, in runs up to 23 (1.5 s at 15 fps)."""
+    """25 frames with nothing named, in a run of 16 (1.1 s at 15 fps).
+
+    Once the window head is not scored the shipped tracker's silence is
+    smaller but it does not go away, and it is still the whole of its
+    remaining gap: 25 silent against 6 wrong. The prototype is never silent
+    on a scored frame of any window.
+    """
     shipped = overall(scores(), "shipped")  # type: ignore[arg-type]
     prototype = overall(scores(), "prototype")  # type: ignore[arg-type]
-    assert shipped.worst_silent_run == 23
-    assert prototype.worst_silent_run == 14
-    # The prototype's one long silence is absorbed_piece's cold open: the
-    # window starts on a piece whose colour no NEXT box in it ever shows,
-    # so nothing can name it until it descends far enough to be a shape.
-    assert part("absorbed_piece", "prototype").worst_silent_run == 14
-    elsewhere = [part(w, "prototype").worst_silent_run for w in WINDOWS if w != "absorbed_piece"]
-    assert max(elsewhere) == 1
+    assert shipped.worst_silent_run == 16
+    assert shipped.identity.silent == 25
+    assert prototype.worst_silent_run == 0
+    # The 16 is live_session 00119 onward, and it is NOT a cold start: it
+    # is 51 frames into the window, well past anything a warm-up excuses.
+    assert part("live_session", "shipped").worst_silent_run == 16
+    elsewhere = [part(w, "shipped").worst_silent_run for w in WINDOWS if w != "live_session"]
+    assert max(elsewhere) == 3
 
 
 @pytest.mark.parametrize(
     ("tracker", "latencies"),
-    [
-        ("shipped", [17, 1, 3, 3, 3, 1, 2, 1, 15, 1, 16, 17]),
-        ("prototype", [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 14, 0, 0, 0]),
-    ],
+    [("shipped", [1, 1, 1, 1, 3]), ("prototype", [0, 0, 0, 0, 0, 0])],
 )
 def test_latency_from_a_piece_appearing_to_it_being_named(
     tracker: str, latencies: list[int]
 ) -> None:
     """Frames each tracker waits before it can name the piece in play.
 
-    The prototype names 13 of its 14 on the frame the piece appears. The
-    shipped tracker's two misses (14 of 14 measurable episodes named, but
-    only 12 timed) are episodes it never names at all.
+    Only 6 of the 19 flights can be timed once the window head is unscored:
+    an episode that opens inside the warm-up is excluded whole, because the
+    tracker may have named it during the frames nobody is scoring and its
+    latency would then read as zero for free. That cost is real and it
+    falls on the prototype's headline as much as the shipped tracker's --
+    it is what an honest correction costs.
+
+    The prototype names all 6 on the frame the piece appears. The shipped
+    tracker times 5: one measurable episode it never names correctly at all
+    (live_session's last O, where it is silent for 16 frames).
     """
     total = overall(scores(), tracker)  # type: ignore[arg-type]
-    assert total.measurable == 14
+    assert total.measurable == 6
+    assert total.episodes == 11
     assert sorted(total.latencies) == sorted(latencies)
 
 
@@ -203,7 +306,9 @@ def test_the_freeze_detector_is_not_vacuous() -> None:
         )
         for frame in truth.frames
     ]
-    result = score("frozen", frozen, truth)
+    # Scored from frame 0: this coach has no bootstrap to excuse, it was
+    # invented frozen.
+    result = score("frozen", frozen, truth, warmup=0)
     assert result.stuck, "a coach frozen for a whole window was not caught"
     first = result.stuck[0]
     # live_session's second flight is the O that enters at 00059; a coach
@@ -212,14 +317,18 @@ def test_the_freeze_detector_is_not_vacuous() -> None:
     assert first.stale >= STUCK_FLOOR
     assert result.worst_stuck == max(run.stale for run in result.stuck)
     assert plan[1].piece == "O"
+    # And the warm-up hides a freeze only for as long as the warm-up: the
+    # same frozen coach is still caught, on the next piece change after it.
+    warmed = score("frozen", frozen, truth, warmup=WARMUP)
+    assert warmed.stuck and warmed.stuck[0].changed == "00099"
 
 
 def test_the_board_handed_to_the_solver() -> None:
     """A right name on a wrong board still draws the wrong square."""
     shipped = overall(scores(), "shipped")  # type: ignore[arg-type]
     prototype = overall(scores(), "prototype")  # type: ignore[arg-type]
-    assert prototype.board_right == 517, "the prototype's stack is the oracle's stack"
-    assert shipped.board_right == 439
+    assert prototype.board_right == 397, "the prototype's stack is the oracle's stack"
+    assert shipped.board_right == 365
     # Where the shipped board is wrong, frame by frame: 68 of the 78 are
     # runs of re-anchoring -- it begins every window believing the board
     # is empty and has to re-derive the stack from what moves, and does it
@@ -230,7 +339,7 @@ def test_the_board_handed_to_the_solver() -> None:
     assert (
         part("spawn_latency", "shipped").identity.judged
         - part("spawn_latency", "shipped").board_right
-        == 34
+        == 25
     )
 
 
@@ -251,11 +360,13 @@ def test_coverage_and_what_the_gate_costs() -> None:
     """How often each coach has nothing on screen at all."""
     shipped = overall(scores(), "shipped")  # type: ignore[arg-type]
     prototype = overall(scores(), "prototype")  # type: ignore[arg-type]
-    assert (shipped.hintless_frames, prototype.hintless_frames) == (98, 36)
-    # 79 of the shipped tracker's 542 frames never reach it: the
+    assert (shipped.hintless_frames, prototype.hintless_frames) == (25, 21)
+    # 64 of the shipped tracker's 422 scored frames never reach it: the
     # confidence gate refuses them and the previous hint stays up. The
-    # prototype has no gate, so it reads all 542.
-    assert shipped.refused_frames == 79
+    # prototype has no gate, so it reads all 422 -- and 14 of its own 21
+    # blank frames are pale_piece's browser page, where the shipped gate
+    # refuses and it does not. See test_colour_tracker_sessions.py.
+    assert shipped.refused_frames == 64
     assert prototype.refused_frames == 0
 
 

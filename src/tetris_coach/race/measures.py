@@ -26,6 +26,18 @@ BOARD     Is the stack it would hand the solver the stack that is really
           square.
 COVERAGE  How often the tracker says nothing at all.
 
+THE WINDOW HEAD IS NOT SCORED. Every committed window is a mid-session
+excerpt -- the first file in ``spawn_latency`` is ``board_00080.png`` -- but
+a tracker is constructed fresh at its first frame, so a design with
+cross-frame memory pays a once-per-session bootstrap SIX times here while a
+memoryless one pays nothing. Measured on the shipped tracker: of its 98
+frames with no piece named, 45 fall in a window's first ten frames, 28 in
+the second ten, 5 in the third and 0 thereafter; wrong boards go 32, 14, 0.
+:data:`WARMUP` frames at the head of each window are therefore replayed
+into both trackers and scored for neither, which is what a mid-session
+excerpt actually is. The choice is not delicate: the verdict is the same
+anywhere from 15 to 30 (see ``tests/test_race.py``).
+
 Episodes are derived from the oracle, not from either tracker, so both are
 judged against the same piece boundaries. A piece's flight ends when the
 oracle sees it become part of the settled stack, when the colour under it
@@ -56,10 +68,20 @@ DEFAULT_TRUTH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "or
 #: a hint for a piece the player no longer has.
 STUCK_FLOOR = 5
 
-#: Cells of the oracle's own reading that must move during a frozen run
-#: before the board counts as having visibly changed. A tetromino's worth:
-#: a piece descending one row moves at least this many.
+#: Cells the settled stack must gain at once for a hard drop and the next
+#: spawn to be read as two flights rather than one. A tetromino's worth.
 MOVED_CELLS = 4
+
+#: The bucket the head effect was measured in, in frames.
+HEAD_BUCKET = 10
+
+#: Frames at the head of each window that are replayed into both trackers
+#: and scored for neither. Every window is a mid-session excerpt, so the
+#: bootstrap a stateful design owes once per SESSION would otherwise be
+#: charged once per WINDOW. Two buckets, which is where the head effect is
+#: spent: the shipped tracker's silent frames per bucket run 45, 28, 5, 0
+#: and its wrong boards 32, 14, 0.
+WARMUP = 2 * HEAD_BUCKET
 
 
 @dataclass(frozen=True)
@@ -175,6 +197,7 @@ class Score:
     worst_silent_run: int = 0  # longest unbroken stretch with no name
     stuck: list[StuckRun] = field(default_factory=list)
     episodes: int = 0
+    warmup: int = 0  # head frames replayed into the tracker but scored for neither
 
     @property
     def worst_stuck(self) -> int:
@@ -252,10 +275,10 @@ def episodes(truth: list[TruthFrame]) -> list[Episode]:
     return out
 
 
-def _identity(outputs: list[FrameOutput], truth: list[TruthFrame]) -> Identity:
+def _identity(outputs: list[FrameOutput], truth: list[TruthFrame], warmup: int = 0) -> Identity:
     judged = correct = wrong = silent = 0
-    for output, frame in zip(outputs, truth, strict=True):
-        if not frame.answered:
+    for index, (output, frame) in enumerate(zip(outputs, truth, strict=True)):
+        if index < warmup or not frame.answered:
             continue
         judged += 1
         if output.piece is None:
@@ -277,7 +300,7 @@ def _longest(flags: list[bool]) -> int:
 
 
 def _stuck(
-    outputs: list[FrameOutput], truth: list[TruthFrame], plan: list[Episode]
+    outputs: list[FrameOutput], truth: list[TruthFrame], plan: list[Episode], warmup: int = 0
 ) -> list[StuckRun]:
     """Frozen runs of accepted frames that outlive the piece they hold.
 
@@ -301,7 +324,7 @@ def _stuck(
             and outputs[end + 1].state == outputs[index].state
         ):
             end += 1
-        inside = [at for at in range(index + 1, end + 1) if at in starts]
+        inside = [at for at in range(index + 1, end + 1) if at in starts and at >= warmup]
         if inside:
             changed = inside[0]
             stale = end - changed + 1
@@ -341,21 +364,33 @@ def score(
     tracker: str,
     outputs: list[FrameOutput],
     truth: TruthWindow,
+    warmup: int = WARMUP,
 ) -> Score:
-    """Everything the race measures, for one tracker over one window."""
+    """Everything the race measures, for one tracker over one window.
+
+    ``warmup`` head frames are replayed into the tracker by the runner and
+    then scored for NEITHER side: a mid-session excerpt should not charge a
+    stateful design for a bootstrap the live session paid once, long before
+    the first committed frame. Episodes that open inside the warm-up are
+    excluded whole, because a tracker may have named such a piece during
+    the unscored frames and its latency would read as zero for free.
+    """
     frames = truth.frames
     plan = episodes(frames)
+    scored = outputs[warmup:]
     judged = [
-        (output, frame) for output, frame in zip(outputs, frames, strict=True) if frame.answered
+        (output, frame)
+        for output, frame in zip(scored, frames[warmup:], strict=True)
+        if frame.answered
     ]
     result = Score(
         window=truth.window,
         tracker=tracker,
-        frames=len(outputs),
-        identity=_identity(outputs, frames),
-        silent_frames=sum(1 for output in outputs if output.piece is None),
-        hintless_frames=sum(1 for output in outputs if output.hint is None),
-        refused_frames=sum(1 for output in outputs if not output.accepted),
+        frames=len(scored),
+        identity=_identity(outputs, frames, warmup),
+        silent_frames=sum(1 for output in scored if output.piece is None),
+        hintless_frames=sum(1 for output in scored if output.hint is None),
+        refused_frames=sum(1 for output in scored if not output.accepted),
         board_right=sum(
             1
             for output, frame in judged
@@ -365,11 +400,14 @@ def score(
             [output.piece is not None and output.piece != frame.piece for output, frame in judged]
         ),
         worst_silent_run=_longest([output.piece is None for output, _ in judged]),
-        stuck=_stuck(outputs, frames, plan),
-        episodes=len(plan),
+        stuck=_stuck(outputs, frames, plan, warmup),
+        episodes=sum(1 for episode in plan if episode.start >= warmup),
+        warmup=warmup,
     )
     timed = set(measurable(plan))
     for episode in plan:
+        if episode.start < warmup:
+            continue
         span = range(episode.start, episode.end + 1)
         named = [index for index in span if outputs[index].piece == episode.piece]
         if episode in timed:
