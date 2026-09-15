@@ -42,3 +42,27 @@ cells land in the EMPTY class and are never candidates for anything.
 Note also tests/fixtures/roas_stacker, which contains the same periwinkle
 colour as settled stack content - a fix must keep those cells too, and
 must not start reading ghosts as pieces.
+
+## What fixed it
+
+`vision.grid` stopped letting the threshold decide the band at all. A cell
+in `[_GHOST_SEPARATION, MIN_SPREAD)` that stands clear of the background
+cluster is a CANDIDATE; `_own_paint_layer` and `_ghost_layer` name what
+they can (those cells read EMPTY, nothing is there); a candidate that is
+our own unnameable paint refuses the whole frame at 0.0; and everything
+else is OCCUPIED. Promotion happens only where the threshold actually
+dropped the cell, so frames Otsu had already read correctly are
+byte-identical, and a promotion's confidence is clamped by the air above
+the band so one slice of a lighting ramp cannot pass as a level.
+
+Replayed here (`tests/test_pale_piece.py`), before -> after:
+
+    frames with a hint      0 -> 45 of 61
+    falling piece tracked   0 -> 45 frames, one T, one hint target
+    observed row 11         "#........#" -> "#....#..##"
+    confidence              0.576 -> 0.206
+    LOCKED 0 -> 0           BOARD_RESET 1 -> 1 (the mid-game attach)
+
+The 16 hintless frames at the head are the window opening mid-session;
+00687-00700 are the game's own end-of-round panel over the whole board,
+refused at 0.009 with the last hint held.

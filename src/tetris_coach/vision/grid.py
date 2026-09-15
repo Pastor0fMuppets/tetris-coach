@@ -1163,7 +1163,6 @@ def _ghost_layer(
 def _band_only_reading(
     colors: NDArray[np.float32],
     background: NDArray[np.float64],
-    scores: NDArray[np.float32],
     band: NDArray[np.bool_],
     unobservable: frozenset[tuple[int, int]],
     own_paint: OwnPaint | None,
@@ -1190,11 +1189,12 @@ def _band_only_reading(
     branch already reports, and for the reason it reports it: the
     reading is structurally grounded rather than measured from a gap.
     """
-    observable = _observable((int(scores.shape[0]), int(scores.shape[1])), unobservable)
+    # No cell reaches MIN_SPREAD here, so the solid class the badge test
+    # consults is empty by construction.
     layer = _own_paint_layer(colors, background, np.zeros_like(band), unobservable, own_paint)
     empty = np.zeros_like(band)
     if layer is not None:
-        return _Reading(empty, _UNIFORM_EMPTY_CONFIDENCE, layer & observable)
+        return _Reading(empty, _UNIFORM_EMPTY_CONFIDENCE, layer)
     painted = _own_paint_cells(colors, background, unobservable, own_paint)
     if painted is not None and bool((band & painted).any()):
         return _Reading(empty, 0.0, None)
@@ -1268,7 +1268,7 @@ def _classify_scored(
         # it against. Structure is all there is, so the reading is
         # entirely structural and says so with the same number a
         # uniform-empty frame reports.
-        return _band_only_reading(colors, background, scores, band, unobservable, own_paint)
+        return _band_only_reading(colors, background, band, unobservable, own_paint)
     if hi < MIN_SPREAD:
         # Uniform-near: every cell sits at the background estimate — an
         # EMPTY board, whatever color the theme paints it (a solid
