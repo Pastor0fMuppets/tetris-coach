@@ -433,6 +433,151 @@ class TestIdentifyNextOwnPaint:
         assert _GHOST_SEPARATION <= float(scores[band].max()) < MIN_SPREAD
 
 
+def band_candidate(image: np.ndarray) -> np.ndarray:
+    """Exactly the level the band pass hands to the shape rules."""
+    scores, band, level = band_split(image)
+    candidate = band & (scores > level)
+    return candidate if candidate.any() else band
+
+
+class TestIdentifyNextBandIsNotHandedARectangle:
+    """What the band may not do: name a piece out of a lone rectangle.
+
+    A band cell divided into cells by assertion — the FLUSH hypothesis —
+    makes any solid rectangle a piece: a square is an O, a 4:1 bar an I.
+    The threshold can afford that, because a solid class in a preview box
+    is nearly always the piece. The band cannot: it is where everything
+    the threshold refused arrives, and a box is full of rectangles that
+    are not pieces.
+    """
+
+    # Panel/well shade pairs whose well lands in the band, with the score
+    # the well reads at against the panel. The ordinary preview skin.
+    WELLS: ClassVar = [
+        ((250, 250, 250), (235, 235, 235), 0.243),
+        ((250, 250, 250), (226, 226, 226), 0.307),
+        ((30, 30, 34), (18, 18, 20), 0.223),
+        ((30, 30, 34), (46, 46, 52), 0.256),
+        ((120, 120, 120), (100, 100, 100), 0.280),
+        ((200, 200, 205), (178, 178, 182), 0.296),
+    ]
+    # A piece pale enough to need the band, and a caption bar ABOVE it —
+    # still in the band, but further from the ground than the piece is, so
+    # the band's upper class is the BAR and the piece is dropped.
+    PALE_PIECE: ClassVar = (232, 232, 232)  # 0.280 on a 252 ground
+    PALE_BAR: ClassVar = (230, 230, 230)  # 0.294: above the piece, in the band
+
+    @staticmethod
+    def panelled(panel: tuple[int, int, int], well: tuple[int, int, int]) -> np.ndarray:
+        """An EMPTY preview box: a panel around an inner well. No piece."""
+        image = np.full((96, 96, 3), panel, dtype=np.uint8)
+        image[20:76, 24:72] = well
+        return image
+
+    @staticmethod
+    def with_piece(
+        cells: tuple[tuple[int, int], ...], color: tuple[int, int, int], cell: int = 15
+    ) -> np.ndarray:
+        image = np.full((96, 96, 3), 252, dtype=np.uint8)
+        for r, c in cells:
+            top, left = 40 + r * cell + 1, 20 + c * cell + 1
+            image[top : top + cell - 2, left : left + cell - 2] = color
+        return image
+
+    @pytest.mark.parametrize(("panel", "well", "score"), WELLS)
+    def test_an_empty_panelled_box_is_not_an_o(self, panel, well, score: float) -> None:  # type: ignore[no-untyped-def]
+        # The box's own skin, with nothing in it: the well is a rectangle
+        # in the band, and an even division of a rectangle is an O.
+        image = self.panelled(panel, well)
+        scores, band, _level = band_split(image)
+        assert _GHOST_SEPARATION <= float(scores[band].max()) < MIN_SPREAD
+        assert round(float(scores[band].max()), 3) == pytest.approx(score, abs=0.01)
+        assert identify_next(image) is None
+
+    def test_a_caption_bar_above_the_piece_is_not_an_i(self) -> None:
+        # The band keeps its UPPER class, and nothing says the box's
+        # furniture sits BELOW the piece. When it sits above, the
+        # candidate IS the furniture — and a solid bar is the picture of
+        # a horizontal I. Swept over the bar geometries a caption
+        # occupies: never a name, for any piece actually in the box.
+        seen = set()
+        for width in range(20, 65, 4):
+            for height in range(5, 16, 2):
+                for piece in PIECES:
+                    image = self.with_piece(ROTATIONS[piece][0].cells, self.PALE_PIECE)
+                    image[4 : 4 + height, 6 : 6 + width] = self.PALE_BAR
+                    seen.add((piece, identify_next(image)))
+        assert {answer for _piece, answer in seen} <= {None}
+
+    def test_the_bar_is_what_the_band_keeps(self) -> None:
+        # The diagnosis behind that test, pinned: both the bar and the
+        # piece are in the band, the split puts the BAR on top, and the
+        # piece is not in the candidate at all.
+        image = self.with_piece(ROTATIONS["T"][0].cells, self.PALE_PIECE)
+        image[4:13, 6:46] = self.PALE_BAR
+        candidate = band_candidate(image)
+        assert candidate[4:13, 6:46].all()  # the bar
+        assert not candidate[40:, :].any()  # the piece, dropped
+        assert _piece_from_mask(candidate) == "I"  # what the flush rule used to answer
+        assert _piece_from_mask(candidate, flush=False) is None
+
+    def test_a_lone_rectangle_is_never_a_piece(self) -> None:
+        # The shape every one of these cases reduces to: one solid
+        # rectangle in the band, which an even division reads as an O
+        # (square) or an I (4:1). A preview box is full of them — a well,
+        # a caption bar, a badge, the first visible sliver of a piece
+        # still scrolling in — and none of them is a piece.
+        named = {}
+        for height in range(4, 40, 2):
+            for width in range(4, 64, 2):
+                image = np.full((96, 96, 3), 252, dtype=np.uint8)
+                image[30 : 30 + height, 20 : 20 + width] = self.PALE_PIECE
+                answer = identify_next(image)
+                if answer is not None:
+                    named[(width, height)] = answer
+        assert named == {}
+
+    @pytest.mark.parametrize("piece", PIECES)
+    def test_a_piece_scrolling_in_is_not_named_from_a_sliver(self, piece: str) -> None:
+        # A deal animation slides the next piece into the box. Its first
+        # visible rows are a rectangle, and a rectangle is an O or an I —
+        # named before the piece is whole, on consecutive captures, so
+        # the tracker's two-frame debounce does not filter it.
+        for cell in (12, 16, 20):
+            for dy in range(-4 * cell, 0):
+                image = np.full((96, 96, 3), 252, dtype=np.uint8)
+                drawn = 0
+                for r, c in ROTATIONS[piece][0].cells:
+                    top, left = 30 + dy + r * cell + 1, 12 + c * cell + 1
+                    bottom = min(96, top + cell - 2)
+                    if bottom > max(0, top):
+                        image[max(0, top) : bottom, left : left + cell - 2] = self.PALE_PIECE
+                        drawn += 1
+                answer = identify_next(image)
+                assert answer in (None, piece)
+                if drawn < 4:  # not all of it is in the box yet
+                    assert answer is None
+
+    def test_the_committed_crops_never_needed_the_flush_hypothesis(self) -> None:
+        # The cost of the rule, measured rather than argued: over every
+        # committed preview crop, the band's candidate reads the same
+        # with the flush hypothesis and without it. What the rule costs a
+        # real session here is nothing.
+        for window in (
+            "live_session",
+            "ghost_session",
+            "absorbed_piece",
+            "pale_preview",
+            "pale_piece",
+            "spawn_latency",
+            "ghost_beside_stack",
+        ):
+            for path in sorted((FIXTURES / window).glob("next_*.png")):
+                image = np.asarray(Image.open(path))[:, :, ::-1]
+                candidate = band_candidate(image)
+                assert _piece_from_mask(candidate, flush=False) == _piece_from_mask(candidate)
+
+
 class TestIdentifyNextOwnPaintOverAWell:
     """The same fill, on a box drawn in TWO shades: a panel and an inner well.
 

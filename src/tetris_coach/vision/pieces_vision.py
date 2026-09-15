@@ -1184,6 +1184,36 @@ def _band_piece(
     when there is only one class, and a box that holds nothing but the
     piece is the easy case, not a refusal.
 
+    What the band may NOT do is name a piece out of a lone rectangle,
+    which is what the FLUSH hypothesis does (see :func:`_axis_grid`): one
+    band divided into cells by assertion rather than by anything visible,
+    which any solid rectangle satisfies — a square is then an O and a 4:1
+    bar an I. The threshold can afford it because a solid class in a
+    preview box is nearly always the piece; the band cannot, because the
+    band is where everything the threshold REFUSED arrives. Measured,
+    turning it on for the band named, in a box with no piece in it at
+    all:
+
+    - the box's own inner WELL, the ordinary panel-and-well skin: 'O' at
+      every shade pair tried (light panel over light well at 0.243 and
+      0.307, dark over darker at 0.223, dark over lighter at 0.256, grey
+      over darker at 0.280 and 0.296) — every one of them ``None``
+      before this pass existed;
+    - a pale caption BAR above the piece, which the band's upper class
+      keeps INSTEAD of the piece: a confident 'I' — the bar's own
+      picture — on 150 of 396 bar geometries, while the box held an O, T,
+      S, Z, J or L;
+    - a piece still SCROLLING into the box, whose first visible sliver is
+      a rectangle: named before it is whole, and named wrong.
+
+    The cost is a skin that draws its cells flush AND a piece pale enough
+    to need this pass: its O and I read as ``None``, since nothing in a
+    rectangle says where the cells are. That is the trade this module
+    already declares — a piece unread costs a ply of lookahead, a piece
+    misread costs a hint that points at a piece the game never dealt —
+    and it is measured at zero on the evidence: of 530 crops named across
+    every committed window, not one is named by the flush hypothesis.
+
     Which way it errs: toward ``None``. A band this pass cannot resolve
     into exactly one piece — furniture mixed into the level, a piece half
     drawn, a box mid-wipe — gets the same silence the threshold gave it,
@@ -1200,7 +1230,7 @@ def _band_piece(
         candidate = band
     if _is_own_paint(img, background, candidate, own_paint):
         return None
-    return _piece_from_mask(candidate)
+    return _piece_from_mask(candidate, flush=False)
 
 
 def _is_own_paint(
@@ -1300,7 +1330,7 @@ def _grounds(
     return grounds
 
 
-def _piece_from_mask(mask: NDArray[np.bool_]) -> str | None:
+def _piece_from_mask(mask: NDArray[np.bool_], flush: bool = True) -> str | None:
     """The one piece whose shape the foreground ``mask`` draws, or ``None``.
 
     The half of :func:`identify_next` that works on shape alone: keep the
@@ -1308,6 +1338,14 @@ def _piece_from_mask(mask: NDArray[np.bool_]) -> str | None:
     rotation only when every one of its cells is filled and every cell
     outside it is not. Split out from the thresholding half so that the
     band pass (:func:`_band_piece`) is read by exactly these rules.
+
+    ``flush`` is whether the FLUSH hypothesis — one band standing for
+    several cells drawn with no gap between them (see
+    :func:`_axis_grid`) — may be used here. It is the one hypothesis that
+    reads structure it cannot see: a lone rectangle IS the picture of a
+    flush O (square) or a flush I (4:1), and equally the picture of every
+    rectangle a box holds. The band pass turns it off; see
+    :func:`_band_piece` for the measurement.
     """
     blocks = _preview_blocks(mask)
     if blocks is None:
@@ -1324,8 +1362,8 @@ def _piece_from_mask(mask: NDArray[np.bool_]) -> str | None:
     matched: set[str] = set()
     for rots in ROTATIONS.values():
         for rot in rots:
-            down = _axis_grid(rows_profile, rot.height)
-            across = _axis_grid(cols_profile, rot.width)
+            down = _axis_grid(rows_profile, rot.height, flush)
+            across = _axis_grid(cols_profile, rot.width, flush)
             if down is None or across is None:
                 continue
             aspect = across.cell / down.cell
@@ -1408,7 +1446,7 @@ def _bands(profile: NDArray[np.bool_]) -> list[tuple[int, int]]:
     return runs
 
 
-def _axis_grid(profile: NDArray[np.bool_], count: int) -> _AxisGrid | None:
+def _axis_grid(profile: NDArray[np.bool_], count: int, flush: bool = True) -> _AxisGrid | None:
     """The ``count`` cell positions along one axis, derived from the blocks.
 
     EVERY row and column of a tetromino's bounding box holds at least one
@@ -1422,6 +1460,9 @@ def _axis_grid(profile: NDArray[np.bool_], count: int) -> _AxisGrid | None:
       that is what made small inset previews unreadable).
     - one band: a skin that draws cells flush, where a band cannot be a
       cell and an even division of the extent is exact (cell size = pitch).
+      Available only when ``flush`` says so, because this hypothesis reads
+      a structure it cannot see (a rectangle divided into cells by
+      assertion) — the band pass turns it off.
     - anything else: the blocks contradict this hypothesis — a broken or
       missing cell — and there is nothing to say. Refused, not guessed.
     """
@@ -1436,7 +1477,7 @@ def _axis_grid(profile: NDArray[np.bool_], count: int) -> _AxisGrid | None:
         centers = tuple((start + stop - 1) / 2.0 for start, stop in bands)
         size = float(np.median(sizes))
         return _AxisGrid(centers, max(size * 0.4, 0.5), size)
-    if len(bands) == 1:
+    if len(bands) == 1 and flush:
         pitch = len(profile) / count
         centers = tuple((index + 0.5) * pitch for index in range(count))
         return _AxisGrid(centers, max(pitch * 0.25, 0.5), pitch)
