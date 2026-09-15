@@ -1239,11 +1239,65 @@ def _is_own_paint(
     """
     if paint is None or len(paint.color) != int(img.shape[-1]):
         return False
-    bg = np.asarray(background, dtype=np.float64)
-    composite = bg + paint.opacity * (np.asarray(paint.color, dtype=np.float64) - bg)
-    diff = np.asarray(img, dtype=np.float64) - composite
-    painted = np.sqrt(np.sum(diff * diff, axis=-1)) <= paint.tolerance
-    return int((painted & candidate).sum()) * 2 >= int(candidate.sum())
+    color = np.asarray(paint.color, dtype=np.float64)
+    pixels = np.asarray(img, dtype=np.float64)
+    for ground in _grounds(pixels, background, candidate):
+        composite = ground + paint.opacity * (color - ground)
+        diff = pixels - composite
+        painted = np.sqrt(np.sum(diff * diff, axis=-1)) <= paint.tolerance
+        if int((painted & candidate).sum()) * 2 >= int(candidate.sum()):
+            return True
+    return False
+
+
+def _grounds(
+    pixels: NDArray[np.float64],
+    background: NDArray[np.float64],
+    candidate: NDArray[np.bool_],
+) -> list[NDArray[np.float64]]:
+    """The box's background levels, for the composite to be computed over.
+
+    The arithmetic in :func:`_is_own_paint` needs the color the paint
+    landed ON, and :func:`identify_next` estimates one: the per-channel
+    median of ALL the crop's pixels. That estimate is the right one for
+    the job it was written for (scoring distance from the background) and
+    it is exactly one color, which is one too few here — a preview box
+    with a panel and an inner WELL of a second shade is the ordinary
+    look, and the median then sits on whichever of the two has more
+    pixels while the hint is composited over the other. Measured with the
+    hint drawn over the well: the two composites stand ~21 uint8 units
+    apart against a tolerance of 8.0, so the rule said "not our paint"
+    and the box was named as the piece the coach is pointing at —
+    'O'/'T'/'I' on a white panel around a light well, on a near-black
+    panel around a darker well, and on a mid-grey panel around a darker
+    well alike. The same box in ONE shade was refused correctly, which
+    is the whole difference.
+
+    So the grounds are the LEVELS of the crop, not its average: the
+    median, plus the median of each Otsu class of everything that is not
+    the candidate itself. A one-shade box gives three colors that are the
+    same color and the reading does not move; a two-shade box gives the
+    panel and the well, and the paint is recognized over either.
+
+    Widening what the rule may match is safe in the direction that
+    matters here because the rule REFUSES rather than names: its cost is
+    a box read as ``None``, never a wrong piece. It is still bounded by
+    measurement — over every committed preview crop (1115 candidates,
+    both passes), the nearest pixel of a real candidate to the composite
+    of ANY of these grounds stands 19.1 units off it, 2.4x the tolerance
+    and the same order as the 2.6x the single-ground rule was measured
+    at; not one candidate has a single pixel within tolerance, against
+    the majority the rule asks for.
+    """
+    grounds = [np.asarray(background, dtype=np.float64)]
+    rest = pixels[~candidate]
+    if rest.size:
+        scores = _distance_scores(rest, grounds[0]).ravel()
+        level = otsu_threshold_hist(scores)
+        for side in (scores <= level, scores > level):
+            if bool(side.any()):
+                grounds.append(np.asarray(np.median(rest[side], axis=0), dtype=np.float64))
+    return grounds
 
 
 def _piece_from_mask(mask: NDArray[np.bool_]) -> str | None:

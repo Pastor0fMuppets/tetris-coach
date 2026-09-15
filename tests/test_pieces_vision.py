@@ -433,6 +433,72 @@ class TestIdentifyNextOwnPaint:
         assert _GHOST_SEPARATION <= float(scores[band].max()) < MIN_SPREAD
 
 
+class TestIdentifyNextOwnPaintOverAWell:
+    """The same fill, on a box drawn in TWO shades: a panel and an inner well.
+
+    The rule needs the color the paint landed ON, and the crop's own
+    estimate of that is the per-channel median of every pixel. With a
+    panel around an inner well — the ordinary preview skin — the median
+    sits on whichever has more pixels, and a hint drawn inside the well
+    is composited over the other one. Measured, the two composites stand
+    ~21 uint8 units apart against a tolerance of 8.0: the rule said "not
+    our paint" and the box was named as the placement on screen.
+    """
+
+    SHADES: ClassVar = [
+        ((250, 250, 250), (235, 235, 235)),
+        ((30, 30, 34), (18, 18, 20)),
+        ((120, 120, 120), (100, 100, 100)),
+        ((200, 200, 205), (186, 186, 190)),
+    ]
+
+    @staticmethod
+    def box(
+        panel: tuple[int, int, int],
+        well: tuple[int, int, int],
+        cells: tuple[tuple[int, int], ...],
+        color: tuple[int, int, int] | None = None,
+    ) -> np.ndarray:
+        """A panelled box whose inner well holds ``cells`` in our own fill."""
+        assert HINT_PAINT is not None
+        ground = np.asarray(well, dtype=np.float64)
+        paint = np.asarray(HINT_PAINT.color, dtype=np.float64)
+        fill = np.round(ground + HINT_PAINT.opacity * (paint - ground)).astype(np.uint8)
+        image = np.full((96, 96, 3), panel, dtype=np.uint8)
+        image[6:62, 8:66] = well
+        for r, c in cells:
+            top, left = 10 + r * 17 + 1, 12 + c * 17 + 1
+            image[top : top + 15, left : left + 15] = fill if color is None else color
+        return image
+
+    @pytest.mark.parametrize(("panel", "well"), SHADES)
+    @pytest.mark.parametrize("piece", PIECES)
+    def test_our_own_hint_is_refused_over_the_well(self, piece: str, panel, well) -> None:  # type: ignore[no-untyped-def]
+        for rot in ROTATIONS[piece]:
+            assert identify_next(self.box(panel, well, rot.cells)) is None
+
+    @pytest.mark.parametrize(("panel", "well"), SHADES)
+    def test_the_second_shade_is_what_used_to_defeat_it(self, panel, well) -> None:  # type: ignore[no-untyped-def]
+        # The diagnosis, pinned to the arithmetic rather than to a
+        # reading: the composite over the panel (where the median sits)
+        # and the composite over the well (where the paint actually
+        # landed) stand further apart than the tolerance, so the ground
+        # the box averages to is not a ground anything was painted over.
+        assert HINT_PAINT is not None
+        composites = []
+        for shade in (panel, well):
+            ground = np.asarray(shade, dtype=np.float64)
+            composites.append(ground + HINT_PAINT.opacity * (np.asarray(HINT_PAINT.color) - ground))
+        assert float(np.linalg.norm(composites[0] - composites[1])) > HINT_PAINT.tolerance
+
+    @pytest.mark.parametrize(("panel", "well"), SHADES)
+    def test_a_real_piece_in_the_well_is_still_named(self, panel, well) -> None:  # type: ignore[no-untyped-def]
+        # The control, and the cost of widening what the rule may match:
+        # a game piece in the same well is named exactly as before.
+        image = self.box(panel, well, ROTATIONS["J"][0].cells, color=(215, 15, 55))
+        assert identify_next(image) == "J"
+
+
 class TestIdentifyNextOwnPaintOnADarkBox:
     """The same hint fill, on a box dark enough to make it a SOLID class.
 
