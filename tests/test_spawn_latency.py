@@ -247,23 +247,33 @@ def replay_window() -> Replay:
     return Replay(hints, events, engine.tracker.committed.stack_rows)
 
 
-def hinted_ages() -> list[tuple[str, int, str | None]]:
-    """``(frame, hint age in captures, the name that hint is holding up)``.
+class HintLife(NamedTuple):
+    """The tracker's own hint bookkeeping after one capture."""
 
-    One pass of the window recording the tracker's own hint clock, so the
-    budget that expires a hint is set against what a hint MEASURABLY does
-    here rather than against a description of it.
+    number: str
+    age: int  # captures since the deal this hint reports
+    holding: str | None  # the committed name this hint is holding up
+    alive: str | None  # the hint itself, still able to name a fragment
+
+
+def hint_life() -> list[HintLife]:
+    """One pass of the window, recording the tracker's hint clock.
+
+    So the budget that expires a hint is set against what a hint
+    MEASURABLY does here rather than against a description of it.
     """
     covered = compute_overlap_mask(SESSION_BOARD, SESSION_NEXT, rows=ROWS)
     engine = CoachEngine(CoachConfig(rows=ROWS), unobservable_cells=covered)
-    out: list[tuple[str, int, str | None]] = []
+    out: list[HintLife] = []
     for number in frame_numbers():
         preview = FIXTURES / f"next_{number}.png"
         engine.process_frame(
             load(f"board_{number}.png"), load(preview.name) if preview.exists() else None
         )
         tracker = engine.tracker
-        out.append((number, tracker._hint_age, tracker._hinted_commit))
+        out.append(
+            HintLife(number, tracker._hint_age, tracker._hinted_commit, tracker._entering_hint)
+        )
     return out
 
 
@@ -279,12 +289,23 @@ def test_no_hint_here_is_still_doing_its_job_when_the_budget_runs_out() -> None:
     # Here that is 15 captures: the flip on 00158 names the O, the name is
     # on screen from 00163, and the shape rule takes over on 00174 at age
     # 16. The budget clears it by nine.
-    holding = [(number, age) for number, age, name in hinted_ages() if name is not None]
-    assert [number for number, _ in holding] == [f"00{n}" for n in range(163, 174)]
-    assert max(age for _, age in holding) == 15
+    holding = [t for t in hint_life() if t.holding is not None]
+    assert [t.number for t in holding] == [f"00{n}" for n in range(163, 174)]
+    assert max(t.age for t in holding) == 15
     assert MAX_HINT_AGE > 15
-    # ...and the whole window is unmoved by it: the hint is spent before
-    # the budget is, so nothing here is withdrawn for running out of time.
+    # ...and why the clock is worth having, on these same frames: a hint
+    # goes on LIVING long after it stops holding a name up. This one is
+    # spent at age 16, when the shape rule names the O itself, and the
+    # only thing that would ever have ended it is the O's lock on 00198,
+    # at age 40 — 24 further captures of a live hint able to name
+    # whatever turned up at the top edge. The clock ends it on 00182
+    # instead. Every other rule needs an event like that lock, and a hold
+    # swap or a restart provides none at all.
+    alive = [t for t in hint_life() if t.alive is not None]
+    assert max(t.age for t in alive) == MAX_HINT_AGE
+    assert alive[-1].number == "00182"  # was 00198, the lock
+    # Costing nothing here: the name was the shape rule's own eight
+    # captures before the budget ran out, so nothing is withdrawn.
     assert GameEvent.PIECE_UNNAMED not in replay_window().events
 
 

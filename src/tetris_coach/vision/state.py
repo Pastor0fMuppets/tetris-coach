@@ -369,6 +369,15 @@ class GameStateTracker:
             # called it, the name on screen is no longer a guess, so it is
             # no longer the retraction rule's business (and a later,
             # unrelated fragment must not be read as contradicting it).
+            # Deliberately NOT also dropping the hint here. Ending its life
+            # at the confirmation looks tidier — the piece it names has
+            # finished entering — and measured, it buys nothing and costs
+            # something: the frame after a hold swap then reads OCCLUDED
+            # instead of FALLING, which HOLDS the same stale name on screen
+            # (same name, same correcting frame), while leaving nothing in
+            # _hinted_commit for the retraction rule or the clock to take
+            # back. A hint that has done its job is harmless where it is;
+            # what needed bounding is a hint nothing ever confirmed.
             self._hinted_commit = None
         elif self._hinted_commit is not None and (
             hint_expired
