@@ -54,15 +54,44 @@ Three classes of cell are not board content
   one). That ring says which cells are painted; the fill is then undone
   exactly, because its opacity is known too, recovering whatever the game
   drew underneath. See :func:`own_paint_states`.
-- **Translucent along a known ray** (:data:`TRANSLUCENT` of the class's peak
-  magnitude): a landing-preview ghost. One comparison, and it also says
-  which piece the ghost belongs to. NOTE: no fixture in this repo actually
-  contains a game-drawn ghost — every "ghost" in the committed windows is
-  this tool's own hint paint (see :mod:`.colour_tracker`) — so this rule is
-  exercised only by a synthetic test.
-
 Everything else is content, named when the palette knows its colour and
 unnamed (but still tracked) when it does not.
+
+What about the landing-preview ghost?
+-------------------------------------
+
+This module used to hold a third rule: a cell below half a colour class's
+brightest sighting was a translucent preview of that piece, and therefore
+empty. It has been removed, because it did not do what it said and it did
+do something bad.
+
+The game DOES draw a landing preview — SPEC.md and two fixture READMEs say
+no committed fixture holds one, and they are wrong. On ``spawn_latency``
+00134 the oracle reports a ghost at (10,4), (10,5), (11,4), (11,5) and the
+raw pixels bear it out: the board ground is RGB (251,252,252), the falling
+O is (217,239,112), and those cells carry (242,249,213) — the O's own
+colour at 26% alpha — over 9-12% of each cell rect.
+
+But it is an OUTLINE. The centre of the cell is pure background over 84% of
+the sampled patch, so a centre-patch sampler cannot see it at all, and
+neither this tracker nor the shipped one ever had to. The translucency rule
+therefore never once fired on a real landing preview. What it did fire on,
+over the six committed windows, was 26 cells of the line-clear flash on
+frames the oracle abstains from, and 332 cells of a browser page that had
+replaced the game.
+
+Against that it erased whole pieces. Two shades of one hue are the same
+class by construction — same direction, different magnitude — so a piece
+drawn dimmer than the brightest sighting of its own colour read as a ghost
+of itself and vanished: neither falling nor stack, simply absent from the
+board handed to the solver. Measured, a T at 45% of its class's peak
+returns ``falling=None`` and an empty stack.
+
+So the floor is now :data:`EMPTY_DIST` alone, in absolute units, and a
+filled ghost would be read as its piece. Doing better needs the structural
+fact that a preview sits BELOW its piece in its piece's columns, and no
+frame in this repo contains a filled one to check such a rule against. A
+threshold that erases real pieces is not worth keeping on speculation.
 """
 
 from __future__ import annotations
@@ -85,10 +114,6 @@ EMPTY_DIST = 12.0
 
 # Perpendicular distance, in uint8 units, from a colour class's ray.
 LINE_TOL = 10.0
-
-# Fraction of a class's peak magnitude below which a cell is a translucent
-# preview of that piece (a ghost) rather than the piece.
-TRANSLUCENT = 0.5
 
 # How near a pixel must sit to the hint colour to BE the hint's own outline,
 # and the share of a cell rect that ring must cover for the cell to be under
@@ -282,9 +307,10 @@ class Palette:
     ) -> NDArray[np.int16]:
         """Per-cell colour class: :data:`EMPTY` or an index into ``classes``.
 
-        EMPTY covers all four ways a cell holds no board content: it is the
-        background, it is unobservable, it is our own drawing, or it is a
-        translucent ghost of a piece that is somewhere else.
+        EMPTY covers the three ways a cell holds no board content: it is
+        within :data:`EMPTY_DIST` of the background, it is unobservable, or
+        it is our own drawing. There is deliberately no fourth way -- see
+        the module docstring on why the ghost rule was removed.
         """
         if self.background is None:
             raise ValueError("background not estimated yet")
@@ -301,9 +327,7 @@ class Palette:
                 magnitude = float(np.linalg.norm(vec))
                 if magnitude < EMPTY_DIST:
                     continue
-                index = self.intern(vec)
-                if magnitude >= TRANSLUCENT * self.classes[index].peak:
-                    labels[r, c] = index
+                labels[r, c] = self.intern(vec)
         return labels
 
 

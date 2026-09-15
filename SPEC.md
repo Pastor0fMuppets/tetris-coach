@@ -184,6 +184,9 @@ vision/
                   # overlay and the other 310 are the real pale
                   # periwinkle T of absorbed_piece. Not one is a
                   # game-drawn ghost — ROAS Stacker draws none.
+                  # (Not so: see the SECOND CORRECTION below. It draws one
+                  # on almost every frame, as an outline no centre patch
+                  # samples, which is why none reached this band.)
                   # _own_paint_layer therefore names it by ARITHMETIC
                   # rather than by structure. The fill is a straight
                   # alpha composite, so its color over a known
@@ -284,6 +287,29 @@ vision/
                   # rule is now argued from the shape space rather than
                   # from pixels, and _own_paint_layer is what the real
                   # sessions are carried by.
+                  #
+                  # SECOND CORRECTION: that last sentence is wrong, and so
+                  # is the same claim at vision/grid.py ~line 1092 and in
+                  # the ghost_session and ghost_beside_stack READMEs. ROAS
+                  # Stacker DOES draw a landing preview, and every window
+                  # in the corpus holds one — 482 of the 542 committed
+                  # frames. Read off ghost_beside_stack 00138 with no
+                  # vision code in the loop: the falling I is at row 0
+                  # cols 4-7, and row 11 cols 4-7 carry the I's own colour
+                  # at ~26% alpha over the board ground, in the columns it
+                  # would land in. The first correction was right that the
+                  # thing which WANDERS is this tool's own hint; it went
+                  # too far in concluding the game draws nothing.
+                  #
+                  # What survives is the reason the ghost never mattered
+                  # here: it is an OUTLINE. Under a tenth of each cell,
+                  # with pure background in the middle, so every sampler in
+                  # this project — occupancy and colour alike — is blind to
+                  # it. _ghost_layer is still argued from the shape space,
+                  # not because there are no ghosts to measure but because
+                  # the ones there are do not reach the samples.
+                  # Pinned: tests/test_colour_tracker_sessions.py,
+                  # test_the_game_draws_a_ghost_and_it_is_an_outline.
                   # Position alone does not carry it: the neighbour test
                   # saves the periwinkle on live2_board_00500 only because
                   # the stack abuts it there, and ONE legal board

@@ -71,12 +71,22 @@ def test_an_unknown_colour_is_still_tracked_unnamed() -> None:
 # -- what is not board content ---------------------------------------
 
 
-def test_a_translucent_ghost_is_not_content() -> None:
-    """A landing preview is the piece's own colour at low opacity.
+def test_a_filled_translucent_ghost_would_be_read_as_its_piece() -> None:
+    """The rule that used to catch this is gone, and this is what that costs.
 
-    NOTE: no committed fixture contains a game-drawn ghost — every "ghost"
-    in those windows turned out to be this tool's own hint paint — so this
-    is the only place the rule is exercised.
+    A magnitude floor relative to a colour class's brightest sighting did
+    catch a filled preview -- and it also erased any piece the game drew
+    dimmer than that sighting (see the test below), which is the worse
+    failure by far: a misnamed piece is a bad hint, a vanished piece is a
+    hint for a board that does not exist.
+
+    So the cost is recorded rather than hidden. A game that fills its
+    landing preview would have four phantom cells in the stack here. No
+    frame in this repo does -- see
+    ``test_colour_tracker_sessions.test_the_game_draws_a_ghost_and_it_is_an_outline``
+    for what this game actually draws -- so there is nothing to tune such a
+    rule against, and the structural fact a real rule would need (a preview
+    sits below its piece, in its piece's columns) is not measurable here.
     """
     ghost = blend(GREEN_O, 0.3)
     frame = {(1, 4): GREEN_O, (1, 5): GREEN_O, (11, 4): ghost, (11, 5): ghost}
@@ -85,7 +95,38 @@ def test_a_translucent_ghost_is_not_content() -> None:
     report = track.update(render(frame))
     assert report.falling is not None
     assert report.falling.cells == frozenset({(1, 4), (1, 5)})
-    assert report.stack_rows == (0,) * ROWS
+    assert report.stack_rows[11] == 0b110000, "the filled preview is read as stack"
+
+
+def test_a_piece_dimmer_than_its_own_brightest_sighting_is_still_on_the_board() -> None:
+    """Two shades of one hue: the dimmer one must not disappear.
+
+    Perpendicular distance to a ray makes two shades of one colour the SAME
+    class by construction -- same direction, different magnitude -- so a
+    rule that called anything below half a class's peak a ghost erased the
+    dimmer piece outright. Not misnamed: absent. It was neither the falling
+    piece nor part of the stack, so the solver was handed a board without
+    it and drew a hint for a game that was not being played.
+
+    A theme with two shades of one colour, or a piece recoloured by level,
+    is not exotic, and the margin on real data was not wide either: the
+    pale periwinkle T's measured peak is 52.9, which puts its erasure floor
+    at 26.5 against an EMPTY_DIST of 12.
+    """
+    track = tracker()
+    cells = {(4, 3), (5, 2), (5, 3), (5, 4)}
+    for _ in range(3):
+        bright = track.update(render(dict.fromkeys(cells, PALE_T)))
+    assert bright.falling is not None and bright.falling.piece == "T"
+    peak = track.palette.classes[0].peak
+
+    for _ in range(3):
+        dim = track.update(render(dict.fromkeys(cells, blend(PALE_T, 0.45))))
+    assert dim.falling is not None, "the dim T is on the board"
+    assert dim.falling.piece == "T"
+    assert dim.falling.cells == frozenset(cells)
+    assert len(track.palette.classes) == 1, "and it is the same colour, at 45% of the peak"
+    assert track.palette.classes[0].peak == peak
 
 
 def test_cells_the_capture_cannot_see_are_not_content() -> None:

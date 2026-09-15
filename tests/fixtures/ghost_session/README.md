@@ -95,3 +95,27 @@ the real O stayed at cols 4-5: the solver changed its mind, not the game.
 `vision.grid._own_paint_layer` now names these cells by their color;
 `_ghost_layer` remains for games that really do draw a preview. The frames
 this window reads, and the numbers under "After", are unchanged by that.
+
+## SECOND CORRECTION: this game does draw a preview, and it is invisible
+
+The correction above is right that the layer at rows 10-11 is this tool's
+own hint. It then overreached, here and in `ghost_beside_stack/README.md`
+and in SPEC.md and in `vision/grid.py`, into "ROAS Stacker draws no ghost".
+It does. The independent oracle in `tetris_coach.truth` finds one on 95 of
+this window's 95 frames, and on 482 of the corpus's 542.
+
+Read off `ghost_beside_stack` 00138 with no vision code in the loop: the
+falling I is at row 0 cols 4-7, and row 11 cols 4-7 — the columns it would
+land in — each carry RGB (197, 198, 241) over 9% of the cell. The board's
+ground is (251, 252, 252) and the I is (45, 46, 215), so that is the I's
+own colour at 26% alpha. Four rounded squares where the piece would land.
+
+It never showed up because it is an OUTLINE. Over 60% of each ghost cell
+is bare board and the centre is bare board outright, so every sampler in
+this project reads those cells as empty — the shipped occupancy path and
+the colour-first prototype alike. Nothing in the repo has ever had to
+handle a game-drawn ghost, which is a fact about this game's line weight
+and not a fact about ghosts.
+
+Pinned at `tests/test_colour_tracker_sessions.py`,
+`test_the_game_draws_a_ghost_and_it_is_an_outline`.

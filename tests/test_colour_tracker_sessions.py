@@ -32,6 +32,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from tetris_coach.vision.colour_palette import EMPTY_DIST, board_colours
 from tetris_coach.vision.colour_tracker import ColourTracker, Event, FrameReport
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -64,7 +65,7 @@ def named(reports: tuple[FrameReport, ...]) -> int:
 @pytest.mark.parametrize(
     ("window", "frames", "with_piece"),
     [
-        ("spawn_latency", 161, 154),
+        ("spawn_latency", 161, 153),
         ("live_session", 96, 96),
         ("ghost_session", 95, 94),
         ("ghost_beside_stack", 48, 48),
@@ -103,7 +104,7 @@ def test_a_piece_is_named_the_frame_it_appears() -> None:
         if pending is not None and report.falling is not None and report.falling.piece:
             latency.append(index - pending)
             pending = None
-    assert latency == [0] * 8
+    assert latency == [0] * 7
 
 
 def test_the_entering_piece_is_named_from_two_cells() -> None:
@@ -181,15 +182,20 @@ def test_our_own_paint_never_arrives_as_a_piece() -> None:
 
 
 def test_the_ghost_windows_hold_no_ghost() -> None:
-    """The windows named for a ghost do not contain one.
+    """What these windows are NAMED for is this tool's own hint, not a ghost.
 
-    A landing preview is drawn under its piece, in its piece's columns.
-    What these windows hold instead is this tool's own hint, drawn where
-    the SOLVER wants the piece — which is why it wanders and blinks. The
-    proof is which rule saves them: turn the paint rule off and the same
-    frames grow a phantom tetromino on the floor, while the translucency
-    rule that would catch a real ghost never fires, because the hint is not
-    a shade of any colour the game renders.
+    The window holds both, and the repo has confused them in both
+    directions. The thing that wanders and blinks -- the thing the READMEs
+    describe and the shipped tracker chokes on -- is this tool's own hint,
+    drawn where the SOLVER wants the piece. The proof is which rule saves
+    the frames: turn the paint rule off and the same frames grow a phantom
+    tetromino on the floor.
+
+    The game also draws a real landing preview, in the falling piece's own
+    columns, on 41 of this window's 48 frames. It is invisible to both
+    trackers and so it saves nothing and costs nothing --
+    ``test_the_game_draws_a_ghost_and_it_is_an_outline`` is where that is
+    pinned.
     """
     blind = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED, paint=None)
     floors = set()
@@ -199,6 +205,70 @@ def test_the_ghost_windows_hold_no_ghost() -> None:
     assert floors == {0b1100000000, 0b1111110000, 0b1100001111}
     _, reports = replay("ghost_beside_stack")
     assert {r.stack_rows[11] for r in reports} == {0b1100000000}
+
+
+def test_the_game_draws_a_ghost_and_it_is_an_outline() -> None:
+    """ROAS Stacker draws a landing preview. SPEC.md says it does not.
+
+    Read off ghost_beside_stack 00138 with no vision code in the loop, so
+    this is a fact about the PNG and not about anything that reads it.
+    The falling I is at row 0 columns 4-7; the game draws four rounded
+    squares at row 11 columns 4-7 -- where it would land -- outlined in the
+    I's own colour at about 26% alpha over the board's ground.
+
+    Two things follow, and they point opposite ways.
+
+    It is real, so SPEC.md (~line 283), ``vision/grid.py`` (~line 1092) and
+    two fixture READMEs are wrong to say no committed fixture holds one.
+    The oracle found it; every window in the corpus has one, on 482 of the
+    542 frames.
+
+    And it is an OUTLINE, covering under a tenth of the cell, with pure
+    background in the middle. A centre-patch sampler cannot see it. So the
+    colour-first tracker is exactly as blind to it as the shipped
+    occupancy reader, its translucency rule never fired on one in its life,
+    and "in colour, one threshold separates the ghost from the piece" is
+    not a claim this corpus supports.
+    """
+    from collections import Counter
+
+    image = np.asarray(
+        Image.open(FIXTURES / "ghost_beside_stack" / "board_00138.png").convert("RGB"),
+        dtype=np.uint8,
+    )
+    height, width, _ = image.shape
+    ys = np.linspace(0, height, ROWS + 1).round().astype(int)
+    xs = np.linspace(0, width, COLS + 1).round().astype(int)
+
+    def cell(row: int, col: int) -> np.ndarray:
+        return image[ys[row] : ys[row + 1], xs[col] : xs[col + 1]]
+
+    def shares(row: int, col: int) -> list[tuple[tuple[int, ...], float]]:
+        patch = cell(row, col)
+        total = patch.shape[0] * patch.shape[1]
+        counts = Counter(map(tuple, patch.reshape(-1, 3)))
+        return [(tuple(int(v) for v in value), n / total) for value, n in counts.most_common(3)]
+
+    ground = np.array([251.0, 252.0, 252.0])
+    piece = np.array([45.0, 46.0, 215.0])  # the falling I, RGB
+    assert shares(0, 4)[0][0] == (45, 46, 215), "the I is at row 0 col 4"
+    assert shares(6, 5)[0][0] == (251, 252, 252), "the board's ground"
+
+    for col in range(4, 8):
+        top = dict(shares(11, col))
+        assert top[(251, 252, 252)] > 0.6, "most of a ghost cell is bare board"
+        # The one colour in the cell that is a long way from the ground.
+        outline = max(top, key=lambda value: float(np.linalg.norm(np.array(value) - ground)))
+        alpha = (np.array(outline, dtype=float) - ground) / (piece - ground)
+        assert 0.2 < float(alpha.min()) and float(alpha.max()) < 0.35, alpha
+        assert 0.05 < top[outline] < 0.15, "an outline, not a fill"
+
+    # And the centre of every one of those cells is bare board, which is
+    # why no centre-patch sampler will ever report it.
+    centres = board_colours(load(FIXTURES / "ghost_beside_stack" / "board_00138.png"), ROWS, COLS)
+    background = np.array([252.0, 252.0, 251.0])  # the same ground, in BGR
+    for col in range(4, 8):
+        assert float(np.linalg.norm(centres[11, col] - background)) < EMPTY_DIST
 
 
 def test_no_window_ever_loses_the_piece_for_long() -> None:

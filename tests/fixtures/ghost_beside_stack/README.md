@@ -48,7 +48,10 @@ piece's landing position. That is what a ghost IS, in every Tetris.
 ## CORRECTION: it is not a ghost
 
 Everything above describes the symptom correctly and the cause wrongly.
-There is no ghost in this window. ROAS Stacker draws none.
+The thing that WANDERS in this window is not a ghost.
+
+(Second correction, later: "ROAS Stacker draws none" — which is what this
+line used to say — is itself wrong. See the bottom of this file.)
 
 What sits at row 11 on frames 145-146 and 147-150 is THIS TOOL'S OWN HINT,
 painted over the game by `overlay/renderer.py:draw_hint` and still on
@@ -76,3 +79,30 @@ the other windows and would have named the wrong half of this one.
 The fix is `vision.grid._own_paint_layer`, which recognizes the paint by its
 color instead of guessing at it from structure. See
 `tests/test_ghost_beside_stack.py` for the replay and the before/after.
+
+
+## SECOND CORRECTION: the game does draw a preview, and it is invisible
+
+"There is no ghost in this window. ROAS Stacker draws none" was wrong.
+The independent oracle in `tetris_coach.truth` reports a game-drawn
+landing preview on 41 of this window's 48 frames, and I checked 00138 by
+hand with no vision code in the loop.
+
+The falling I is at row 0 cols 4-7. Row 11 cols 4-7 each carry RGB
+(197, 198, 241) over 9% of the cell rect. The board ground is
+(251, 252, 252) and the I is (45, 46, 215), which makes that the I's own
+colour at 26% alpha, drawn in the columns the piece would land in — a real
+landing preview, and one that does track its piece's columns.
+
+Why it never turned up: it is an OUTLINE of four rounded squares. Over 60%
+of each cell stays bare board and the centre is bare board, so both the
+shipped occupancy reader and the colour-first prototype sample straight
+through it. That is a fact about this game's line weight, not about ghosts,
+and it means no rule in this repo has ever actually been tested against one.
+
+The correction above stands on everything else: the layer that WANDERS
+between cols 4-7 and cols 0-3, the one the tracker choked on, is this
+tool's own hint, and `_own_paint_layer` is what saves these frames.
+
+Pinned at `tests/test_colour_tracker_sessions.py`,
+`test_the_game_draws_a_ghost_and_it_is_an_outline`.

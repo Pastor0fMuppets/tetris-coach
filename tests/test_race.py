@@ -409,7 +409,11 @@ def test_coverage_and_what_the_gate_costs() -> None:
     """How often each coach has nothing on screen at all."""
     shipped = overall(scores(), "shipped")  # type: ignore[arg-type]
     prototype = overall(scores(), "prototype")  # type: ignore[arg-type]
-    assert (shipped.hintless_frames, prototype.hintless_frames) == (25, 21)
+    # The prototype's 22nd blank frame is spawn_latency's line-clear
+    # animation, which it now reads as holding no piece: removing the
+    # translucency rule (see test_colour_tracker.py) stopped it calling a
+    # flash-tinted cell a dim copy of the I. The oracle abstains there too.
+    assert (shipped.hintless_frames, prototype.hintless_frames) == (25, 22)
     # 64 of the shipped tracker's 422 scored frames never reach it: the
     # confidence gate refuses them and the previous hint stays up. The
     # prototype has no gate, so it reads all 422 -- and 14 of its own 21
