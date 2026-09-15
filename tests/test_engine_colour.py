@@ -21,7 +21,18 @@ import pytest
 from tetris_coach.app import CoachConfig, CoachEngine
 from tetris_coach.vision.readers import ColourVision, ShapeVision
 
-from .colour_frames import BLUE_I, CELL, COLS, GREEN_O, PALE_T, ROWS, preview, render
+from .colour_frames import (
+    BLUE_I,
+    CELL,
+    COLS,
+    GREEN_O,
+    PALE_T,
+    ROWS,
+    paint_badge,
+    paint_hint,
+    preview,
+    render,
+)
 
 O_CELLS = [(0, 0), (0, 1), (1, 0), (1, 1)]
 I_CELLS = [(0, 0), (0, 1), (0, 2), (0, 3)]
@@ -163,6 +174,35 @@ def test_the_coach_never_reads_its_own_paint_as_the_board() -> None:
     assert coach.last_reading is not None
     assert coach.last_reading.falling_piece == "I"
     assert coach.last_reading.stack_rows == (0,) * ROWS
+
+
+def test_the_rotation_badge_no_longer_deletes_the_piece() -> None:
+    """The coach's own badge, painted where the renderer paints it, read back.
+
+    The badge is the one thing this tool draws that cannot be composited
+    out, so a reader can only skip the cell it covers. Hung in the cell
+    ABOVE the hint -- which is a cell the piece passes through on its way
+    down -- that cost a cell of the piece: measured, a vertical I in
+    column 3 with the badge over (5, 3) read as three cells at (6,3),
+    (7,3), (8,3), which no shape can name. With an unnamed colour that is
+    a hint withdrawn, the badge withdrawn with it, the piece named again
+    and the hint back: a loop at 15 fps driven by the coach's own paint.
+
+    Drawn inside the hint's own top-left cell it reads back clean, hint
+    and all.
+    """
+    coach = engine()
+    box = preview(I_CELLS, BLUE_I)
+    piece = {(r, 3): BLUE_I for r in range(5, 9)}
+    hint = coach.process_frame(render(piece), box)
+    assert hint is not None and hint.piece == "I"
+
+    painted = paint_hint(render(piece), list(hint.cells))
+    again = coach.process_frame(paint_badge(painted, hint), box)
+    assert again is not None and again.piece == "I"
+    reading = coach.last_reading
+    assert reading is not None and reading.falling_piece == "I"
+    assert reading.stack_rows == (0,) * ROWS, "our own paint is not board content"
 
 
 def test_nothing_is_planned_into_a_cell_the_capture_cannot_see() -> None:

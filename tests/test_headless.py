@@ -11,7 +11,11 @@ import pytest
 
 from tetris_coach.capture.screen import ArraySource, Rect
 from tetris_coach.cli import main, run_demo
-from tetris_coach.overlay.renderer import HintStyle, placement_cell_rects
+from tetris_coach.overlay.renderer import (
+    HintStyle,
+    placement_cell_rects,
+    rotation_badge_rect,
+)
 from tetris_coach.solver.search import best_move
 from tetris_coach.vision.state import GameEvent
 
@@ -112,6 +116,37 @@ def test_placement_cell_rects_geometry() -> None:
         assert (w, h) == (30.0, 25.0)
     inset_rects = placement_cell_rects(move, 30.0, 25.0, inset=2.0)
     assert inset_rects[0][2] == 26.0
+
+
+def test_the_rotation_badge_stays_out_of_every_sampled_patch() -> None:
+    """The badge is opaque, so the one place it may go is where no reader looks.
+
+    Both readers sample a cell's central patch, inset CELL_MARGIN on every
+    side, and an opaque disc inside one of those patches erases whatever
+    the game drew there -- the badge used to sit in the cell ABOVE the
+    hint, which is a cell the falling piece passes through. Inside the
+    hint's own top-left cell it can still be recognized (that cell is
+    painted either way) and it corrupts nothing: not that cell's patch,
+    and not one pixel of any other cell, which matters because hint
+    colour in an UNpainted cell would be un-composited into content the
+    game never drew.
+    """
+    from tetris_coach.core.board import Board
+    from tetris_coach.vision.colour_palette import CELL_MARGIN
+
+    for piece in ("I", "O", "T", "S", "Z", "J", "L"):
+        for cell_w, cell_h in ((48.0, 48.1), (30.0, 25.0), (20.0, 20.0)):
+            move = best_move(Board(), piece)
+            assert move is not None
+            x, y, w, h = rotation_badge_rect(move, cell_w, cell_h)
+            top_row = min(r for r, _ in move.cells)
+            left_col = min(c for _, c in move.cells)
+            # Inside the hint's own top-left cell, on every side.
+            assert x >= left_col * cell_w and x + w <= (left_col + 1) * cell_w
+            assert y >= top_row * cell_h and y + h <= (top_row + 1) * cell_h
+            # ... and clear of that cell's sampled patch, with room to spare
+            # for an antialiased edge.
+            assert y + h < (top_row + CELL_MARGIN) * cell_h
 
 
 def test_hint_style_defaults() -> None:

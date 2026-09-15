@@ -870,9 +870,12 @@ def _own_paint_layer(
     same color at :data:`HINT_FILL_OPACITY` over that board's own
     ``(251, 252, 252)`` for the fill (RGB; the frames arrive BGR).
     The one-cell round badge the SPEC used to attribute to the game is
-    this module's own rotation badge, drawn by
-    ``overlay.renderer._draw_rotation_badge`` above the hint's top-left
-    cell and carrying the rotation index as its digit.
+    this module's own rotation badge, carrying the rotation index as its
+    digit. In the committed fixtures it is drawn in the cell ABOVE the
+    hint's top-left one, which is where it was when they were captured;
+    ``overlay.renderer.rotation_badge_rect`` now keeps it inside the
+    hint's own cell and out of every sampled patch, because up there it
+    was deleting cells of the falling piece on its way down.
 
     Which means this game — ROAS Stacker, the only game any committed
     fixture holds — draws NO GHOST AT ALL. Measured over all four

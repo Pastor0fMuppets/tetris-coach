@@ -91,12 +91,20 @@ def test_our_own_hint_paint_over_a_piece_keeps_the_piece() -> None:
     assert report.falling is None
 
 
-def test_our_own_rotation_badge_is_not_content() -> None:
-    """A disc of pure hint colour is our drawing, not an O."""
+def test_a_disc_of_hint_colour_in_a_patch_is_our_drawing() -> None:
+    """Hint colour ACROSS a cell's patch is ours, and the cell is unreadable.
+
+    This is the rule, on the shape the rotation badge used to have: an
+    ellipse 0.6 x 0.55 of a cell, hung on the left edge of the cell above
+    the hint's top-left corner. The badge is not drawn there any more --
+    it deleted whatever the game had in that cell, and the piece passes
+    through it (see
+    ``test_engine_colour.test_the_rotation_badge_no_longer_deletes_the_piece``)
+    -- but the rule stays, because the cell really is unreadable when
+    something opaque covers the middle of it.
+    """
     image = render({})
     hint = np.array(HINT, dtype=np.uint8)
-    # renderer._draw_rotation_badge: an ellipse 0.6 x 0.55 of a cell, hung on
-    # the left edge of the cell above the hint's top-left corner.
     yy, xx = np.mgrid[0 : ROWS * CELL, 0 : COLS * CELL]
     cy, cx = (5 + 0.275) * CELL, (3 + 0.3) * CELL
     ry, rx = 0.275 * CELL, 0.3 * CELL

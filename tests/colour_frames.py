@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from tetris_coach.overlay.renderer import rotation_badge_rect
+from tetris_coach.solver.search import Move
 from tetris_coach.vision.colour_tracker import ColourTracker
 from tetris_coach.vision.grid import HINT_FILL_OPACITY, HINT_PAINT
 
@@ -78,3 +80,20 @@ def preview(
 
 def tracker(**kwargs: object) -> ColourTracker:
     return ColourTracker(rows=ROWS, cols=COLS, **kwargs)  # type: ignore[arg-type]
+
+
+def paint_badge(image: np.ndarray, move: Move, cell: int = CELL) -> np.ndarray:
+    """Draw the hint's rotation badge where the renderer draws it.
+
+    The geometry is ``overlay.renderer.rotation_badge_rect``'s rather than
+    a copy of it, because what this is for is checking that what the coach
+    paints can still be read back -- and a copy would go on agreeing with
+    itself after the renderer moved.
+    """
+    out = image.copy()
+    x, y, w, h = rotation_badge_rect(move, cell, cell)
+    yy, xx = np.mgrid[0 : out.shape[0], 0 : out.shape[1]]
+    cy, cx, ry, rx = y + h / 2, x + w / 2, h / 2, w / 2
+    inside = ((yy - cy) / ry) ** 2 + ((xx - cx) / rx) ** 2 <= 1.0
+    out[inside] = np.array(HINT, dtype=np.uint8)
+    return out

@@ -11,7 +11,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..solver.search import Move
+from ..vision.colour_palette import CELL_MARGIN
 from ..vision.grid import HINT_FILL_OPACITY
+
+# Size of the rotation badge, as a share of one cell. The height has to
+# stay inside the cell's top margin -- the band above the patch the
+# readers sample, CELL_MARGIN deep -- with room for the antialiased edge,
+# or the badge is back to deleting the cell it sits in. See
+# :func:`rotation_badge_rect`.
+BADGE_WIDTH = 0.5
+BADGE_HEIGHT = CELL_MARGIN * 0.8
 
 try:  # pragma: no cover - depends on platform
     from PySide6.QtCore import QRectF
@@ -57,6 +66,45 @@ def placement_cell_rects(
     return rects
 
 
+def rotation_badge_rect(
+    move: Move, cell_width: float, cell_height: float
+) -> tuple[float, float, float, float]:
+    """Pixel rectangle (x, y, w, h) of the rotation badge.
+
+    THE BADGE IS OPAQUE, so wherever it lands it deletes what the game
+    drew underneath: it is the one thing this tool paints that cannot be
+    composited back out, and the readers recognize it as ours and skip the
+    cell. It used to be hung in the cell ABOVE the hint's top-left corner
+    -- which is a cell the falling piece passes through on its way to the
+    target. Measured: a vertical I in column 3 with the badge over (5, 3)
+    is read as three cells at (6,3), (7,3), (8,3) -- a fragment no shape
+    can name -- so an unnamed colour gets no hint, the hint comes down,
+    the badge goes with it, the piece is named again and the hint comes
+    back. A 15 fps loop, driven by the coach's own drawing.
+
+    So it goes INSIDE the hint's own top-left cell, in that cell's top
+    margin: the band above the central patch both readers sample
+    (:data:`~tetris_coach.vision.colour_palette.CELL_MARGIN` of the cell
+    on every side). There it changes no reading at all -- the cell is
+    already painted, its patch still carries the translucent fill the
+    reader un-composites exactly, and no OTHER cell is touched, which
+    matters because hint-coloured pixels in an unpainted cell would be
+    un-composited too and arrive as content the game never drew.
+
+    The badge is smaller for it. That is the trade: a digit at a fifth of
+    a cell high against a hint that flickers at 15 fps and a piece that
+    cannot be named.
+    """
+    top_row = min(r for r, _ in move.cells)
+    left_col = min(c for _, c in move.cells)
+    return (
+        left_col * cell_width,
+        top_row * cell_height,
+        cell_width * BADGE_WIDTH,
+        cell_height * BADGE_HEIGHT,
+    )
+
+
 def draw_hint(
     painter: QPainter,
     move: Move,
@@ -92,11 +140,7 @@ def _draw_rotation_badge(
     color: Any,
 ) -> None:  # pragma: no cover - macOS only
     """Small badge with the number of clockwise rotations needed."""
-    top_row = min(r for r, _ in move.cells)
-    left_col = min(c for _, c in move.cells)
-    x = left_col * cell_width
-    y = top_row * cell_height - cell_height * 0.6
-    badge = QRectF(x, max(0.0, y), cell_width * 0.6, cell_height * 0.55)
+    badge = QRectF(*rotation_badge_rect(move, cell_width, cell_height))
     painter.setBrush(color)
     painter.setPen(QPen(QColor(0, 0, 0, 0)))
     painter.drawEllipse(badge)
