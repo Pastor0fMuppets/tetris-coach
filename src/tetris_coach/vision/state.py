@@ -243,6 +243,9 @@ class GameStateTracker:
                 self._unexplained_rows = rows
                 self._unexplained_count = 1
             if self._unexplained_count >= self._reset_confirm_frames:
+                # How far back the new world this resync adopts goes, kept
+                # before the counter is cleared below (see the hint rule).
+                run_length = self._unexplained_count
                 # Re-anchor on the observed board. Unobservable cells were
                 # blanked above, so the belief is seeded EMPTY: a resync is
                 # usually a fresh game, and there is no evidence for
@@ -268,8 +271,19 @@ class GameStateTracker:
                 self._last_falling = None
                 # A resync is a new world (a new game, garbage, a mid-game
                 # attach). What the preview shows still holds, but which
-                # piece was dealt into THIS board does not.
-                self._entering_hint = None
+                # piece was dealt into THIS board does not — UNLESS the
+                # flip that said so happened inside the run of frames this
+                # resync is adopting, which is the new world already on
+                # screen. Then the deal it reports is this board's own,
+                # and the piece it names is the fragment the strip above
+                # just held back: dropping it there is what made the
+                # user's own case slow. Measured on the spawn_latency
+                # window: the game wipes the field and deals an O, the box
+                # flips O -> I on 00158 as the O's first cells appear at
+                # the top edge, and the reset four frames later threw that
+                # away and left the O nameless until 00175.
+                if self._hint_age >= run_length:
+                    self._entering_hint = None
                 return [GameEvent.BOARD_RESET]
             # Pending is untouched: a torn frame between the confirmations
             # of a real transition must not restart its count.

@@ -15,19 +15,26 @@ and an L alike. ``explain_grid`` holds rather than guess, the frame reads
 OCCLUDED, and nothing is on screen until the piece's second row descends.
 
 This module replays the window through ``CoachEngine`` and MEASURES that
-wait, per entering piece, so the accelerator can be judged against it
-rather than against a description of it. The three episodes here, and
-what each has to work with:
+wait, per entering piece, so the accelerator is judged against it rather
+than against a description of it. The three episodes here, what each has
+to work with, and what each costs now:
 
     frames 00086-00102  the window OPENS on a piece already at the top
                         edge. No preview CHANGE has been seen (the box
                         holds an O from the first frame, and None -> X
                         says nothing about what was dealt), so there is
-                        no evidence and the rule holds: 17 frames.
+                        no evidence and the rule holds: 17 frames, and
+                        17 frames still.
     frames 00161-00174  the preview flips O -> I on 00158, which is the
                         game saying the O is what it just dealt — the
-                        very fragment sitting at the top edge. THIS is
-                        the one the preview can name early.
+                        very fragment sitting at the top edge. This is
+                        the one the preview CAN name, and it now does:
+                        14 frames -> 2, which is the commit debounce,
+                        with the O still showing two of its four cells.
+                        What used to throw the evidence away was the
+                        board reset four frames later: the game had
+                        wiped the field, and the resync dropped the hint
+                        that named the piece it was resyncing ONTO.
     frames 00217-00232  the flip here is I -> O and it is a deal LATE:
                         the T that was dealt sat in the preview box from
                         00198 to 00215 unread (it is drawn in a pale blue
@@ -35,7 +42,11 @@ what each has to work with:
                         under the 0.35 uniformity floor), so the name the
                         flip carries is the piece BEFORE it. Naming the
                         fragment from it would be the "confused two
-                        pieces" failure; it must stay a 16-frame wait.
+                        pieces" failure: 16 frames, and 16 frames still.
+
+So the accelerator pays where there is evidence and nowhere else, which
+is the point — it is an accelerator on a signal that is often present,
+not a new dependency.
 """
 
 from __future__ import annotations
@@ -214,33 +225,63 @@ def test_the_window_replays_without_an_unexplainable_surprise() -> None:
     assert kinds[FrameKind.UNEXPLAINED] == 8  # the two resets' confirmation runs
 
 
-def test_a_piece_entering_from_above_is_held_nameless() -> None:
-    # The wait, per piece, measured. Each of these is a piece the user can
-    # see on his screen with nothing drawn on it.
+def test_the_piece_the_preview_can_name_is_hinted_while_still_half_off_screen() -> None:
+    # The headline, and the user's own measure: the gap between a piece
+    # appearing at the top edge and something appearing on it.
+    #
+    #     sighting -> hint     before   after
+    #     00086                    17      17   no flip has been seen
+    #     00161                    14       2   the flip names the O
+    #     00217                    16      16   the flip is a deal late
+    #
     assert entering_episodes() == [
         ("00086", "00103", 17),
-        ("00161", "00175", 14),
+        ("00161", "00163", 2),
         ("00217", "00233", 16),
     ]
-    # ...and what it looks like while it runs: a coherent frame that names
-    # nothing, held rather than guessed, for 12 frames of the second one.
-    waiting = [tick(f"00{n}") for n in range(162, 174)]
+    # Two frames is the commit debounce, not a wait: the name is there on
+    # 00162, the frame after the resync, and the tracker commits any
+    # candidate on its second identical frame.
+    assert tick("00162").kind is FrameKind.FALLING
+    assert tick("00163").falling == "O" and tick("00163").hint is not None
+    # ...and what it is naming is a piece the capture can only half see:
+    # two cells on the grid, of a tetromino that has four. This is the
+    # thing the user asked for — a hint while the piece is still falling
+    # into view, instead of after it has finished arriving.
+    assert tick("00162").entering_cells == [4, 5]
+    assert tick("00163").entering_cells == [4, 5]
+    # The proof the name was right rather than merely early: the same
+    # piece keeps descending, the shape rule reaches it at 00174, and it
+    # is the same O — no second spawn, no hint changing target.
+    assert tick("00174").kind is FrameKind.FALLING
+    assert all(tick(f"00{n}").falling == "O" for n in range(163, 199))
+
+
+def test_the_two_episodes_with_no_evidence_still_hold_rather_than_guess() -> None:
+    # The other half of the headline. Nothing about these two changed,
+    # and nothing about them should: the first has seen no flip at all,
+    # and the third's flip is a deal late (the T that was dealt sat
+    # unread in the box for 18 frames, so the flip carries the I before
+    # it). A hint withheld beats a hint confidently wrong.
+    waiting = [tick(f"00{n}") for n in range(218, 232)]
     assert all(t.kind is FrameKind.OCCLUDED for t in waiting)
     assert all(t.falling is None and t.hint is None for t in waiting)
-    # Two cells, side by side, sliding across the top edge as the player
-    # moves a piece he has been given nothing to move.
-    assert [t.entering_cells for t in waiting] == [[4, 5]] * 8 + [[5, 6]] * 4
+    # Three cells of a T, sliding across the top edge as the player moves
+    # a piece he has been given nothing to move.
+    assert [t.entering_cells for t in waiting] == [[3, 4, 5]] * 14
+    assert tick("00233").falling == "T"
 
 
-def test_the_wait_is_a_third_of_the_frames_the_gate_accepts() -> None:
+def test_the_wait_is_a_quarter_of_the_frames_the_gate_accepts() -> None:
     # The aggregate the README reports over the whole session (164 of 705
-    # OCCLUDED, 23%), on the committed window: every one of these is a
-    # frame where the coach knows a piece is there and cannot name it.
+    # OCCLUDED, 23%), on the committed window. Every OCCLUDED frame is one
+    # where the coach knows a piece is there and cannot name it; every
+    # frame it stops being one is a frame with a hint on it.
     accepted = [t for t in replay() if t.accepted]
     kinds = Counter(t.kind for t in accepted if t.kind is not None)
     assert len(accepted) == 124
-    assert kinds[FrameKind.OCCLUDED] == 43
-    assert sum(1 for t in replay() if t.hint is not None) == 108
+    assert kinds[FrameKind.OCCLUDED] == 31  # was 43
+    assert sum(1 for t in replay() if t.hint is not None) == 120  # was 108
 
 
 def test_the_preview_is_read_on_most_frames_and_never_on_the_pale_T() -> None:
