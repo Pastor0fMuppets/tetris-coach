@@ -53,6 +53,22 @@ class CoachConfig:
     # Directory to save captured frames into as PNGs (debugging aid for
     # region/scaling/tracking problems); None disables dumping.
     dump_dir: str | None = None
+    # How long a hint may stay on screen after vision stops being able to
+    # justify it. A one-frame glitch must not make the overlay flicker, but
+    # a hint the coach cannot currently see the board behind is worse than
+    # no hint: measured on a real session, a game-over screen and a "ROW
+    # CLEARED" reward popup each left a stale placement painted over them,
+    # once for 326 frames (21.7 s).
+    #
+    # Chosen by measurement, not taste. Rejected runs across every committed
+    # window and two live sessions: 31 (a board wipe at game start), 28, 21
+    # (the reward popup), 15, 14, 8, 7, 5, 4 ... and then 326, which is the
+    # game-over screen. Everything legitimate is under ~31 frames and the
+    # piece is still there behind it, so the hint should survive; the
+    # pathological case is an order of magnitude longer. 45 frames (3 s at
+    # the default poll rate) sits above every real obscuration measured and
+    # far below the one that is not.
+    max_stale_frames: int = 45
     # How many CONSECUTIVE frames from the start of the session to dump.
     # Consecutive matters: the tracker diffs each frame against the last
     # committed one, so only a contiguous run can replay live tracking
@@ -301,6 +317,9 @@ class CoachEngine:
         # last line printed, plus a frame counter for the periodic reprint.
         self._debug_last_status: tuple[float, int, str] | None = None
         self._debug_frames = 0
+        # Consecutive frames the gate has refused. The hint is withdrawn
+        # once this passes config.max_stale_frames (see process_frame).
+        self._stale_frames = 0
 
     def process_frame(
         self,
@@ -337,7 +356,19 @@ class CoachEngine:
             # for its whole duration and the flip on the far side is dated
             # against a frame seconds earlier. Board state is untouched.
             self.tracker.observe_preview(self._identify_next_cached(next_image))
-            return self.current_hint  # keep showing the last good hint
+            self._stale_frames += 1
+            if self._stale_frames > self.config.max_stale_frames:
+                # Vision has not been able to justify this placement for
+                # long enough that the board behind it has probably moved
+                # on. Take it down rather than let it sit there being
+                # confidently wrong; the tracker's own state is untouched,
+                # so a readable frame re-solves immediately.
+                self.current_hint = None
+                self._hint_is_provisional = False
+                self._predicted_board = None
+                self._precomputed = None
+            return self.current_hint  # a brief hold rides out a glitch
+        self._stale_frames = 0
         # Drop what the capture read under the preview box: confidence above
         # was judged on the full grid, but neither the tracker nor the debug
         # view below may take the NEXT piece for board content. The tracker
@@ -357,6 +388,24 @@ class CoachEngine:
             self._predicted_board = None
             self._precomputed = None
             self.current_hint = None
+
+        if (
+            self.current_hint is None
+            and not events
+            and committed.falling_piece is not None
+            and committed == previous
+        ):
+            # A withdrawn hint has to be able to come BACK. Solving is
+            # otherwise driven by events, so once a long obscuration took
+            # the hint down (see max_stale_frames), an unchanged board
+            # produces no event and the coach would stay silent until the
+            # next piece - the overlay lifting would not bring it back.
+            # Same inputs as the ordinary solve, so it lands on the same
+            # placement; the stability rule then holds it as usual.
+            board = self._solver_board(committed.stack_rows)
+            self.current_hint = best_move(board, committed.falling_piece, committed.next_piece)
+            self._hint_is_provisional = committed.next_piece is None
+            self._precompute_next(committed.next_piece)
 
         if GameEvent.PIECE_UNNAMED in events:
             # The preview named the piece entering, and that name is over:

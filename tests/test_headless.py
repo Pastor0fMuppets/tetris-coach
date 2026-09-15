@@ -636,12 +636,22 @@ class TestCoachEngineScenarios:
         events_log.clear()  # setup: the attach resync and the T spawn
 
         overlay = np.full((20 * self.CELL, 10 * self.CELL, 3), 245, dtype=np.uint8)
-        for _ in range(12):  # 3x the 4-frame reset debounce
-            assert engine.process_frame(overlay, self._preview("I")) is hint
+        for _ in range(engine.config.max_stale_frames + 12):  # past both clocks
+            engine.process_frame(overlay, self._preview("I"))
+        # What this test is about: the TRACKER is untouched by an overlay of
+        # any duration - nothing committed, no reset, no second re-sync.
         assert engine.tracker.committed == committed
         assert events_log == []
-        # Overlay lifts: play continues on the same committed state.
-        assert self._process(engine, falling, "I") is hint
+        # The DISPLAYED hint is a separate question, and the answer changed
+        # deliberately: a placement the coach cannot currently see the board
+        # behind comes down (CoachConfig.max_stale_frames). Measured on a
+        # real session, holding it left a hint painted over a game-over
+        # screen for 326 frames (21.7 s). This assertion used to read
+        # `is hint` for all 12 frames.
+        assert engine.current_hint is None
+        # Overlay lifts: the untouched committed state re-solves at once,
+        # to the same placement, with no re-sync.
+        assert self._process(engine, falling, "I") == hint
         assert engine.tracker.committed == committed
         assert events_log == []
 
@@ -888,3 +898,61 @@ def test_no_stray_board_size_literals_in_src() -> None:
             if pattern.search(line) and not any(mark in line for mark in allowed):
                 offenders.append(f"{path.relative_to(src)}:{lineno}: {line.strip()}")
     assert not offenders, "bare board-size literals in src:\n" + "\n".join(offenders)
+
+
+class TestStaleHintWithdrawal:
+    """A hint vision can no longer justify comes off the screen.
+
+    Measured on a real session before this existed: the game's own
+    "ROW CLEARED" reward popup and then its game-over leaderboard each
+    covered the playfield, the gate correctly refused those frames, and
+    the last placement stayed painted over them - once for 326 frames
+    (21.7 s). A brief hold still rides out a one-frame glitch.
+    """
+
+    def _engine(self, max_stale: int = 8):  # type: ignore[no-untyped-def]
+        # Tests drive a deliberately short patience; the shipped default is
+        # CoachConfig.max_stale_frames, chosen from measured run lengths.
+        from tetris_coach.app import CoachConfig, CoachEngine
+
+        return CoachEngine(CoachConfig(max_stale_frames=max_stale))
+
+    def _hinted_board(self, engine):  # type: ignore[no-untyped-def]
+        from tetris_coach.core.pieces import ROTATIONS
+
+        grid = np.zeros((20, 10), dtype=bool)
+        for r, c in ((1, 4), (2, 3), (2, 4), (2, 5)):
+            grid[r, c] = True
+        style = STYLES[0]
+        board = render_board(grid, style, cell_size=16)
+        nxt = render_next_preview(ROTATIONS["I"][0].cells, style, cell_size=16)
+        engine.process_frame(board, nxt)
+        hint = engine.process_frame(board, nxt)
+        assert hint is not None
+        return board, nxt
+
+    def test_a_brief_unreadable_patch_holds_the_hint(self) -> None:
+        engine = self._engine()
+        _, nxt = self._hinted_board(engine)
+        # A frame the gate refuses: uniformly far from the board background.
+        unreadable = np.full((320, 160, 3), 128, dtype=np.uint8)
+        for _ in range(8):
+            assert engine.process_frame(unreadable, nxt) is not None
+
+    def test_a_sustained_one_withdraws_it(self) -> None:
+        engine = self._engine()
+        _, nxt = self._hinted_board(engine)
+        unreadable = np.full((320, 160, 3), 128, dtype=np.uint8)
+        for _ in range(9):
+            engine.process_frame(unreadable, nxt)
+        assert engine.process_frame(unreadable, nxt) is None
+
+    def test_a_readable_frame_resets_the_patience(self) -> None:
+        engine = self._engine()
+        board, nxt = self._hinted_board(engine)
+        unreadable = np.full((320, 160, 3), 128, dtype=np.uint8)
+        for _ in range(6):
+            engine.process_frame(unreadable, nxt)
+        assert engine.process_frame(board, nxt) is not None  # readable again
+        for _ in range(6):  # the counter restarted, so this still holds
+            assert engine.process_frame(unreadable, nxt) is not None
