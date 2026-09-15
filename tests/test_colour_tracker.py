@@ -284,3 +284,66 @@ def test_a_monochrome_theme_falls_back_to_shape() -> None:
         report = track.update(render(stack | landed))
     assert report.falling is None
     assert report.stack_rows[11] == 0b1000111111
+
+
+def test_a_monochrome_theme_keeps_falling_back_after_the_first_piece() -> None:
+    """The second piece of a one-colour game, and the third.
+
+    Showing ONE piece cannot tell a fallback from a bootstrap: a tracker
+    that consults shape only while the colour is anonymous passes that test
+    and then names every later piece after the first. So this shows three
+    pieces down one colour class, and the class names none of them.
+    """
+    grey = (120.0, 120.0, 120.0)
+    track = tracker()
+    shapes = {
+        "S": {(7, 8), (8, 8), (8, 9), (9, 9)},
+        "L": {(4, 2), (5, 2), (6, 2), (6, 3)},
+        "J": {(4, 6), (5, 6), (6, 5), (6, 6)},
+    }
+    for expected, cells in shapes.items():
+        for _ in range(4):
+            report = track.update(render(dict.fromkeys(cells, grey)))
+        assert len(track.palette.classes) == 1, "still one colour, as the theme intends"
+        assert report.falling is not None
+        assert report.falling.piece == expected, f"{expected} named {report.falling.piece}"
+
+    # The class has been retired from naming, so it no longer lends its
+    # name to a partial sighting either. Silence is the honest answer for a
+    # game whose colours carry no identity: two cells of grey are an O, an
+    # S, a Z, a J or an L, and the tracker knows only that.
+    assert track.palette.classes[0].ambiguous
+    assert track.palette.piece_of(0) is None
+    report = track.update(render({(0, 4): grey, (0, 5): grey}))
+    assert report.falling is not None
+    assert report.falling.cells == frozenset({(0, 4), (0, 5)})
+    assert report.falling.piece is None
+
+
+def test_a_colour_that_is_contradicted_once_never_names_again() -> None:
+    """Two tetrominoes rendered alike: neither gets the other's name.
+
+    Not only the monochrome case -- a game that draws J and L in the same
+    colour, or recolours a piece by level, lands here too. The palette is
+    allowed to be contradicted exactly once, by the strongest evidence
+    there is (all four cells at once), and the answer to a contradiction is
+    to stop naming rather than to pick a winner.
+    """
+    shared = (90.0, 180.0, 60.0)
+    track = tracker()
+    for _ in range(4):
+        report = track.update(render(dict.fromkeys({(4, 2), (5, 2), (6, 2), (6, 3)}, shared)))
+    assert report.falling is not None and report.falling.piece == "L"
+    assert track.palette.piece_of(0) == "L"
+
+    # The NEXT box, which is weaker evidence, may not rename a class...
+    track.palette.name(0, "J")
+    assert track.palette.piece_of(0) == "L"
+
+    # ...but a complete sighting on the board retires it.
+    for _ in range(4):
+        report = track.update(render(dict.fromkeys({(4, 6), (5, 6), (6, 5), (6, 6)}, shared)))
+    assert report.falling is not None and report.falling.piece == "J"
+    assert track.palette.piece_of(0) is None
+    track.palette.name(0, "L")
+    assert track.palette.piece_of(0) is None, "a retired class cannot be revived by the box"

@@ -31,8 +31,12 @@ piece however long it has hovered (this game has no gravity — a piece sits
 at the top edge until the player drags it), and a piece that has come to
 rest becomes stack once it has held still for ``settle_frames``. Naming is
 by colour from the FIRST VISIBLE CELL, so a piece clipped by the top edge is
-named the frame it appears; shape is the fallback that names a colour the
-palette has not seen (and, in a monochrome theme, every piece).
+named the frame it appears. Shape is consulted on every COMPLETE four-cell
+sighting: it names a colour the palette has not seen, and where it
+contradicts a colour the palette has named, that colour is retired from
+naming altogether and shape takes over for it — a monochrome theme, or two
+tetrominoes a game renders alike, then degrade to naming by shape rather
+than naming every later piece after the first.
 """
 
 from __future__ import annotations
@@ -195,14 +199,8 @@ class ColourTracker:
         self._labels = labels
 
         falling = self._pick_falling(labels)
-        if falling is not None and falling.piece is None:
-            named = piece_from_cells(falling.cells)
-            if named is not None:
-                # A complete four-cell sighting names its own colour, which
-                # is what keeps the tracker working on a game with no
-                # readable NEXT box at all.
-                self.palette.name(falling.colour_class, named)
-                falling = FallingPiece(named, falling.cells, falling.colour_class, falling.floating)
+        if falling is not None:
+            falling = self._named(falling)
 
         stack_rows, stack_count = self._stack(labels, falling)
         events, cleared = self._events(falling, stack_rows, stack_count)
@@ -219,6 +217,28 @@ class ColourTracker:
         )
 
     # -- pieces -------------------------------------------------------
+
+    def _named(self, falling: FallingPiece) -> FallingPiece:
+        """Attach a name, letting a complete sighting overrule the palette.
+
+        Shape is consulted on EVERY complete four-cell sighting, not only
+        while the colour is anonymous. A complete sighting is the one piece
+        of evidence that can contradict the palette, and a palette that
+        cannot be contradicted is a palette that is right forever after the
+        first piece -- which on a monochrome theme means naming every later
+        piece after the first one. When shape and colour disagree the class
+        is retired from naming (:meth:`Palette.witness`) and this tracker
+        degrades to naming by shape, exactly where a colour-blind one lives.
+        """
+        shape = piece_from_cells(falling.cells)
+        if shape is not None:
+            self.palette.witness(falling.colour_class, shape)
+        named = self.palette.piece_of(falling.colour_class)
+        if named is None:
+            named = shape  # the colour says nothing; this frame still can
+        if named == falling.piece:
+            return falling
+        return FallingPiece(named, falling.cells, falling.colour_class, falling.floating)
 
     def _read_preview(self, crop: NDArray[np.uint8]) -> None:
         """Name the NEXT piece, and teach the palette its colour."""

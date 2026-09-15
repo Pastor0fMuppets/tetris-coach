@@ -141,6 +141,7 @@ class ColourClass:
     unit: NDArray[np.float64]  # unit vector, background -> colour
     peak: float  # largest magnitude seen on this ray
     piece: str | None = None  # learned name, when something has named it
+    ambiguous: bool = False  # two complete sightings spelled it differently
 
 
 class Palette:
@@ -211,11 +212,49 @@ class Palette:
         return index
 
     def name(self, index: int, piece: str) -> None:
-        """Record that class ``index`` is ``piece``'s colour."""
-        self.classes[index].piece = piece
+        """Offer a name for class ``index``, from weak evidence.
+
+        The NEXT box's reading. Weak because a box is small, redrawn during
+        its own animation, and shares the board's ground only by
+        assumption, so it may name a class but never RENAME one: a class
+        that already has a name keeps it, and only a complete board
+        sighting (:meth:`witness`) is allowed to disagree.
+        """
+        klass = self.classes[index]
+        if klass.piece is None and not klass.ambiguous:
+            klass.piece = piece
+
+    def witness(self, index: int, piece: str) -> None:
+        """Record a COMPLETE four-cell sighting of class ``index``.
+
+        The strongest naming evidence there is, and the only evidence that
+        can contradict the palette. A contradiction is not a tie to break
+        by preferring one sighting: it is proof that this colour does not
+        determine the piece -- a monochrome theme, two tetrominoes the game
+        renders alike, a piece recoloured by level. So the class stops
+        naming anything at all and shape takes over for it, which is where
+        a colour-blind tracker always was.
+
+        This is a one-way door, and deliberately a narrow one: what it
+        costs when it fires wrongly is naming by shape, and what it costs
+        when it does not fire is every later piece of that colour named
+        wrong for the rest of the session.
+        """
+        klass = self.classes[index]
+        if klass.ambiguous:
+            return
+        if klass.piece is not None and klass.piece != piece:
+            klass.ambiguous = True
+            klass.piece = None
+            return
+        klass.piece = piece
 
     def piece_of(self, index: int) -> str | None:
-        return self.classes[index].piece if 0 <= index < len(self.classes) else None
+        """The piece this class names, or ``None`` if it names none."""
+        if not 0 <= index < len(self.classes):
+            return None
+        klass = self.classes[index]
+        return None if klass.ambiguous else klass.piece
 
     # -- segmentation -------------------------------------------------
 
