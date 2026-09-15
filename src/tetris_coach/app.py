@@ -274,11 +274,17 @@ class CoachEngine:
         # that paint looks like. It is the configured color, not the
         # default, or a session run with --hint-color would paint one
         # thing and look for another.
+        # ...and the preview reader is told the same thing, for the same
+        # reason: the box floats over the top corner of the playfield, so
+        # a hint drawn in that corner is drawn over the BOX, where a
+        # tetromino of our own paint would otherwise read as the piece
+        # the game is about to deal.
+        self._own_paint = OwnPaint.for_hint_color(self.config.hint_color)
         self.classifier = GridClassifier(
             rows=self.config.rows,
             min_confidence=self.config.min_confidence,
             unobservable_cells=self._unobservable_cells,
-            own_paint=OwnPaint.for_hint_color(self.config.hint_color),
+            own_paint=self._own_paint,
         )
         self.current_hint: Move | None = None
         self._predicted_board: Board | None = None
@@ -469,7 +475,7 @@ class CoachEngine:
             return None
         if self._last_next_image is not None and np.array_equal(next_image, self._last_next_image):
             return self._last_next_piece
-        piece = identify_next(next_image)
+        piece = identify_next(next_image, own_paint=self._own_paint)
         # Copy: capture sources may reuse the frame buffer between grabs.
         self._last_next_image = np.array(next_image, copy=True)
         self._last_next_piece = piece

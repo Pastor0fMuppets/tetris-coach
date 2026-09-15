@@ -194,10 +194,10 @@ class TestCoachEngine:
         calls = 0
         real = app_module.identify_next
 
-        def counting(image):  # type: ignore[no-untyped-def]
+        def counting(image, **kwargs):  # type: ignore[no-untyped-def]
             nonlocal calls
             calls += 1
-            return real(image)
+            return real(image, **kwargs)
 
         monkeypatch.setattr(app_module, "identify_next", counting)
         engine = CoachEngine()

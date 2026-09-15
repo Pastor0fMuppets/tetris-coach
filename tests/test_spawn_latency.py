@@ -344,7 +344,9 @@ def test_a_preview_that_lies_costs_the_ambiguous_window_and_nothing_else(
     honest = replay_window()
     real = app_module.identify_next
     monkeypatch.setattr(
-        app_module, "identify_next", lambda image: "S" if real(image) == "O" else real(image)
+        app_module,
+        "identify_next",
+        lambda image, **kwargs: "S" if real(image, **kwargs) == "O" else real(image, **kwargs),
     )
     lying = replay_window()
 
