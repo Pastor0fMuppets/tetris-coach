@@ -36,14 +36,17 @@ from PIL import Image
 from tetris_coach.vision.grid import (
     _GHOST_SEPARATION,
     _LAYER_CONFIDENCE_CEILING,
+    _UNIFORM_EMPTY_CONFIDENCE,
     MIN_SPREAD,
     _cell_colors,
+    _clear_of_background,
     _distance_scores,
     _ghost_layer,
     _piece_named,
     _pieces_in_flight,
     _top_row_background,
     classify_grid,
+    otsu_threshold,
 )
 
 from .synthetic import STYLES, Style, render_board, with_label
@@ -398,3 +401,105 @@ def test_the_falling_piece_on_that_frame_is_what_refuses_the_periwinkle() -> Non
         solid[cell] = False
     assert _piece_named(list(PERIWINKLE_T)) == "T"
     assert _pieces_in_flight(solid, ROAS_COVERED) == {"J"}
+
+
+# --- The other error: a real piece the band used to swallow -----------------
+#
+# tests/fixtures/pale_piece is the same periwinkle in the configuration the
+# threshold cannot survive: a stack of a FAR piece color in the side
+# columns, a pale piece airborne between them. Otsu maximizes between-class
+# variance, the far color dominates the split, and the cut lands above the
+# band — so the pale cells go to the EMPTY class and the piece is not
+# merely misread, it is absent. The scene below is that shape, rendered on
+# every theme.
+LOST_STACK = [(r, c) for r in range(8, 12) for c in (0, 9)]
+LOST_PIECE = [(1, 4), (2, 3), (2, 4), (2, 5)]
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+@pytest.mark.parametrize("score", NAMED, ids=lambda v: f"score{v}")
+def test_a_band_colored_piece_between_far_stacks_is_read_as_content(
+    style: Style, score: float
+) -> None:
+    # It is not a landing preview by any of the five tests — nothing it
+    # could be a copy of is in the air, and it rests on nothing — so the
+    # rule declines, and a declined candidate is CONTENT. Every cell of the
+    # piece and of the stack, and nothing else.
+    assert named_layer(style, LOST_STACK, LOST_PIECE, score) is None
+    occupancy, confidence = read(style, LOST_STACK, LOST_PIECE, score)
+    assert occupancy[grid(LOST_PIECE)].all(), f"{style.name}: the pale piece was lost"
+    assert occupancy[grid(LOST_STACK)].all(), f"{style.name}: stack cells were lost"
+    assert int(occupancy.sum()) == len(LOST_STACK) + len(LOST_PIECE)
+    assert confidence >= 0.15, f"{style.name}: readable but rejected at {confidence:.3f}"
+
+
+def test_the_ordinary_split_really_does_cut_above_that_band() -> None:
+    """Why the threshold had to stop deciding this, measured on the matrix.
+
+    Otsu's cut is dragged up by the far stack color on most themes, which
+    is exactly the frame the band cells used to be lost on. Pinned as a
+    count rather than per-theme: what matters is that this is the common
+    configuration, not which palettes happen to fall in it.
+    """
+    above = 0
+    for style in STYLES:
+        for score in NAMED:
+            image = render_board(
+                grid(LOST_STACK),
+                style,
+                cell_size=24,
+                seed=3,
+                ghost=grid(LOST_PIECE),
+                ghost_score=score,
+            )[:, :, ::-1]
+            background = np.asarray(style.background, dtype=np.float64)[::-1]
+            scores = _distance_scores(_cell_colors(image, ROWS, COLS, 0.25), background)
+            if otsu_threshold(scores) > float(scores[grid(LOST_PIECE)].max()):
+                above += 1
+    assert above >= 10, f"only {above} of 14 themes cut above the band"
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+@pytest.mark.parametrize("score", NAMED, ids=lambda v: f"score{v}")
+def test_a_band_colored_piece_on_an_otherwise_empty_board_is_still_seen(
+    style: Style, score: float
+) -> None:
+    # The same piece with no stack at all: no cell reaches MIN_SPREAD, so
+    # the uniform-empty branch used to call the whole frame an empty board
+    # — at 0.5, well above any gate, on the frame a coach is most needed.
+    # The band standing clear of the background is what tells the two
+    # apart, and the reading is structural, so it reports the structural
+    # number.
+    occupancy, confidence = read(style, [], LOST_PIECE, score)
+    assert occupancy[grid(LOST_PIECE)].all(), f"{style.name}: a spawning piece read as empty board"
+    assert int(occupancy.sum()) == len(LOST_PIECE)
+    assert confidence == pytest.approx(_UNIFORM_EMPTY_CONFIDENCE)
+
+
+@pytest.mark.parametrize("style", STYLES, ids=lambda s: s.name)
+def test_an_empty_board_is_still_an_empty_board(style: Style) -> None:
+    # The branch the one above shares: with nothing in the band, a uniform
+    # frame reads exactly as it always did, so a board wipe still reaches
+    # the tracker.
+    occupancy, confidence = read(style, [], None)
+    assert not occupancy.any()
+    assert confidence == pytest.approx(_UNIFORM_EMPTY_CONFIDENCE)
+
+
+def test_a_continuum_is_not_a_band_and_is_never_promoted() -> None:
+    """The guard on all of it: a level needs a gap, and a ramp has none.
+
+    The game's own start screen is text antialiased over white. Its
+    sub-floor cells climb 0.174 -> 0.196 with nothing between them, a
+    clearance of 0.022 against the 0.175 a level must stand clear by. If
+    that read as content every start screen would grow furniture.
+    """
+    image = np.asarray(Image.open(ROAS / "start_screen_board.png"))[:, :, ::-1]
+    colors = _cell_colors(image, ROWS, COLS, 0.25)
+    scores = _distance_scores(colors, _top_row_background(colors, frozenset()))
+    observable = np.ones((ROWS, COLS), dtype=np.bool_)
+    band = (scores >= _GHOST_SEPARATION) & (scores < MIN_SPREAD)
+    assert band.any(), "the fixture no longer has sub-floor cells at all"
+    assert not _clear_of_background(scores, band, observable)
+    _occupancy, confidence = classify_grid(image, rows=ROWS, cols=COLS)
+    assert confidence < 0.15, f"the start screen read at {confidence:.3f}"

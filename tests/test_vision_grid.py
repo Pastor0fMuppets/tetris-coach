@@ -6,6 +6,8 @@ from PIL import Image
 
 from tetris_coach.app import CoachConfig
 from tetris_coach.vision.grid import (
+    _GHOST_SEPARATION,
+    MIN_SPREAD,
     GridClassifier,
     cell_scores,
     classify_grid,
@@ -777,6 +779,45 @@ def test_random_boards_match_or_reject() -> None:
         assert bool(np.array_equal(occupancy, grid)) or confidence < gate, (
             f"garbage above the gate: style={style.name} seed={i} conf={confidence:.3f}"
         )
+
+
+def test_a_two_level_theme_never_reaches_the_intermediate_band() -> None:
+    """Why the band rules cost an ordinary theme exactly nothing.
+
+    The whole third-level apparatus — the candidate band, the structural
+    naming, the promotion of what is left to content — is reachable only
+    by a cell scoring in ``[_GHOST_SEPARATION, MIN_SPREAD)``. A theme
+    that paints its board one color and its pieces another has no such
+    cell: the background cluster sits at or under 0.06 and the faintest
+    piece color of the matrix is 0.47. Measured here rather than
+    assumed, over 840 readings — 7 styles x 3 cell sizes x 40 seeded
+    random legal boards — every one of which must also read EXACTLY,
+    since a band that never fires cannot change an answer.
+    """
+    rng = np.random.default_rng(20260915)
+    band_cells = 0
+    readings = 0
+    for style in STYLES:
+        for cell_size in (12, 24, 37):
+            for seed in range(40):
+                heights = rng.integers(0, 15, size=10)
+                grid = np.zeros((20, 10), dtype=bool)
+                for c in range(10):
+                    for r in range(20 - int(heights[c]), 20):
+                        grid[r, c] = rng.random() > 0.1
+                for r in range(20):
+                    if grid[r].all():  # a complete line would have cleared
+                        grid[r, int(rng.integers(0, 10))] = False
+                image = render_board(grid, style, cell_size=cell_size, seed=seed)
+                scores = cell_scores(image, rows=20)
+                band_cells += int(((scores >= _GHOST_SEPARATION) & (scores < MIN_SPREAD)).sum())
+                occupancy, confidence = classify_grid(image, rows=20)
+                readings += 1
+                assert bool(np.array_equal(occupancy, grid)) or confidence < 0.15, (
+                    f"{style.name}/{cell_size}/{seed}: wrong above the gate at {confidence:.3f}"
+                )
+    assert readings == 840
+    assert band_cells == 0, f"{band_cells} cells of a two-level matrix reached the band"
 
 
 class TestGridClassifier:

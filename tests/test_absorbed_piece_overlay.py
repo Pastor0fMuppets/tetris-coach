@@ -53,8 +53,9 @@ SESSION_NEXT = Rect(left=620, top=314, width=97, height=96)
 HINT_T = frozenset({(10, 3), (11, 2), (11, 3), (11, 4)})
 
 # The frames whose widget carries a ROTATION BADGE — an opaque cell that
-# matches no composite — and is therefore refused whole. They read exactly
-# as they did before the rule existed.
+# matches no composite — and is therefore refused whole. The frame goes
+# with it: a band the rules cannot resolve is a frame that must not be
+# committed, so these report 0.0 and the tracker holds.
 BADGE_FRAMES = frozenset({"00298", "00299", "00300", "00301", "00360"})
 
 
@@ -71,6 +72,8 @@ class Tick:
         events: list[GameEvent],
         hint: Move | None,
         layer: NamedLayer | None,
+        falling: str | None,
+        stack_rows: tuple[int, ...],
     ) -> None:
         self.number = number
         self.confidence = confidence
@@ -78,6 +81,12 @@ class Tick:
         self.events = events
         self.hint = hint
         self.layer = layer
+        self.falling = falling
+        self.stack_rows = stack_rows
+
+    def committed(self, cell: tuple[int, int]) -> bool:
+        row, col = cell
+        return bool(self.stack_rows[row] >> col & 1)
 
     @property
     def accepted(self) -> bool:
@@ -122,6 +131,8 @@ def replay() -> tuple[Tick, ...]:
                 events=list(seen),
                 hint=hint,
                 layer=named[-1] if named else None,
+                falling=engine.tracker.committed.falling_piece,
+                stack_rows=engine.tracker.committed.stack_rows,
             )
         )
     return tuple(ticks)
@@ -176,7 +187,34 @@ def test_the_phantom_lock_on_the_hint_is_gone() -> None:
 
 def test_the_badge_frames_are_refused_whole() -> None:
     # The deliberate limit: nothing can name the opaque badge, so naming
-    # the widget under it would leave an unexplainable added cell. These
-    # frames read as they always did.
+    # the widget under it would leave an unexplainable added cell.
     for number in BADGE_FRAMES:
         assert tick(number).layer is None, f"{number}: the badge frame must be refused"
+
+
+def test_a_widget_that_cannot_be_named_costs_the_frame_rather_than_the_board() -> None:
+    """Refusing the WIDGET is not enough; the frame has to be refused too.
+
+    These frames used to read 0.372 — above the gate — with the hint's
+    cells left in as content. That is a T arriving at the floor while the
+    real T is still at the top of the board, which the tracker cannot
+    explain: four of them in a row tripped a BOARD_RESET, and the resync
+    adopted the hint as stack (rows 10-11 gained 775 and 14 over the real
+    771). The T was then lost for seven frames and re-spawned at 00308.
+
+    The cells are known to be our own paint; what is unknown is what to DO
+    with them, and a frame with an unresolvable band in it is exactly the
+    frame that must not be committed. So it reports 0.0, the tracker holds
+    and the piece stays in flight across the whole run.
+    """
+    for number in BADGE_FRAMES:
+        assert tick(number).confidence == 0.0, f"{number}: read at {tick(number).confidence:.3f}"
+    for number in ("00298", "00299", "00300", "00301"):
+        assert tick(number).falling == "T", f"{number}: the T was dropped"
+    events = [e for t in replay() for e in t.events]
+    assert events.count(GameEvent.BOARD_RESET) == 1  # was 3
+    assert events.count(GameEvent.PIECE_SPAWNED) == 2  # was 3: one was a re-pickup
+    # The phantom itself: the reset used to adopt the widget, leaving rows
+    # 8 and 9 holding 2 and 14 over a stack that is only two rows deep.
+    for t in replay()[: frame_numbers().index("00310")]:
+        assert t.stack_rows[8] == 0 and t.stack_rows[9] == 0, f"{t.number}: phantom stack rows"
