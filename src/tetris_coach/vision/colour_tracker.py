@@ -257,15 +257,19 @@ class ColourTracker:
         colours = board_colours(board, self.rows, self.cols)
         painted = own_paint_states(board, self.rows, self.cols, self._paint)
         self.palette.update_background(colours, self._observable & (painted == CLEAN))
-        # The box is read before the board is segmented, so a colour the box
-        # names this frame already names the piece entering on it.
-        if next_crop is not None:
-            self._read_preview(next_crop)
         labels = self.palette.classify(colours, self._observable, painted)
         grounded = _grounded(labels)
         if int(np.count_nonzero((labels != EMPTY) & ~grounded)) > PIECE_CELLS:
             self.palette.restore(mark)
             return self._blind()
+        # The box is read before the board's cells are NAMED, so a colour
+        # the box names this frame already names the piece entering on it.
+        # After the gate, so that a frame the gate refuses writes nothing
+        # here either -- the box is a different region of the screen, but a
+        # reading kept off a frame the palette was rolled back from would
+        # name a colour class that no longer exists.
+        if next_crop is not None:
+            self._read_preview(next_crop)
 
         if self._labels is not None:
             self._age = np.where(labels != self._labels, 0, self._age + 1)

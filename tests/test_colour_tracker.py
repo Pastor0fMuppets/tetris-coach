@@ -601,3 +601,27 @@ def test_a_cover_is_a_gap_in_the_motion_evidence_too() -> None:
     # the frame after the cover still reports one that floats.
     flying = track.update(render(before | grown | {(4, c): GREEN_O for c in range(4, 8)}))
     assert flying.falling is not None and flying.falling.piece == "I"
+
+
+def test_a_refused_frame_does_not_move_the_next_piece_either() -> None:
+    """Nothing is written has to include the box, or the palette lies.
+
+    The box is a different region of the screen, so a cover over the board
+    need not cover it — but reading it teaches the palette a COLOUR as well
+    as a name, and a frame the gate refuses has its palette rolled back. A
+    name kept off such a frame would point at a class that no longer
+    exists, so the box is read after the gate rather than before it.
+    """
+    track = tracker()
+    board = {(11, c): BLUE_I for c in range(4)}
+    track.update(render(board), preview([(0, 1), (1, 0), (1, 1), (1, 2)], blend(PALE_T, 0.87)))
+    assert track.update(render(board)).next_piece == "T"
+    classes = len(track.palette.classes)
+
+    card = board | {(r, c): GREEN_O for r in range(3, 7) for c in range(1, 9)}
+    covered = track.update(
+        render(card), preview([(0, 0), (0, 1), (0, 2), (0, 3)], blend(BLUE_I, 0.87))
+    )
+    assert not covered.board_visible
+    assert covered.next_piece == "T", "the box reading came with a frame that is not a board"
+    assert len(track.palette.classes) == classes
