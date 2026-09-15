@@ -311,6 +311,10 @@ class CoachEngine:
         # A frame whose reading matches it decided nothing new, so nothing
         # is solved and — the point — the target on screen cannot move.
         self._solved_for: tuple[str | None, tuple[int, ...], str | None] | None = None
+        # The most recent frame's reading, for a caller that wants to know
+        # what the hint it was handed was drawn on (the debug view, the
+        # replay harness in race/engine.py). Never read by the policy.
+        self.last_reading: FrameReading | None = None
         # Consecutive frames vision has refused. The hint is withdrawn
         # once this passes config.max_stale_frames (see process_frame).
         self._stale_frames = 0
@@ -362,6 +366,7 @@ class CoachEngine:
     ) -> Move | None:
         """Digest one captured frame pair; return the hint to display."""
         reading = self.vision.read(board_image, next_image)
+        self.last_reading = reading
         for note in reading.notes:
             print(note, flush=True)
         if not reading.accepted:

@@ -76,7 +76,7 @@ def _solve(stack_rows: tuple[int, ...], piece: str, next_piece: str | None) -> H
     return _target(best_move(Board(stack_rows), piece, next_piece))
 
 
-def _next_crops(root: Path, spec: WindowSpec, names: list[str]) -> list[NDArray[np.uint8] | None]:
+def next_crops(root: Path, spec: WindowSpec, names: list[str]) -> list[NDArray[np.uint8] | None]:
     from PIL import Image
 
     crops: list[NDArray[np.uint8] | None] = []
@@ -94,7 +94,7 @@ def run_shipped(root: Path, spec: WindowSpec) -> list[FrameOutput]:
     config = CoachConfig(rows=spec.rows)
     engine = CoachEngine(config, unobservable_cells=spec.geometry().unobservable)
     names, boards = load_window(root, spec)
-    crops = _next_crops(root, spec, names)
+    crops = next_crops(root, spec, names)
     out: list[FrameOutput] = []
     for name, board, crop in zip(names, boards, crops, strict=True):
         # classify() is a pure function of the image plus the classifier's
@@ -125,7 +125,7 @@ def run_prototype(root: Path, spec: WindowSpec) -> list[FrameOutput]:
         unobservable_cells=spec.geometry().unobservable,
     )
     names, boards = load_window(root, spec)
-    crops = _next_crops(root, spec, names)
+    crops = next_crops(root, spec, names)
     out: list[FrameOutput] = []
     for name, board, crop in zip(names, boards, crops, strict=True):
         report = tracker.update(board, crop)
