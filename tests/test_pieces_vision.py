@@ -578,6 +578,68 @@ class TestIdentifyNextBandIsNotHandedARectangle:
                 assert _piece_from_mask(candidate, flush=False) == _piece_from_mask(candidate)
 
 
+class TestIdentifyNextRoundBadge:
+    """The tool's own rotation badge, which lands in the box like the hint.
+
+    ``overlay.renderer._draw_rotation_badge`` draws a filled ellipse with
+    the rotation count in it, just above the hint's top-left cell — and
+    the preview panel floats over the board corner a hint can be drawn
+    in, so the badge lands in the BOX. Unlike the hint's fill it is
+    OPAQUE, so the own-paint arithmetic cannot recognize it: it is
+    refused on shape or not at all. Read as an even 2x2 division sampled
+    at the cell centers, a disc is a perfect 'O' — every one of those
+    four windows is inside it.
+    """
+
+    @staticmethod
+    def badge(
+        ground: tuple[int, int, int],
+        size: tuple[int, int],
+        color: tuple[int, int, int] = (255, 229, 0),
+        digit: str | None = None,
+    ) -> np.ndarray:
+        """A preview box holding nothing but a round badge."""
+        image = Image.new("RGB", (96, 96), ground)
+        draw = ImageDraw.Draw(image)
+        left, top = 48 - size[0] // 2, 48 - size[1] // 2
+        draw.ellipse([left, top, left + size[0], top + size[1]], fill=color)
+        if digit is not None:
+            draw.text((48 - 2, 48 - 5), digit, fill=(0, 0, 0))
+        return np.asarray(image)[:, :, ::-1].copy()
+
+    @pytest.mark.parametrize("ground", [(252, 252, 252), (18, 18, 20), (128, 128, 128)])
+    @pytest.mark.parametrize("radius", [6, 8, 9, 12, 16, 20])
+    def test_a_round_badge_is_not_a_piece(self, radius: int, ground) -> None:  # type: ignore[no-untyped-def]
+        assert identify_next(self.badge(ground, (2 * radius, 2 * radius))) is None
+
+    @pytest.mark.parametrize("cell", [24, 30, 40, 60])
+    def test_the_badge_the_renderer_actually_draws(self, cell: int) -> None:
+        # The renderer's own geometry: an ellipse 0.6 x 0.55 of a cell,
+        # with the rotation count drawn in it, in the hint color.
+        for digit in ("1", "2", "3"):
+            image = self.badge(
+                (252, 252, 252), (round(cell * 0.6), round(cell * 0.55)), digit=digit
+            )
+            assert identify_next(image) is None
+
+    @pytest.mark.parametrize("radius", [8, 12, 16])
+    def test_a_pale_badge_is_not_a_piece_either(self, radius: int) -> None:
+        # The band pass reads what the threshold refused, so a badge drawn
+        # over a light panel — pale enough to land in the band — must be
+        # refused there too.
+        image = self.badge((252, 252, 252), (2 * radius, 2 * radius), color=(232, 232, 232))
+        assert identify_next(image) is None
+
+    def test_a_square_block_of_the_same_size_is_still_read(self) -> None:
+        # The control: the rule refuses ROUND, not small. The same box
+        # with square cells drawn flush in it reads as the piece it draws.
+        image = np.full((96, 96, 3), 252, dtype=np.uint8)
+        for r, c in ROTATIONS["O"][0].cells:
+            top, left = 40 + r * 16, 32 + c * 16
+            image[top : top + 16, left : left + 16] = (37, 37, 229)
+        assert identify_next(image) == "O"
+
+
 class TestIdentifyNextOwnPaintOverAWell:
     """The same fill, on a box drawn in TWO shades: a panel and an inner well.
 

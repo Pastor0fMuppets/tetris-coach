@@ -1058,6 +1058,15 @@ _MAX_BAND_SPREAD = 1.25
 # are not adjacent cells of one piece — which is how a caption bar standing
 # clear of the piece passes for a cell of its own.
 
+# ...and where cells are read out of ONE band (:func:`_axis_grid`'s flush
+# case), the hypothesis is precisely that they are drawn edge to edge, so
+# an occupied cell fills its whole rectangle rather than only the central
+# window the ordinary sample reads. Measured over the style matrix, every
+# occupied cell of every flush reading fills 1.000 of it; a disc — the
+# rotation badge this tool draws on its own hint, which lands in the box —
+# fills 0.72-0.77 at every radius and used to be read as a confident 'O'.
+_MIN_FLUSH_CELL_FILL = 0.9
+
 
 def identify_next(image: NDArray[np.uint8], own_paint: OwnPaint | None = HINT_PAINT) -> str | None:
     """Recognize the piece shown in a next-piece preview image.
@@ -1380,6 +1389,8 @@ def _piece_from_mask(mask: NDArray[np.bool_], flush: bool = True) -> str | None:
             empty = means[~expected]
             if empty.size and float(empty.max()) > _MAX_EMPTY_FILL:
                 continue
+            if (down.flush or across.flush) and not _drawn_flush(crop, down, across, expected):
+                continue
             matched.add(rot.piece)
     # Two different pieces reading the same blocks is an ambiguity no
     # shape rule can settle (it cannot happen between two rotations of one
@@ -1429,6 +1440,12 @@ class _AxisGrid:
     centers: tuple[float, ...]  # cell centers, in crop pixels
     half: float  # half-width of the sample window around a center
     cell: float  # block size along this axis, for the squareness test
+    flush: bool = False  # cells derived by dividing ONE band, not read off bands
+
+    @property
+    def whole(self) -> _AxisGrid:
+        """The same cells, sampled edge to edge instead of at the center."""
+        return _AxisGrid(self.centers, self.cell / 2.0, self.cell, self.flush)
 
 
 def _bands(profile: NDArray[np.bool_]) -> list[tuple[int, int]]:
@@ -1480,8 +1497,46 @@ def _axis_grid(profile: NDArray[np.bool_], count: int, flush: bool = True) -> _A
     if len(bands) == 1 and flush:
         pitch = len(profile) / count
         centers = tuple((index + 0.5) * pitch for index in range(count))
-        return _AxisGrid(centers, max(pitch * 0.25, 0.5), pitch)
+        return _AxisGrid(centers, max(pitch * 0.25, 0.5), pitch, flush=True)
     return None
+
+
+def _drawn_flush(
+    crop: NDArray[np.bool_],
+    down: _AxisGrid,
+    across: _AxisGrid,
+    expected: NDArray[np.bool_],
+) -> bool:
+    """Does the blob keep the promise the flush hypothesis made about it?
+
+    One band standing for several cells means one thing about the
+    drawing: the cells are drawn FLUSH, edge to edge, with nothing
+    between them. So each occupied cell fills its whole rectangle, not
+    merely the central window :func:`_cell_means` samples — a window that
+    is deliberately blind to the cell's edges, which is right for an
+    inset skin and is exactly what lets a ROUND blob pass for a square
+    one: every central window of a disc divided into 2x2 is inside the
+    disc.
+
+    That disc is not hypothetical. It is the badge this tool draws on its
+    own hint (:func:`~tetris_coach.overlay.renderer._draw_rotation_badge`),
+    and the preview box floats over the board corner the hint is drawn
+    in — so it lands in the box, where it was read as a confident 'O' at
+    every radius, on every theme, and (unlike the hint's translucent
+    fill) it is OPAQUE, so no color arithmetic can recognize it.
+
+    Measured edge to edge instead: over the whole synthetic style matrix,
+    every occupied cell of every reading carried by this hypothesis fills
+    its rectangle 1.000 — the gridline that merged the cells into one
+    band is foreground too, so there is nothing else in there — while a
+    disc of any radius fills 0.72-0.77. The floor sits between them, with
+    a tenth of slack for a skin that rounds its corners or antialiases
+    its edge.
+    """
+    means = _cell_means(
+        crop, down.whole if down.flush else down, across.whole if across.flush else across
+    )
+    return float(means[expected].min()) >= _MIN_FLUSH_CELL_FILL
 
 
 def _cell_means(crop: NDArray[np.bool_], down: _AxisGrid, across: _AxisGrid) -> NDArray[np.float64]:
