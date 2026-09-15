@@ -42,10 +42,12 @@ state a reset would have to rebuild. But "a misread frame costs exactly
 that frame" is not true of the palette, and the palette's teeth have been
 pulled rather than its memory removed: peak no longer decides whether a
 cell is content (see :mod:`.colour_palette` on the ghost rule it used to
-serve), and a frame that is not a board is refused before it can intern
-anything (see :meth:`ColourTracker._blind`). What remains is that a stray
-colour on a real board frame becomes a class for the rest of the session.
-It costs a class, not a piece.
+serve), and a frame that is not a board interns nothing that lasts — either
+it is refused before it is read at all, or, where saying so needs the cells
+labelled first, the whole read is rolled back (see
+:meth:`ColourTracker._blind`). What remains is that a stray colour on a real
+board frame becomes a class for the rest of the session. It costs a class,
+not a piece.
 
 Ordering is by evidence, not by history: a floating component is the falling
 piece however long it has hovered (this game has no gravity — a piece sits
@@ -88,6 +90,12 @@ Cell = tuple[int, int]
 
 # Frames a cell must hold its colour before it counts as settled board.
 SETTLE_FRAMES = 3
+
+# A tetromino. Also the whole budget for content hanging OVER THE VOID: a
+# Tetris board has one piece in flight and everything else is held up by
+# what is under it, so a frame showing more than this is not a board. See
+# :meth:`ColourTracker._blind`.
+PIECE_CELLS = 4
 
 
 class Event(Enum):
@@ -228,6 +236,10 @@ class ColourTracker:
         """Read one captured board (BGR) and its NEXT box crop."""
         if not board_readable(board, self.rows, self.cols, self._observable):
             return self._blind()
+        # Reading the frame writes to the palette, and the second premise
+        # below cannot be tested until the cells are labelled, so the whole
+        # read is taken back if it turns out not to have been a board.
+        mark = self.palette.checkpoint()
         colours = board_colours(board, self.rows, self.cols)
         painted = own_paint_states(board, self.rows, self.cols, self._paint)
         self.palette.update_background(colours, self._observable & (painted == CLEAN))
@@ -236,12 +248,16 @@ class ColourTracker:
         if next_crop is not None:
             self._read_preview(next_crop)
         labels = self.palette.classify(colours, self._observable, painted)
+        grounded = _grounded(labels)
+        if int(np.count_nonzero((labels != EMPTY) & ~grounded)) > PIECE_CELLS:
+            self.palette.restore(mark)
+            return self._blind()
 
         if self._labels is not None:
             self._age = np.where(labels != self._labels, 0, self._age + 1)
         self._labels = labels
 
-        falling = self._pick_falling(labels)
+        falling = self._pick_falling(labels, grounded)
         if falling is not None:
             falling = self._named(falling)
 
@@ -265,14 +281,45 @@ class ColourTracker:
         Without this the tracker read whatever was on screen. Measured, the
         fourteen frames of ``pale_piece`` where a web page has replaced the
         game were reported as a stack of 0b11111111 / 0b1000 / 0b11111100
-        and interned six junk colour classes into the palette PERMANENTLY
-        -- and a palette class never shrinks, so one occluded frame is a
-        lasting corruption of the one memory this design does keep.
+        -- 57 cells of furniture -- and interned six junk colour classes
+        into the palette PERMANENTLY: a palette class never shrinks, so one
+        occluded frame is a lasting corruption of the one memory this
+        design does keep.
+
+        TWO PREMISES have to hold, and they fail on different covers.
+
+        (1) The board is drawn as flat cells (:func:`board_readable`). That
+        is this module's own premise rather than anything about Tetris --
+        every rule here reads a cell's MEAN, which means nothing over a
+        photograph or a paragraph of text. It refuses the web page (0.51 of
+        cells flat against 0.89 or better on every real frame of all six
+        windows) and it is blind by construction to a cover that IS flat.
+
+        (2) At most a tetromino of content hangs OVER THE VOID: everything
+        else on a Tetris board is held up by what is under it, sideways
+        links included (:func:`_grounded`), and there is only ever one
+        piece in flight. This is the premise the shipped engine's
+        confidence gate rests on too (SPEC.md, grid.py), and it catches
+        what (1) cannot: a flat panel floating over the playfield -- ROAS
+        Stacker's own "ROW CLEARED" card, a leaderboard, any modal drawn in
+        one colour -- arrives as dozens of cells resting on nothing.
+        Measured, it costs the corpus NOTHING: over all 528 accepted board
+        frames of the six windows the largest airborne reading is 4 cells,
+        exactly one tetromino, never once more; the web page, fed past (1),
+        shows 58 in a single component.
+
+        What is NOT covered, stated so nobody has to find out live: a cover
+        that is flat AND reaches the floor, or one that touches the stack,
+        is grounded and passes both. Closing that needs pixels of a real
+        one, which this corpus does not have.
 
         Nothing is read and nothing is written: not the palette, not the
-        background, not the cell ages, not the NEXT box. The stack count IS
-        carried across, so the frame the board comes back does not look
-        like a line clear to :meth:`_events`.
+        background, not the cell ages, not the NEXT box. (1) refuses the
+        frame before any of it; (2) cannot be asked until the cells are
+        labelled, so the caller takes a :meth:`Palette.checkpoint` first
+        and restores it here.  The stack count IS carried across, so the
+        frame the board comes back does not look like a line clear to
+        :meth:`_events`.
 
         What is reported is silence, not the last hint. A tracker that
         holds its advice over a board it cannot see is the frozen coach
@@ -358,9 +405,10 @@ class ColourTracker:
         )
         return [part for part in _connected(young) if len(part) <= 4]
 
-    def _pick_falling(self, labels: NDArray[np.int16]) -> FallingPiece | None:
+    def _pick_falling(
+        self, labels: NDArray[np.int16], grounded: NDArray[np.bool_]
+    ) -> FallingPiece | None:
         """The one component that is in flight, if any."""
-        grounded = _grounded(labels)
         best: tuple[tuple[int, int, int], FallingPiece] | None = None
         for label, component in _components(labels):
             for cells in self._candidates(label, component):

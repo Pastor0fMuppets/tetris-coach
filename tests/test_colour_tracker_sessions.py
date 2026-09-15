@@ -33,12 +33,21 @@ import pytest
 from PIL import Image
 
 from tetris_coach.race.measures import load_truth
-from tetris_coach.vision.colour_palette import EMPTY_DIST, board_colours, flat_cells
-from tetris_coach.vision.colour_tracker import ColourTracker, Event, FrameReport
+from tetris_coach.vision import colour_tracker
+from tetris_coach.vision.colour_palette import EMPTY, EMPTY_DIST, board_colours, flat_cells
+from tetris_coach.vision.colour_tracker import ColourTracker, Event, FrameReport, _grounded
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ROWS, COLS = 12, 10
 COVERED = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+WINDOWS = (
+    "spawn_latency",
+    "live_session",
+    "ghost_session",
+    "absorbed_piece",
+    "pale_piece",
+    "ghost_beside_stack",
+)
 
 
 def load(path: Path) -> np.ndarray:
@@ -292,14 +301,7 @@ def test_the_gate_refuses_the_web_page_and_nothing_else() -> None:
     """
     refused = {}
     classes = {}
-    for window in (
-        "spawn_latency",
-        "live_session",
-        "ghost_session",
-        "absorbed_piece",
-        "pale_piece",
-        "ghost_beside_stack",
-    ):
+    for window in WINDOWS:
         tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
         names = []
         for board in sorted((FIXTURES / window).glob("board_*.png")):
@@ -406,3 +408,78 @@ def test_the_next_box_is_read_on_almost_every_frame() -> None:
     for window, expected in (("spawn_latency", 161), ("pale_piece", 61)):
         _, reports = replay(window)
         assert sum(1 for r in reports if r.next_piece is not None) == expected
+
+
+def airborne(labels: np.ndarray) -> int:
+    """Content cells no chain of content joins to the floor."""
+    return int(np.count_nonzero((labels != EMPTY) & ~_grounded(labels)))
+
+
+def test_the_airborne_budget_costs_the_corpus_nothing() -> None:
+    """One tetromino over the void, measured against every frame there is.
+
+    The gate's second premise (:meth:`ColourTracker._blind`) refuses a
+    frame showing more than a tetromino of content resting on nothing. A
+    premise is only worth having if the real evidence obeys it, so this
+    measures the whole corpus: 528 accepted board frames, and the largest
+    airborne reading on any of them is 4 cells -- one piece in flight,
+    never once more. The line-clear flash, the hint paint, the post-clear
+    stack hanging over its own holes, a piece clipped by the top edge: all
+    under the budget, because :func:`_grounded` follows sideways links and
+    only a piece in flight is cut off from the floor.
+    """
+    worst: dict[str, int] = {}
+    frames = 0
+    for window in WINDOWS:
+        tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
+        for board in sorted((FIXTURES / window).glob("board_*.png")):
+            crop = board.with_name(board.name.replace("board_", "next_"))
+            report = tracker.update(load(board), load(crop) if crop.exists() else None)
+            if not report.board_visible:
+                continue
+            frames += 1
+            assert tracker._labels is not None
+            worst[window] = max(worst.get(window, 0), airborne(tracker._labels))
+    assert frames == 528
+    assert worst == dict.fromkeys(WINDOWS, 4)
+
+
+def test_the_two_premises_refuse_the_web_page_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one real cover in the corpus fails both tests, not just one.
+
+    The flatness premise is what refuses ``pale_piece`` 00687-00700 in
+    ordinary running, and the airborne premise was added for the cover it
+    CANNOT see (a flat panel). They are only alternatives on paper unless
+    the second is checked against real pixels, so here the flatness test is
+    stubbed away and the page is fed to the tracker anyway: 58 of its cells
+    rest on nothing, in one component, against a budget of 4 and a corpus
+    maximum of 4. The frame is still refused, and the palette still ends
+    the window with the window's own two piece colours rather than the
+    eight it used to carry away.
+    """
+    monkeypatch.setattr(colour_tracker, "board_readable", lambda *a, **k: True)
+
+    monkeypatch.setattr(colour_tracker, "PIECE_CELLS", 10**6)  # measure, don't refuse
+    tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
+    measured = {}
+    for board in sorted((FIXTURES / "pale_piece").glob("board_*.png")):
+        crop = board.with_name(board.name.replace("board_", "next_"))
+        tracker.update(load(board), load(crop) if crop.exists() else None)
+        assert tracker._labels is not None
+        measured[board.stem.split("_")[1]] = airborne(tracker._labels)
+    page = [f"00{n}" for n in range(687, 701)]
+    assert [measured[n] for n in page] == [58] * 14
+    assert max(v for n, v in measured.items() if n not in page) == 4
+
+    monkeypatch.setattr(colour_tracker, "PIECE_CELLS", 4)
+    tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
+    refused = []
+    for board in sorted((FIXTURES / "pale_piece").glob("board_*.png")):
+        crop = board.with_name(board.name.replace("board_", "next_"))
+        report = tracker.update(load(board), load(crop) if crop.exists() else None)
+        if not report.board_visible:
+            refused.append(board.stem.split("_")[1])
+    assert refused == page
+    assert len(tracker.palette.classes) == 2

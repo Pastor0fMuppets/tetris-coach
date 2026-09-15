@@ -183,6 +183,17 @@ class ColourClass:
     piece: str | None = None  # learned name, when something has named it
     ambiguous: bool = False  # two complete sightings spelled it differently
 
+    def copy(self) -> ColourClass:
+        return ColourClass(self.unit.copy(), self.peak, self.piece, self.ambiguous)
+
+
+@dataclass(frozen=True)
+class PaletteState:
+    """A palette as it stood before a frame was read: see :meth:`Palette.checkpoint`."""
+
+    background: NDArray[np.float64] | None
+    classes: tuple[ColourClass, ...]
+
 
 class Palette:
     """The board's background, its colour classes, and their piece names.
@@ -212,6 +223,30 @@ class Palette:
         self.background: NDArray[np.float64] | None = None
         self.classes: list[ColourClass] = []
         self._paint = paint
+
+    # -- undo ---------------------------------------------------------
+
+    def checkpoint(self) -> PaletteState:
+        """The palette as it stands now, so a frame can be taken back.
+
+        Reading a frame WRITES here — :meth:`classify` interns a class per
+        unrecognized content cell and :meth:`intern` raises a peak — and
+        two of those writes are one-way. A caller that only discovers the
+        frame was not a board AFTER classifying it (the board's own shape
+        is not visible in the pixels until the cells are labelled) can
+        therefore not simply discard the labels: it has to put this back.
+        Cheap by construction, since a session's palette is a handful of
+        classes, not a per-cell structure.
+        """
+        return PaletteState(
+            background=None if self.background is None else self.background.copy(),
+            classes=tuple(klass.copy() for klass in self.classes),
+        )
+
+    def restore(self, state: PaletteState) -> None:
+        """Undo every change since ``state`` was taken."""
+        self.background = None if state.background is None else state.background.copy()
+        self.classes = [klass.copy() for klass in state.classes]
 
     # -- background ---------------------------------------------------
 

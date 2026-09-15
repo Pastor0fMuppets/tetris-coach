@@ -499,3 +499,66 @@ def test_a_colour_that_is_contradicted_once_never_names_again() -> None:
     assert track.palette.piece_of(0) is None
     track.palette.name(0, "L")
     assert track.palette.piece_of(0) is None, "a retired class cannot be revived by the box"
+
+
+def test_a_flat_panel_floating_over_the_board_is_not_a_board() -> None:
+    """The cover the flatness premise cannot see, and the one that matters live.
+
+    ROAS Stacker draws a "ROW CLEARED" card over its own playfield after a
+    clear, and a leaderboard at game over. A web page fails the flatness
+    test because a page is photographs and text; a card drawn in one flat
+    colour passes it by construction, and used to arrive as a slab of
+    phantom stack -- with the solver then planning around rows that are a
+    popup.
+
+    What refuses it is Tetris rather than rendering: on a board, one piece
+    is in flight and everything else is held up by what is under it, so
+    more than a tetromino resting on nothing is not a board. Measured, the
+    cost of that premise over the whole committed corpus is zero (see
+    ``tests/test_colour_tracker_sessions.py``).
+    """
+    track = tracker()
+    board = {(11, c): BLUE_I for c in range(4)}
+    for _ in range(4):
+        before = track.update(render(board))
+    classes = len(track.palette.classes)
+    background = track.palette.background
+    assert before.board_visible and before.stack_rows[11] == 0b1111
+
+    popup = board | {(r, c): GREEN_O for r in range(3, 7) for c in range(1, 9)}
+    covered = track.update(render(popup))
+    assert not covered.board_visible, "32 cells resting on nothing is not a board"
+    assert covered.falling is None
+    assert covered.stack_rows == before.stack_rows, "the last real board is what it holds"
+    assert covered.events == ()
+    assert len(track.palette.classes) == classes, "the card's colour is not a piece colour"
+    assert track.palette.background is not None
+    assert background is not None
+    assert np.array_equal(track.palette.background, background)
+
+    back = track.update(render(board))
+    assert back.board_visible and back.stack_rows == before.stack_rows
+    assert Event.LINES_CLEARED not in back.events
+
+
+def test_the_budget_for_what_rests_on_nothing_is_exactly_one_tetromino() -> None:
+    """Four airborne cells are a piece; five are something else.
+
+    Both directions are the point. A whole piece hovering with an empty
+    board under it is the ordinary frame of this game -- no gravity, so it
+    hangs there until the player drags it -- and refusing THAT would be a
+    coach that goes blind every time a piece spawns. One cell more cannot
+    be a piece, and what it is in practice is a cover.
+
+    The cost, stated plainly: one stray airborne cell beside a real piece
+    refuses the frame. Measured over the 528 accepted board frames of the
+    six committed windows, that never happens once -- the largest airborne
+    reading in the whole corpus is 4.
+    """
+    piece = {(4, c): BLUE_I for c in range(4)}
+    hovering = tracker().update(render(piece))
+    assert hovering.board_visible
+    assert hovering.falling is not None and hovering.falling.piece == "I"
+
+    stray = tracker().update(render(piece | {(7, 7): GREEN_O}))
+    assert not stray.board_visible

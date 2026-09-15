@@ -191,3 +191,40 @@ def test_the_palette_is_a_global_one_way_memory_and_the_docstring_says_so() -> N
         np.ones((1, 2), dtype=bool),
     )
     assert labels.tolist() == [[index, index]]
+
+
+def test_a_palette_can_be_put_back_exactly_as_it_was() -> None:
+    """Reading a frame writes here, so a frame can have to be taken back.
+
+    The tracker's gate cannot ask whether a frame is board-SHAPED until the
+    cells are labelled, and labelling them interns classes and raises peaks
+    -- both one-way. Rolling back is what keeps "a frame that is not a
+    board writes nothing" true for the half of the gate that has to look
+    first.
+    """
+    palette = Palette(paint=None)
+    palette.update_background(
+        np.array([[[250.0, 250.0, 250.0]]], dtype=np.float32), np.ones((1, 1), dtype=bool)
+    )
+    blue = palette.intern(np.array([-40.0, -200.0, -200.0]))
+    palette.name(blue, "I")
+    mark = palette.checkpoint()
+
+    junk = palette.intern(np.array([120.0, -30.0, 90.0]))
+    palette.intern(np.array([-80.0, -400.0, -400.0]))  # a brighter sighting: raises the peak
+    palette.witness(blue, "O")  # and retires the name
+    assert junk != blue and len(palette.classes) == 2
+    assert palette.piece_of(blue) is None and palette.classes[blue].peak > 0.0
+    peak = palette.classes[blue].peak
+
+    palette.restore(mark)
+    assert len(palette.classes) == 1
+    assert palette.piece_of(blue) == "I"
+    assert palette.classes[blue].peak < peak
+    assert palette.background is not None
+
+    # Restoring twice from the same mark is the same thing: a checkpoint is
+    # a copy, not a view of the palette it came from.
+    palette.intern(np.array([120.0, -30.0, 90.0]))
+    palette.restore(mark)
+    assert len(palette.classes) == 1
