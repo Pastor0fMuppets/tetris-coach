@@ -702,7 +702,19 @@ vision/
                   # makes an inset skin readable), one band means cells
                   # drawn flush (an even division is then exact), and
                   # anything else contradicts the hypothesis and is refused
-                  # rather than guessed. Those bands ARE the cells, so they
+                  # rather than guessed. A cell read out of ONE band is
+                  # then measured EDGE TO EDGE rather than at its center,
+                  # since flush is exactly what that hypothesis claimed:
+                  # measured over the style matrix every occupied cell of
+                  # every flush reading fills its rectangle 1.000, while a
+                  # DISC fills 0.72-0.77 — and the disc is not
+                  # hypothetical, it is this tool's own rotation badge,
+                  # which lands in the box the same way the hint does and
+                  # read as a confident 'O' at every radius on every
+                  # theme. It is the one part of our overlay the color
+                  # arithmetic below cannot catch, being opaque rather
+                  # than a composite, so it is refused on shape or not at
+                  # all. Those bands ARE the cells, so they
                   # must look like cells: all the same size (within the same
                   # 25%; measured, they agree exactly on every style and
                   # every live crop) and separated by gaps smaller than one
@@ -775,7 +787,40 @@ vision/
                   #    OwnPaint, whose tolerance the nearest real band
                   #    pixel stands 2.6x clear of. A match refuses the
                   #    box (None), the answer grid.py gives its own
-                  #    unnameable paint.
+                  #    unnameable paint. The composite is a DISTANCE from
+                  #    the box's ground, not a constant, so the rule is
+                  #    asked in both readings of the box and over the
+                  #    box's own LEVELS rather than its average: over a
+                  #    BLACK box the same fill scores 0.374 and arrives
+                  #    as a solid class the threshold used to name
+                  #    ('O'/'T'/'I', the placement on screen), and a box
+                  #    drawn in TWO shades — a panel around an inner
+                  #    well, the ordinary skin — puts the median on one
+                  #    while the paint lands on the other, 21 units apart
+                  #    against a tolerance of 8. So the grounds are the
+                  #    median plus the median of each Otsu class outside
+                  #    the candidate; over every committed crop the
+                  #    nearest real pixel to any of those composites
+                  #    still stands 2.4x the tolerance clear.
+                  #  - the FLUSH hypothesis is OFF here. One band divided
+                  #    into cells by assertion rather than by anything
+                  #    visible makes every solid rectangle a piece (a
+                  #    square is an O, a 4:1 bar an I), which the
+                  #    threshold can afford because its solid class is
+                  #    nearly always the piece, and the band cannot
+                  #    because the band is where everything the threshold
+                  #    REFUSED arrives. Measured with it on: the box's own
+                  #    inner WELL reads 'O' at every panel/well shade pair
+                  #    tried (0.223-0.307), with no piece in the box at
+                  #    all; a pale caption BAR above the piece — which the
+                  #    band's upper class keeps INSTEAD of the piece,
+                  #    since nothing says the furniture sits below it —
+                  #    reads a confident 'I' on 150 of 396 bar geometries
+                  #    while the box holds some other piece; a lone
+                  #    rectangle is named on 162 of 540 geometries. It
+                  #    costs a flush skin its PALE O and I, and it costs
+                  #    the evidence nothing: of the 530 crops named across
+                  #    every committed window, not one is named that way.
                   # The pass is asked only where the threshold came back
                   # empty-handed, so every crop that was readable before is
                   # byte-identical. Measured over the committed windows:

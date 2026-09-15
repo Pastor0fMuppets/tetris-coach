@@ -78,6 +78,37 @@ The other two episodes of that window do not move, and cannot: one opens
 on a piece already at the top edge with no flip ever seen, and one is a
 deal late. 17 -> 17 and 2 -> 2.
 
+## What the band is not allowed to do
+
+Reading the band is reading what the threshold refused, so the box's own
+furniture arrives with the pale piece. Three rules bound it, and the
+measurements behind them are in `tests/test_pieces_vision.py`:
+
+- the FLUSH hypothesis is off (one band divided into cells by assertion,
+  which makes every solid rectangle a piece). With it on, an empty box's
+  inner well read 'O' at every panel/well shade pair tried (0.223-0.307),
+  a pale caption bar above the piece read a confident 'I' on 150 of 396
+  bar geometries — the band keeps its upper class, and nothing says the
+  furniture sits under the piece — and a lone rectangle was named on 162
+  of 540 geometries. It costs a flush skin its PALE O and I; of the 530
+  crops named across every committed window, none is named that way.
+- a cell read out of one band is measured edge to edge, because that is
+  what flush claims. A flush reading fills its cell rectangle 1.000
+  across the style matrix; a DISC fills 0.72-0.77, and the disc is this
+  tool's own rotation badge, which lands in the box and read as an 'O' at
+  every radius, on every theme, in both passes.
+- our own hint fill is refused in BOTH readings of the box and over the
+  box's own levels, not its average: the composite is a distance from the
+  ground, so over a black box it scores 0.374 and arrives as a solid
+  class, and a box drawn as a panel around a well puts the crop median on
+  one shade while the paint lands on the other.
+
+What is still named and is not a piece, unchanged from before any of this
+(all of it in the THRESHOLD pass, where a lone rectangle is still read as
+a flush O or I): an empty panel-and-well box whose well is at solid
+contrast reads 'O', a lone solid rectangle is named on 42 of 135
+geometries, and four round badges in a row read 'I'.
+
 ## What it does to every other committed window: nothing
 
 Every window replayed end to end through `CoachEngine`, before -> after
