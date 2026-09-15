@@ -18,6 +18,82 @@ Purpose: training human placement intuition at full game speed.
   visible within ~1 frame in the common case (via precomputation, see below).
 - **Visual only**: never send input to the game.
 
+## Two trackers, one hint policy
+
+Two readers can answer the question the overlay needs answered — what is
+falling, over what settled board, with what coming next — and both are in
+the tree:
+
+- **colour** (`--tracker colour`, the DEFAULT): `vision/colour_tracker.py`
+  on `colour_palette.py` + `colour_preview.py`. A cell is named by the
+  DIRECTION of its colour away from the board background (invariant to the
+  alpha compositing every translucent thing in a Tetris rendering is drawn
+  with); the piece in flight is the one-colour component that floats or has
+  just changed; the settled board is everything else, re-derived from every
+  frame. There is no committed stack, so a misread frame costs exactly that
+  frame. A piece is named from its FIRST VISIBLE CELL, which is why it needs
+  no descent before it can be hinted.
+- **shape** (`--tracker shape`): `vision/grid.py` -> `pieces_vision.py` ->
+  `state.py`. Each cell is thresholded to one bit and the falling piece is a
+  debounced, structurally verified set difference against one committed stack
+  memory. Every error is permanent until something explains it away, which
+  is what the resync/reset/heal/retract machinery exists to handle.
+
+**Why colour is the default.** Both were raced over the six consecutive
+capture windows in `tests/fixtures/`, refereed by the independent
+pixel-derived answer sheet in `truth/` (`tests/fixtures/oracle_truth.json`),
+which no tracker code takes part in building. At the tracker boundary
+(`python -m tetris_coach.race`, pinned in `tests/test_race.py`), over the
+397 frames the oracle answers:
+
+| tracker   | judged | right | WRONG | silent | board | worst freeze |
+| --------- | ------ | ----- | ----- | ------ | ----- | ------------ |
+| shape     | 397    | 366   | 6     | 25     | 91.9% | 27 frames    |
+| colour    | 397    | 397   | 0     | 0      | 100%  | none         |
+
+and through the real `CoachEngine`, which is what the user actually sees
+(the second table of the same command, pinned in
+`tests/test_engine_race.py`), over 422 frames:
+
+| tracker | hints | MISNAMED | stale | latency p50/max | target moves | blank |
+| ------- | ----- | -------- | ----- | --------------- | ------------ | ----- |
+| shape   | 397   | 6        | 49    | 1 / 3 frames    | 3            | 25    |
+| colour  | 415   | 0        | 14    | 0 / 0 frames    | 0            | 7     |
+
+Window by window, the colour reader is better or equal on every one of
+those measures; that, rather than a better average, is the condition the
+adoption had to meet. The 58-frame freeze the user reported ("it got stuck
+and the piece didn't update for several turns") is in this corpus and it
+belongs to the shape reader.
+
+**Why the other one stays.** The two refuse frames on different evidence —
+the colour reader refuses a frame whose cells are not drawn flat and one
+where more than a tetromino hangs over the void, the shape reader refuses on
+its confidence gate — so a theme or a game the colour rules cannot read is a
+flag away from the old behaviour rather than a rebuild. `--tracker shape`
+keeps working and its whole regression suite still runs against it.
+
+**What the corpus does not cover.** Every committed window is ROAS Stacker,
+and the only pieces in them are I, O and T. The live game deals at least
+five distinguishable colours (blue, yellow-green, pale lavender, pink,
+mint), so the unvalidated pieces are the mirror pairs S/Z and J/L — which is
+exactly where colour is strongest and shape cannot work at all on an
+entering piece, since 1-3 cells at the top edge fit both members of a pair.
+Where colour genuinely says nothing (a monochrome theme, two pieces a game
+renders alike), a complete four-cell sighting retires that colour class from
+naming and the tracker degrades to naming by shape — which is where a
+colour-blind reader always was.
+
+**One policy either way.** `vision/readers.py` is where the two meet: one
+`FrameReading` per frame (accepted, falling piece, stack rows, next piece,
+transitions), and `app.CoachEngine` is written against that and nothing
+else. So the behaviours that were each added in answer to a user report —
+the hint held steady while its piece is in flight, the stale hint withdrawn
+after `max_stale_frames`, this tool's own paint never read as board content,
+the cells the NEXT panel covers treated as unknown rather than empty, and
+what `_solver_board` hands the solver for them — apply to both readers by
+construction rather than by being implemented twice.
+
 ## Module layout (`src/tetris_coach/`)
 
 ```
@@ -1134,6 +1210,55 @@ vision/
                   # transition (a lock merges in what it can see). An OCCLUDED
                   # frame holds state and never counts toward a reset, so a piece
                   # resting under the panel cannot wipe the board.
+  colour_palette.py # The reading the DEFAULT tracker is built on. A cell's
+                  # identity is the DIRECTION of its colour away from the
+                  # board background, v/|v| in BGR, which is invariant to
+                  # alpha compositing over that background - so the same
+                  # piece drawn at 87% in the NEXT box and at 100% on the
+                  # board is one class (measured: 0.3 degrees apart, 44
+                  # uint8 units apart). Classes are interned per session and
+                  # named from the box or from a complete four-cell sighting;
+                  # a sighting that CONTRADICTS a name retires that class
+                  # from naming altogether, which is how a monochrome theme
+                  # degrades to naming by shape instead of naming every
+                  # later piece after the first. Also the frame gate
+                  # (board_readable: are the cells drawn flat?) and the
+                  # own-paint recognizer, which un-composites this tool's
+                  # own translucent fill rather than guessing at it.
+  colour_preview.py # The NEXT box for that tracker: which tetromino, and in
+                  # WHAT COLOUR. The colour is the labelled example the whole
+                  # design runs on - the box says "this colour is a T" for
+                  # free on every deal, with no shape ambiguity to resolve.
+                  # Read with the session's own hint colour, because the box
+                  # floats over the playfield corner in this game and a hint
+                  # drawn there is drawn over the box.
+  colour_tracker.py # The default tracker: frames in, one FrameReport out.
+                  # Content = cells whose colour is a real rendered colour;
+                  # falling = a one-colour component, at most a tetromino,
+                  # that FLOATS (no chain of content joins it to the floor)
+                  # or has CHANGED in the last few frames; stack = all the
+                  # other content, re-derived from this frame's pixels alone;
+                  # lock/spawn/clear are named by comparing with the last
+                  # frame's report and nothing else. A component bigger than
+                  # a tetromino is split on AGE, which is what separates a
+                  # piece from the same-coloured stack it just landed on.
+                  # Two premises gate a frame, and a frame that fails either
+                  # is reported as not-a-board with the palette rolled back
+                  # whole: the cells are drawn flat, and at most a tetromino
+                  # of content hangs over the void. Measured over 528
+                  # accepted board frames the largest airborne reading is
+                  # exactly 4 cells; the web page that replaced the game in
+                  # pale_piece shows 58 in one component.
+  readers.py      # Where the two trackers meet: one FrameReading per frame
+                  # (accepted, falling piece, stack rows, next piece,
+                  # transitions) and a FrameVision protocol with exactly two
+                  # implementations - ShapeVision (gate + occupancy +
+                  # committed stack, the code lifted unchanged out of
+                  # CoachEngine.process_frame) and ColourVision. app.py is
+                  # written against the reading and nothing else, so the hint
+                  # policy, the stale withdrawal, the own-paint wiring and
+                  # the unobservable cells are shared rather than
+                  # reimplemented per tracker.
 capture/
   screen.py       # mss-based capture of a screen rect at native (Retina) scale;
                   # handles logical-vs-pixel coordinate scaling. Protocol/interface
@@ -1167,6 +1292,21 @@ app.py            # Main loop wiring: capture -> vision -> state -> solve -> ove
                   # Precompute: while piece A falls, assume it lands on target and
                   # pre-solve piece B; on lock, flip hint instantly; if observed
                   # board != predicted, re-solve from observed.
+                  # The vision half is a FrameVision (vision/readers.py),
+                  # chosen by CoachConfig.tracker / --tracker; everything
+                  # here is written against the reading it returns. The hint
+                  # policy is four lines of it: solve when an INPUT changed
+                  # (piece, stack, next piece), hold otherwise, let the
+                  # target move only when the piece it was drawn for is no
+                  # longer the piece in play, and resolve a near-tie in
+                  # favour of what is already on screen (_steady_hint,
+                  # rescore, HINT_SWITCH_MARGIN - a challenger must beat the
+                  # standing target by more than one Dellacherie unit on the
+                  # SAME board with the SAME lookahead). A hint the reader
+                  # can no longer justify comes down after
+                  # max_stale_frames (45, ~3 s: above every real obscuration
+                  # measured, an order of magnitude below the game-over
+                  # screen that once held a hint for 326 frames).
                   # The loop is a FEEDBACK loop, not a pipeline: the
                   # overlay it draws is on screen when the next capture is
                   # taken. CoachConfig.hint_color therefore goes to the
@@ -1200,10 +1340,11 @@ app.py            # Main loop wiring: capture -> vision -> state -> solve -> ove
                   # frame is OCCLUDED: hint held, nothing committed, no reset),
                   # and a lock there commits only the cells actually seen.
 cli.py            # `tetris-coach` entry point: select regions, start loop; flags
-                  # for poll rate, colors, and a terminal debug view (per
-                  # committed frame: observed grid, falling piece, next piece,
-                  # confidence, events). A *graphical* debug window is deferred
-                  # to the live phase..
+                  # for poll rate, colors, --tracker {colour,shape} (colour is
+                  # the default; see "Two trackers" above), and a terminal
+                  # debug view (the board, falling and next piece, the
+                  # transitions, on every frame whose reading changed). A
+                  # *graphical* debug window is deferred to the live phase..
 ```
 
 ## Key design decisions (already made — do not relitigate)
@@ -1218,8 +1359,23 @@ cli.py            # `tetris-coach` entry point: select regions, start loop; flag
    a possible later enhancement, not v1.
 5. **PySide6** for region picker + overlay. **mss** for capture. **OpenCV + NumPy**
    for vision. Python 3.11+.
-6. Vision works on *occupancy*, not colors, for game-agnosticism. Colors only help
-   piece identification as a secondary signal.
+6. ~~Vision works on *occupancy*, not colors, for game-agnosticism. Colors only
+   help piece identification as a secondary signal.~~ **Revised.** Occupancy
+   cannot name a piece entering from above at all — 1-3 cells at the top edge
+   fit several tetrominoes, and the mirror pairs S/Z and J/L are never
+   separable by the visible part — and in occupancy a ghost, a UI panel, this
+   tool's own hint paint and a real piece are all just "filled", so each needs
+   its own structural rule and the rules interact. Reading a cell by the
+   DIRECTION of its colour away from the board background answers both at
+   once, and measured on real captures it names 397 of 397 judged frames
+   against occupancy's 366 (see "Two trackers, one hint policy" above). The
+   colour reader is therefore the default and the occupancy one is
+   `--tracker shape`. Game-agnosticism is kept as a DEGRADATION rather than a
+   premise: where colour says nothing (a monochrome theme, two pieces a game
+   renders alike), the contradicted colour class is retired from naming and
+   the tracker names by shape, which is exactly where an occupancy-only
+   reader always was. The user has since scoped this tool to one game (ROAS
+   Stacker), which is what made the trade worth making rather than hedging.
 
 ## What can be built & tested headless (Linux CI / cloud)
 
