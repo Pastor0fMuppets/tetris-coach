@@ -342,6 +342,32 @@ def _observable(
     return mask
 
 
+def _clearance_above(
+    scores: NDArray[np.float32],
+    cells: NDArray[np.bool_],
+    observable: NDArray[np.bool_],
+) -> float:
+    """How far the next level up stands clear of ``cells``' own level.
+
+    The other half of :func:`_clear_of_background`, and the half that
+    tells a LEVEL from one slice of a RAMP. A level has air on both
+    sides; a lighting gradient has cells every few hundredths all the way
+    up, so whatever slice of it falls inside the band has the rest of the
+    ramp sitting right on top of it (measured on a paper-white board
+    under a 140-unit vertical gradient: 0.074 above, against 0.469 for
+    the pale periwinkle T of ``tests/fixtures/pale_piece`` and 0.30 for a
+    ghost).
+
+    ``inf`` when there is nothing above at all — a ceiling that is not
+    there constrains nothing.
+    """
+    if not bool(cells.any()):
+        return float("inf")
+    level = float(scores[cells].max())
+    above = scores[(scores > level) & observable]
+    return float(above.min()) - level if above.size else float("inf")
+
+
 def _clear_of_background(
     scores: NDArray[np.float32],
     cells: NDArray[np.bool_],
@@ -1134,17 +1160,115 @@ def _ghost_layer(
     return band
 
 
+def _band_only_reading(
+    colors: NDArray[np.float32],
+    background: NDArray[np.float64],
+    scores: NDArray[np.float32],
+    band: NDArray[np.bool_],
+    unobservable: frozenset[tuple[int, int]],
+    own_paint: OwnPaint | None,
+) -> _Reading:
+    """A board holding nothing but the background and one intermediate band.
+
+    The uniform-empty branch's blind spot: with no cell reaching
+    :data:`MIN_SPREAD` that branch calls the whole frame an empty board,
+    which is exactly right for a board wipe and exactly wrong for a pale
+    piece spawning onto a clear board — the moment a coach is most
+    needed. Those two frames are told apart by the band standing clear of
+    the background cluster, which a truly uniform frame has nothing to
+    do.
+
+    There is no two-class split here to name the layer by structure:
+    :func:`_ghost_layer` needs a solid class to find the piece a preview
+    would be a copy of, and finds none, which is the right answer anyway
+    (a preview of nothing is not a preview). :func:`_own_paint_layer`
+    still works, because it knows its color rather than the board. So
+    the band is our hint if the paint says so, unresolvable if the paint
+    is there but the widget was refused, and otherwise content.
+
+    The confidence is :data:`_UNIFORM_EMPTY_CONFIDENCE`, the number this
+    branch already reports, and for the reason it reports it: the
+    reading is structurally grounded rather than measured from a gap.
+    """
+    observable = _observable((int(scores.shape[0]), int(scores.shape[1])), unobservable)
+    layer = _own_paint_layer(colors, background, np.zeros_like(band), unobservable, own_paint)
+    empty = np.zeros_like(band)
+    if layer is not None:
+        return _Reading(empty, _UNIFORM_EMPTY_CONFIDENCE, layer & observable)
+    painted = _own_paint_cells(colors, background, unobservable, own_paint)
+    if painted is not None and bool((band & painted).any()):
+        return _Reading(empty, 0.0, None)
+    return _Reading(band.copy(), _UNIFORM_EMPTY_CONFIDENCE, None)
+
+
 def _classify_scored(
     colors: NDArray[np.float32],
     background: NDArray[np.float64],
     unobservable: frozenset[tuple[int, int]] = frozenset(),
     own_paint: OwnPaint | None = HINT_PAINT,
 ) -> _Reading:
-    """Split per-cell colors into empty/occupied by distance from ``background``."""
+    """Split per-cell colors into empty/occupied by distance from ``background``.
+
+    Three levels, two classes. Between the background cluster and a real
+    piece color there is a BAND — ``[_GHOST_SEPARATION, MIN_SPREAD)``,
+    conditioned on :func:`_clear_of_background` so a continuum never
+    reaches it — that a translucent layer and a pale-on-pale piece both
+    land in, four thousandths apart on this game's own theme. Nothing
+    about a band cell's SCORE says which it is, so the threshold is not
+    allowed to decide: every band cell is a CANDIDATE, taken out of
+    Otsu's hands and given to the structural rules, and what the rules
+    say about it is what it becomes.
+
+    The three dispositions, and which way each errs:
+
+    - NAMED a landing preview by :func:`_own_paint_layer` (this tool's
+      own hint, by arithmetic) or :func:`_ghost_layer` (a game-drawn
+      ghost, by structure) -> EMPTY, and out of the split entirely,
+      since nothing is there. Both rules err toward leaving cells alone,
+      because deleting real content hands the solver room that does not
+      exist.
+    - Our own paint that :func:`_own_paint_layer` REFUSED to name — a
+      widget the panel cut in half, or one under the rotation badge —
+      cannot be called content (it is not) and cannot be deleted (the
+      badge above it would be left behind as an unexplainable added
+      cell). It is the one band a frame cannot resolve, so the frame
+      loses its confidence instead of guessing: 0.0, below any gate.
+    - Everything else -> OCCUPIED. A candidate no rule can account for
+      is board content until something says otherwise, which is the
+      OPPOSITE default from the one this line used to have.
+
+    That last flip is the whole change, and the errors it trades between
+    are not symmetric. Read a ghost as a piece and the board grows a
+    tetromino that teleports: a phantom lock, unexplainable frames, a
+    BOARD_RESET, a hint that jumps — bad, and bounded, since the tracker
+    refuses to explain it and holds. Read a real piece as background and
+    the piece is not there at all: no falling piece, no hint, for as
+    long as it is on screen (measured on ``tests/fixtures/pale_piece``:
+    61 frames of a pale periwinkle T absent from the occupancy, and 90
+    frames — ~6 s — with nothing on the overlay). The structural rules
+    still get first refusal, so a ghost they can name is still deleted;
+    what changes is where the silence falls, and it now falls on the
+    side of a held frame rather than a lost piece.
+    """
     rows, cols = int(colors.shape[0]), int(colors.shape[1])
     scores = _distance_scores(colors, background)
     lo = float(scores.min())
     hi = float(scores.max())
+    observable = _observable((rows, cols), unobservable)
+    band = (scores >= _GHOST_SEPARATION) & (scores < MIN_SPREAD) & observable
+    if not _clear_of_background(scores, band, observable):
+        # Not a level of its own: the background's own noise, or a
+        # continuum with no gap anywhere in it. Reads as it always did.
+        band = np.zeros((rows, cols), dtype=np.bool_)
+    if hi < MIN_SPREAD and bool(band.any()):
+        # A band standing clear of the background, and nothing on the
+        # board reaching the floor for "a different color": a pale piece
+        # on an otherwise empty board — the failure this function exists
+        # to fix, at the one moment there is no two-class split to read
+        # it against. Structure is all there is, so the reading is
+        # entirely structural and says so with the same number a
+        # uniform-empty frame reports.
+        return _band_only_reading(colors, background, scores, band, unobservable, own_paint)
     if hi < MIN_SPREAD:
         # Uniform-near: every cell sits at the background estimate — an
         # EMPTY board, whatever color the theme paints it (a solid
@@ -1191,16 +1315,21 @@ def _classify_scored(
     # every rule here errs in. No committed fixture contains one (see
     # _own_paint_layer: this game draws no ghost at all), so a
     # composition would be written against nothing.
-    observable = np.ones((rows, cols), dtype=np.bool_)
-    for cell in unobservable:
-        if 0 <= cell[0] < rows and 0 <= cell[1] < cols:
-            observable[cell] = False
     ghost = _own_paint_layer(
         colors, background, (scores >= MIN_SPREAD) & observable, unobservable, own_paint
     )
     if ghost is None:
         ghost = _ghost_layer(scores, unobservable)
     board = np.ones((rows, cols), dtype=np.bool_) if ghost is None else ~ghost
+
+    # Whatever the rules did NOT name is still in the band, and the
+    # threshold does not get to decide it either. Our own paint is the
+    # one thing that can be neither deleted nor believed; everything
+    # else is content (see this function's own docstring).
+    candidates = band & board
+    painted = _own_paint_cells(colors, background, unobservable, own_paint)
+    unresolved = candidates & painted if painted is not None else np.zeros_like(candidates)
+    content = candidates & ~unresolved
 
     threshold = otsu_threshold(scores[board])
     occupancy = (scores > threshold) & board
@@ -1217,14 +1346,53 @@ def _classify_scored(
         # gradients and other continuums).
         occupancy = (scores > MIN_SPREAD) & board
         empty_scores = scores[board & ~occupancy]
+    promoted = content & ~occupancy
+    if bool(promoted.any()):
+        # A candidate the rules could not name is board content, so it
+        # joins the occupied class — including for the gap below, which
+        # then reports the separation that actually decided this frame:
+        # the band against the background, rather than the solid pieces
+        # against a band silently filed with them.
+        #
+        # Only the cells the threshold DROPPED are promoted, which is the
+        # whole of the change on real frames: where Otsu had already put
+        # the band with the pieces (``tests/fixtures/absorbed_piece``, and
+        # the settled periwinkle of ``tests/fixtures/roas_stacker``) this
+        # is a no-op and those readings are byte-identical to what they
+        # always were, confidence included.
+        occupancy = occupancy | promoted
+        empty_scores = scores[board & ~occupancy]
     occupied_scores = scores[occupancy]
     if occupied_scores.size == 0 or empty_scores.size == 0:
+        return _Reading(occupancy, 0.0, ghost)
+    if bool(unresolved.any()):
+        # Our own paint, in the band, that _own_paint_layer refused to
+        # name. Deleting it strands the rotation badge as an added cell
+        # nothing can explain; calling it content invents a tetromino
+        # where the coach's own overlay is. Neither, then: the frame is
+        # refused outright. (Measured on live_session 121-135, the 14
+        # badge frames: 0.078 before, which the 0.15 gate rejected by
+        # four hundredths of an accident. This says it on purpose.)
         return _Reading(occupancy, 0.0, ghost)
     # Fraction of the observed score range separating the two classes:
     # 1.0 when the split is wide open, near 0 when samples nearly touch.
     # The range stays the FULL one: a ghost lies strictly inside it, so
     # dropping the layer changes the gap, never the scale it is read on.
     gap = float(occupied_scores.min() - empty_scores.max())
+    if bool(promoted.any()):
+        # A promoted band is a LEVEL being called content over the
+        # threshold's objection, and a level needs air on BOTH sides. The
+        # gap above already reports the air below it (the band is now the
+        # lowest occupied thing there is); this is the other side, and it
+        # is what refuses a lighting gradient, whose band cells are one
+        # slice of a ramp with the next slice 0.074 above them. No new
+        # threshold decides it: the weakest boundary the three-level
+        # reading rests on IS the frame's confidence, and at the gate a
+        # ramp falls (measured: 0.103 on a paper-white board under a
+        # 140-unit vertical gradient, against 0.206 for the real pale
+        # piece of tests/fixtures/pale_piece, whose next level up is
+        # 0.469 away).
+        gap = min(gap, _clearance_above(scores, promoted, observable))
     confidence = float(np.clip(gap / (hi - lo), 0.0, 1.0))
     if ghost is not None:
         # Three levels were seen and two are being reported on; the third
