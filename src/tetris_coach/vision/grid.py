@@ -330,6 +330,51 @@ def _top_row_background(
     return np.asarray(np.median(top, axis=0), dtype=np.float64)
 
 
+def _observable(
+    shape: tuple[int, int], unobservable: frozenset[tuple[int, int]]
+) -> NDArray[np.bool_]:
+    """(rows, cols) True wherever the capture really shows the board."""
+    mask = np.ones(shape, dtype=np.bool_)
+    rows, cols = int(shape[0]), int(shape[1])
+    for r, c in unobservable:
+        if 0 <= r < rows and 0 <= c < cols:
+            mask[r, c] = False
+    return mask
+
+
+def _clear_of_background(
+    scores: NDArray[np.float32],
+    cells: NDArray[np.bool_],
+    observable: NDArray[np.bool_],
+) -> bool:
+    """Does ``cells``' score level stand clear of the background cluster?
+
+    THE test that separates a rendering LAYER of its own — a translucent
+    preview, a pale-on-pale piece — from the background's own noise, and
+    the one thing every reading of the intermediate band is conditioned
+    on. It is relative rather than absolute because the background's
+    spread is a property of the theme and the capture, not of the scale:
+    measured, an ordinary background cluster spans 0.00-0.02 while the
+    levels this module has to name sit at 0.32-0.35, a clearance of
+    0.30-0.33.
+
+    A CONTINUUM fails it, which is the point. The game's own start screen
+    (``tests/fixtures/roas_stacker/start_screen_board.png``) is text
+    antialiased over white: its faintest sub-floor cells run 0.174 up to
+    0.196 with no gap anywhere, a clearance of 0.022. Nothing there is a
+    layer and nothing there is content, and a rule that read it either
+    way would find furniture on every start screen.
+
+    Nothing below the level at all is a fail too, not a pass: a band with
+    no background under it is not standing clear of anything.
+    """
+    if not bool(cells.any()):
+        return False
+    level = float(scores[cells].min())
+    below = scores[(scores < level) & observable]
+    return below.size > 0 and level - float(below.max()) >= _GHOST_SEPARATION
+
+
 def _flood(solid: NDArray[np.bool_], seeds: list[tuple[int, int]]) -> NDArray[np.bool_]:
     """Cells of ``solid`` reachable from ``seeds`` by 4-connected steps."""
     rows, cols = int(solid.shape[0]), int(solid.shape[1])
@@ -740,6 +785,37 @@ def _self_estimated(
     return reading
 
 
+def _own_paint_cells(
+    colors: NDArray[np.float32],
+    background: NDArray[np.float64],
+    unobservable: frozenset[tuple[int, int]],
+    paint: OwnPaint | None,
+) -> NDArray[np.bool_] | None:
+    """Cells whose color IS the composite this tool's hint fill makes here.
+
+    The measurement alone, with none of :func:`_own_paint_layer`'s
+    structural tests on top: ``None`` when there is no paint to look for
+    (no configured color, or one in the wrong channel count), otherwise
+    the mask of cells within :attr:`OwnPaint.tolerance` of
+    ``background + opacity * (paint - background)``.
+
+    :func:`_own_paint_layer` is the rule that DELETES those cells and can
+    refuse to. This is the raw finding, which the split needs even when
+    the rule refuses: a cell that looks like our own paint is not board
+    content, so it may never be promoted out of the intermediate band as
+    if it were (see :func:`_classify_scored`).
+    """
+    if paint is None:
+        return None
+    if len(paint.color) != int(colors.shape[-1]):
+        return None
+    bg = np.asarray(background, dtype=np.float64)
+    expected = bg + paint.opacity * (np.asarray(paint.color, dtype=np.float64) - bg)
+    diff = np.asarray(colors, dtype=np.float64) - expected
+    painted = np.sqrt(np.sum(diff * diff, axis=-1)) <= paint.tolerance
+    return painted & _observable((int(colors.shape[0]), int(colors.shape[1])), unobservable)
+
+
 def _own_paint_layer(
     colors: NDArray[np.float32],
     background: NDArray[np.float64],
@@ -845,19 +921,9 @@ def _own_paint_layer(
     platform-specific window-exclusion work in ``capture/``, and this is
     the layer that keeps the reading correct whether or not it lands.
     """
-    if paint is None:
+    painted = _own_paint_cells(colors, background, unobservable, paint)
+    if painted is None:
         return None
-    channels = int(colors.shape[-1])
-    if len(paint.color) != channels:
-        return None
-    rows, cols = int(colors.shape[0]), int(colors.shape[1])
-    bg = np.asarray(background, dtype=np.float64)
-    expected = bg + paint.opacity * (np.asarray(paint.color, dtype=np.float64) - bg)
-    diff = np.asarray(colors, dtype=np.float64) - expected
-    painted = np.sqrt(np.sum(diff * diff, axis=-1)) <= paint.tolerance
-    for r, c in unobservable:
-        if 0 <= r < rows and 0 <= c < cols:
-            painted[r, c] = False
     cells = [(int(r), int(c)) for r, c in zip(*np.nonzero(painted), strict=True)]
     # 1. Exactly one tetromino.
     if _piece_named(cells) is None:
@@ -1037,10 +1103,7 @@ def _ghost_layer(
       is a different one.
     """
     rows, cols = int(scores.shape[0]), int(scores.shape[1])
-    observable = np.ones((rows, cols), dtype=np.bool_)
-    for r, c in unobservable:
-        if 0 <= r < rows and 0 <= c < cols:
-            observable[r, c] = False
+    observable = _observable((rows, cols), unobservable)
     band = (scores >= _GHOST_SEPARATION) & (scores < MIN_SPREAD) & observable
     if int(band.sum()) != _PIECE_CELLS:
         return None
@@ -1049,9 +1112,7 @@ def _ghost_layer(
         return None
     cells = [(int(r), int(c)) for r, c in zip(*np.nonzero(band), strict=True)]
     # 1. Clear of the background cluster.
-    layer_min = float(scores[band].min())
-    below = scores[(scores < layer_min) & observable]
-    if below.size == 0 or layer_min - float(below.max()) < _GHOST_SEPARATION:
+    if not _clear_of_background(scores, band, observable):
         return None
     # 2. Exactly one tetromino.
     piece = _piece_named(cells)
