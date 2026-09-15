@@ -328,12 +328,26 @@ class ColourTracker:
         one, which this corpus does not have.
 
         Nothing is read and nothing is written: not the palette, not the
-        background, not the cell ages, not the NEXT box. (1) refuses the
-        frame before any of it; (2) cannot be asked until the cells are
-        labelled, so the caller takes a :meth:`Palette.checkpoint` first
-        and restores it here.  The stack count IS carried across, so the
-        frame the board comes back does not look like a line clear to
-        :meth:`_events`.
+        background, not the NEXT box. (1) refuses the frame before any of
+        it; (2) cannot be asked until the cells are labelled, so the caller
+        takes a :meth:`Palette.checkpoint` first and restores it here. The
+        stack count IS carried across, so the frame the board comes back
+        does not look like a line clear to :meth:`_events`.
+
+        The per-cell history is FORGOTTEN rather than carried, for the
+        reason the constructor starts every cell settled: a cell's age is
+        evidence of MOTION, and across a gap there was no motion to have
+        seen. Carrying it made every cell that changed behind the cover
+        read as having just changed, and the stack that grew while the
+        board was hidden then outranked the real piece -- measured on a
+        cover held for twenty frames, the frame the board came back
+        reported three cells of settled stack as the piece in flight, with
+        a PIECE_SPAWNED to go with it, and handed the solver a board those
+        three cells were missing from. Forgetting costs the opposite and
+        smaller error: a piece RESTING on the stack when the board comes
+        back reads as stack until the player moves it (a floating one is
+        picked up at once, since floating needs no history), which is
+        exactly what a mid-session attach costs and for the same reason.
 
         What is reported is silence, not the last hint. A tracker that
         holds its advice over a board it cannot see is the frozen coach
@@ -342,6 +356,8 @@ class ColourTracker:
         would rather hold make that choice itself.
         """
         self._falling = None
+        self._labels = None
+        self._age[:] = self.settle_frames
         return FrameReport(
             falling=None,
             stack_rows=self._stack_rows,

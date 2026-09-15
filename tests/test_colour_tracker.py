@@ -562,3 +562,42 @@ def test_the_budget_for_what_rests_on_nothing_is_exactly_one_tetromino() -> None
 
     stray = tracker().update(render(piece | {(7, 7): GREEN_O}))
     assert not stray.board_visible
+
+
+def test_a_cover_is_a_gap_in_the_motion_evidence_too() -> None:
+    """What the board did behind a cover was not seen, so it is not evidence.
+
+    A cell's age says how long it has held its colour, and the tracker uses
+    it to tell an arriving piece from the stack it landed on. Across frames
+    the tracker REFUSED, that age is a fiction: nothing was seen, so
+    everything that changed behind the cover looks like it changed just
+    now.
+
+    Measured before the fix, on a flat card held over the board for twenty
+    frames while a column grew underneath it: the frame the board came back
+    reported those three settled cells as the piece in flight, raised a
+    PIECE_SPAWNED, and handed the solver a board they were missing from.
+    The real piece, resting on the stack, was not reported at all.
+    """
+    track = tracker()
+    before = {(11, c): BLUE_I for c in range(8)} | {(10, c): BLUE_I for c in range(3)}
+    for _ in range(6):
+        track.update(render(before))
+
+    card = before | {(r, c): GREEN_O for r in range(2, 6) for c in range(1, 9)}
+    for _ in range(20):
+        assert not track.update(render(card)).board_visible
+
+    grown = {(9, 0): BLUE_I, (8, 0): BLUE_I, (7, 0): BLUE_I}
+    resting = {(10, 5): PALE_T, (10, 6): PALE_T, (10, 7): PALE_T, (9, 6): PALE_T}
+    back = track.update(render(before | grown | resting))
+    assert back.board_visible
+    assert back.falling is None, "nothing here was seen to move"
+    assert back.events == ()
+    for cell in grown | resting:
+        assert back.stack_rows[cell[0]] >> cell[1] & 1, f"{cell} is on the board"
+
+    # A piece the capture can see is in flight needs no history at all, so
+    # the frame after the cover still reports one that floats.
+    flying = track.update(render(before | grown | {(4, c): GREEN_O for c in range(4, 8)}))
+    assert flying.falling is not None and flying.falling.piece == "I"
