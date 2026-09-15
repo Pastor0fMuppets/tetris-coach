@@ -820,6 +820,42 @@ class TestTheEnteringPieceHint:
         assert feed(tracker, behind, "I", times=3) == []
         assert tracker.committed.falling_piece == "O"
 
+    def test_a_hold_swap_wears_the_hint_until_the_new_piece_contradicts_it(self) -> None:
+        # The residual, pinned rather than claimed away. A HOLD swap
+        # changes the piece at the top edge with no lock and no preview
+        # flip — the held piece comes out of the hold box, so the next
+        # preview does not advance and nothing re-dates the hint. The
+        # swapped-in piece therefore wears the name the hint gave the one
+        # it replaced, and no frame can say otherwise while its visible
+        # cells still fit that name: two cells side by side fit an O
+        # whether they are an O or the top of something else, and this
+        # game drags pieces around rather than stepping them, so position
+        # rules nothing out either. The hold box is not captured (only the
+        # board and the preview are), so there is no signal to read.
+        #
+        # What bounds it is the same thing that bounds any wrong hint: the
+        # first frame that CONTRADICTS the name takes it back, and the
+        # piece contradicts it as soon as it shows a row the hinted piece
+        # has not got. Nothing structural is ever decided on it.
+        tracker = GameStateTracker(confirm_frames=2)
+        attach(tracker, self.STACK, "O")
+        entering = merge(self.STACK, self.FRAGMENT)
+        feed(tracker, entering, "I", times=3)  # the O is dealt: preview O -> I
+        assert tracker.committed.falling_piece == "O"
+        # The player holds. A different piece is at the top edge now, and
+        # while it shows two cells it wears the O's name.
+        swapped = merge(self.STACK, ((0, 6), (0, 7)))
+        assert feed(tracker, swapped, "I", times=3) == []
+        assert tracker.committed.falling_piece == "O"  # the residual
+        # It descends, and its second row fits no O: the name goes, and
+        # the piece names itself instead — two frames, the ordinary
+        # debounce, and no lock and no reset in between.
+        descending = merge(self.STACK, ((0, 6), (1, 6), (1, 7)))
+        events = feed(tracker, descending, "I") + feed(tracker, descending, "I")
+        assert events == [GameEvent.PIECE_SPAWNED]
+        assert tracker.committed.falling_piece == "L"
+        assert tracker.committed.stack_rows == self.STACK
+
     def test_a_wrong_preview_authorises_nothing_structural(self) -> None:
         # The cost ceiling on a wrong reading. A hinted name is never an
         # observation, so it can vouch for no lock; and a frame it cannot

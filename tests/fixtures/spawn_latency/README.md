@@ -110,3 +110,19 @@ was here has been dealt" and never says when:
   which holds the committed state — a refuted name left there outlives
   its refutation by the piece's whole tenure at the top edge, 14-17
   frames in this game.
+
+## What the preview cannot see
+
+A HOLD swap. The held piece comes out of the hold box, so the piece at
+the top edge changes with **no lock** (nothing expires the hint) and **no
+preview flip** (nothing re-dates it), and the swapped-in piece wears the
+name the hint gave the one it replaced. No frame contradicts that while
+its visible cells still fit the name, and position rules nothing out —
+this game drags pieces across the board rather than stepping them. The
+hold box is not captured at all, only the board and the preview.
+
+So it is bounded rather than solved: the first frame that CONTRADICTS the
+name takes it back (the retraction above), the piece names itself from
+shape as soon as it shows a row the hinted piece has not got, and nothing
+structural is ever decided on a hinted name — it never anchors a lock and
+never enters the committed stack.

@@ -866,6 +866,25 @@ vision/
                   # a claim is the safe direction. A name structure has
                   # produced — or confirmed — stops being a hypothesis and
                   # is never retracted.
+                  # What none of them can see is a HOLD swap: the held
+                  # piece comes out of the hold box, so the piece at the
+                  # top edge changes with no lock to expire the hint and
+                  # no preview flip to re-date it, and the swapped-in
+                  # piece wears the name the hint gave the one it
+                  # replaced. Nothing in the capture contradicts that
+                  # while its visible cells still fit the name (two cells
+                  # side by side fit an O whether or not they are one),
+                  # and position rules nothing out either — the game this
+                  # was measured on drags pieces rather than stepping
+                  # them. The hold box is not captured at all, only the
+                  # board and the preview, so there is no signal to read;
+                  # reading one would mean capturing a third region. What
+                  # bounds it is rule (4): the first frame that
+                  # contradicts the name takes it back, and nothing
+                  # structural was ever decided on it. Pinned in
+                  # test_a_hold_swap_wears_the_hint_until_the_new_piece_
+                  # contradicts_it, as a measured residual and not a
+                  # solved case.
                   # Measured over tests/fixtures/spawn_latency (161 frames,
                   # 124 accepted): OCCLUDED 43 -> 31, frames with a hint on
                   # screen 108 -> 120, and the per-piece sighting -> hint
