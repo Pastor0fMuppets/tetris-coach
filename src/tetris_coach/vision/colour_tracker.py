@@ -579,7 +579,52 @@ class ColourTracker:
         young = frozenset(
             cell for cell in cells if int(self._age[cell[0], cell[1]]) < self.settle_frames
         )
-        return [part for part in _connected(young) if len(part) <= 4]
+        parts = [part for part in _connected(young) if len(part) <= 4]
+        # The piece the player is holding still, inside a component it has
+        # aged into: young says nothing about it any more, and
+        # :meth:`_rank` is where it is decided on.
+        held = self._held
+        inside = held is not None and held.colour_class == label and held.cells <= cells
+        if inside and held is not None and held.cells not in parts:
+            parts.append(held.cells)
+        return parts
+
+    @property
+    def _held(self) -> FallingPiece | None:
+        """The piece that was in flight last frame, if there was one."""
+        return self._falling
+
+    def _is_held(self, label: int, cells: frozenset[Cell]) -> bool:
+        """Is this exactly the piece that was in flight last frame, unmoved?
+
+        THIS GAME HAS NO GRAVITY. A piece the player has dragged onto the
+        stack sits where it was put until they drop it, and holding it over
+        the landing spot while reading the advice is how the game is
+        played. To the pixels that is indistinguishable from a piece that
+        has locked -- both are content, resting, and not changing -- so the
+        tracker has to choose which to believe, and it used to choose lock
+        after ``settle_frames``. Measured through the engine at 15 fps, an
+        O dragged onto the floor kept its hint for 3 frames and then went
+        blank from the 4th (0.27 s), which is the moment the player is
+        looking at it.
+
+        So a piece that is already in flight KEEPS being in flight while
+        nothing about it changes. The evidence that it has locked is not
+        time passing, it is another piece: a candidate that floats, or one
+        that has just changed, outranks a held one by the ordinary rules in
+        :meth:`_rank`, and the frame it does is the frame the lock is
+        reported. That is the real signal in a game that deals the next
+        piece the moment you drop this one.
+
+        What it costs when the next piece is slow to appear: the held piece
+        is left out of the settled board for those frames, so the solver is
+        handed a board without it and the hint on screen is the one for the
+        piece that has just landed. Both are what the player sees anyway
+        while they hold it, which is the case this is for; the tracker
+        cannot tell the two apart and this is the side worth erring on.
+        """
+        was = self._held
+        return was is not None and was.colour_class == label and was.cells == cells
 
     def _pick_falling(
         self, labels: NDArray[np.int16], grounded: NDArray[np.bool_]
@@ -604,7 +649,7 @@ class ColourTracker:
         """
         floating = not any(grounded[r, c] for r, c in cells)
         youth = min(int(self._age[r, c]) for r, c in cells)
-        if not floating and youth >= self.settle_frames:
+        if not floating and youth >= self.settle_frames and not self._is_held(label, cells):
             return best  # resting and old: settled board, not a piece
         rank = (0 if floating else 1, youth, min(r for r, _ in cells))
         if best is not None and rank >= best[0]:

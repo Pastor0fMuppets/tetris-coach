@@ -154,6 +154,47 @@ def test_the_shape_reader_says_why_it_refused_too(capsys: pytest.CaptureFixture[
     assert "the confidence gate scored this frame" in capsys.readouterr().err
 
 
+def test_a_piece_parked_on_the_stack_keeps_its_hint() -> None:
+    """The moment the player is actually reading the advice.
+
+    ROAS Stacker has no gravity: the piece waits where it is dragged, so
+    holding it over the landing spot while reading the hint is how the game
+    is played. The tracker used to absorb a piece into the stack on the 4th
+    identical frame, which through this engine meant falling_piece=None,
+    _update_hint taking its `piece is None` branch, and the overlay going
+    dark 0.27 s after the player stopped moving -- a regression against the
+    reader this one replaced, which keeps reporting the piece for as long
+    as it is there.
+    """
+    coach = engine()
+    box = preview(O_CELLS, GREEN_O)
+    for row in (4, 6, 8):
+        falling = {
+            (row, 4): GREEN_O,
+            (row, 5): GREEN_O,
+            (row + 1, 4): GREEN_O,
+            (row + 1, 5): GREEN_O,
+        }
+        assert coach.process_frame(render(falling), box) is not None
+
+    parked = render({(10, 4): GREEN_O, (10, 5): GREEN_O, (11, 4): GREEN_O, (11, 5): GREEN_O})
+    for frame in range(10):
+        hint = coach.process_frame(parked, box)
+        assert hint is not None, f"the overlay went dark on parked frame {frame}"
+        assert hint.piece == "O"
+        reading = coach.last_reading
+        assert reading is not None and reading.falling_piece == "O"
+        assert reading.stack_rows == (0,) * ROWS, "still in hand, so not the board"
+
+    # ... and the piece it makes way for is the one that takes the hint.
+    dealt = {(10, 4): GREEN_O, (10, 5): GREEN_O, (11, 4): GREEN_O, (11, 5): GREEN_O}
+    dealt |= {(0, c): BLUE_I for c in range(3, 7)}
+    after = coach.process_frame(render(dealt), preview(I_CELLS, BLUE_I))
+    assert after is not None and after.piece == "I"
+    reading = coach.last_reading
+    assert reading is not None and reading.stack_rows[11] == 0b110000
+
+
 def test_the_coach_never_reads_its_own_paint_as_the_board() -> None:
     # The coach captures its own overlay. Drawing the hint it just chose
     # over the board must change nothing it believes: same piece, same

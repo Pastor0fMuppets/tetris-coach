@@ -98,15 +98,18 @@ def test_a_piece_landing_beside_settled_cells_of_its_own_colour() -> None:
     assert report.stack_rows[11] == 0b1111, "the stack is what was there before it"
     assert Event.PIECE_SPAWNED in report.events
 
-    # It settles when it has held still, exactly as any resting piece does.
-    for _ in range(3):
-        report = track.update(render(arrived))
-    assert report.falling is None
+    # It stays in hand while nothing takes its place (this game has no
+    # gravity), and becomes stack the frame the next piece is dealt.
+    for _ in range(4):
+        held = track.update(render(arrived))
+        assert held.falling is not None and held.falling.piece == "I"
+    report = track.update(render(arrived | {(0, c): GREEN_O for c in (4, 5)}))
+    assert report.falling is not None and report.falling.cells == frozenset({(0, 4), (0, 5)})
     assert report.stack_rows[11] == 0b11111111
     assert Event.PIECE_LOCKED in report.events
 
 
-def test_a_piece_coming_to_rest_on_its_own_colour_keeps_its_settling_grace() -> None:
+def test_a_piece_coming_to_rest_on_its_own_colour_is_still_the_piece() -> None:
     """It used to vanish on the frame it landed, ahead of its own grace."""
     track = tracker()
     settled = {(11, c): BLUE_I for c in range(4)}
@@ -117,14 +120,14 @@ def test_a_piece_coming_to_rest_on_its_own_colour_keeps_its_settling_grace() -> 
         assert report.falling is not None and report.falling.floating
 
     landed = settled | {(10, c): BLUE_I for c in range(4)}
-    for _ in range(3):
+    for _ in range(6):
         report = track.update(render(landed))
         assert report.falling is not None, "still the piece, resting"
         assert report.falling.piece == "I"
         assert not report.falling.floating
         assert report.stack_rows[10] == 0
-    report = track.update(render(landed))
-    assert report.falling is None
+    report = track.update(render(landed | {(0, c): GREEN_O for c in (4, 5)}))
+    assert report.falling is not None and report.falling.cells == frozenset({(0, 4), (0, 5)})
     assert report.stack_rows[10] == 0b1111
     assert Event.PIECE_LOCKED in report.events
 
@@ -271,20 +274,37 @@ def test_a_hovering_piece_never_becomes_stack() -> None:
     assert report.stack_rows == (0,) * ROWS
 
 
-def test_a_resting_piece_settles_and_reports_a_lock() -> None:
+def test_a_resting_piece_is_still_in_hand_until_something_replaces_it() -> None:
+    """The piece the player has parked, which is how this game is played.
+
+    ROAS Stacker has no gravity: a piece dragged onto the stack sits there
+    until it is dropped, and holding it over the landing spot while reading
+    the advice is ordinary play. To the pixels that is identical to a piece
+    that has locked, so the tracker has to choose -- and it used to choose
+    lock on the 4th identical frame, which through the engine at 15 fps
+    meant the overlay went dark 0.27 s after the player stopped moving. The
+    shipped reader keeps reporting the piece for as long as it is there.
+
+    The evidence that it HAS locked is not time passing: it is another
+    piece. Until one arrives the settled board is the board it was resting
+    on, which is also what the player is looking at.
+    """
     track = tracker(settle_frames=3)
     falling = {(9, 4): GREEN_O, (9, 5): GREEN_O, (8, 4): GREEN_O, (8, 5): GREEN_O}
     for _ in range(4):
         track.update(render(falling))
     landed = {(10, 4): GREEN_O, (10, 5): GREEN_O, (11, 4): GREEN_O, (11, 5): GREEN_O}
-    first = track.update(render(landed))
-    assert first.falling is not None and first.falling.piece == "O"
-    assert not first.falling.floating
-    for _ in range(3):
+    for _ in range(8):
         report = track.update(render(landed))
-    assert report.falling is None
-    assert Event.PIECE_LOCKED in report.events
-    assert report.stack_rows[11] == 0b110000
+        assert report.falling is not None and report.falling.piece == "O"
+        assert not report.falling.floating
+        assert report.stack_rows[11] == 0, "not the board while it is in hand"
+    assert all(Event.PIECE_LOCKED not in report.events for _ in range(1))
+
+    dealt = track.update(render(landed | {(0, c): BLUE_I for c in range(3, 7)}))
+    assert Event.PIECE_LOCKED in dealt.events
+    assert dealt.falling is not None and dealt.falling.piece == "I"
+    assert dealt.stack_rows[11] == 0b110000
 
 
 def test_a_hard_drop_between_captures_still_reports_one_lock() -> None:
@@ -298,10 +318,14 @@ def test_a_hard_drop_between_captures_still_reports_one_lock() -> None:
     track = tracker()
     for _ in range(3):
         track.update(render({(0, 4): GREEN_O, (0, 5): GREEN_O}))
-    dropped = render({(10, 0): GREEN_O, (10, 1): GREEN_O, (11, 0): GREEN_O, (11, 1): GREEN_O})
-    events = [event for _ in range(6) for event in track.update(dropped).events]
+    landed = {(10, 0): GREEN_O, (10, 1): GREEN_O, (11, 0): GREEN_O, (11, 1): GREEN_O}
+    for _ in range(6):
+        report = track.update(render(landed))
+        assert Event.PIECE_LOCKED not in report.events, "it may still be dragged"
+    dealt = [landed | {(0, c): BLUE_I for c in range(3, 7)}]
+    events = [event for frame in dealt * 3 for event in track.update(render(frame)).events]
     assert events.count(Event.PIECE_LOCKED) == 1
-    assert track.update(dropped).stack_rows[11] == 0b11
+    assert track.update(render(dealt[0])).stack_rows[11] == 0b11
 
 
 def test_the_next_piece_appearing_locks_the_one_that_dropped() -> None:
@@ -491,7 +515,10 @@ def test_a_monochrome_theme_falls_back_to_shape() -> None:
     landed = {(9, 8): grey, (10, 8): grey, (10, 9): grey, (11, 9): grey}
     for _ in range(5):
         report = track.update(render(stack | landed))
-    assert report.falling is None
+        assert report.falling is not None and report.falling.piece == "S"
+    dealt = {(0, 4): grey, (0, 5): grey}
+    report = track.update(render(stack | landed | dealt))
+    assert report.falling is not None and report.falling.cells == frozenset(dealt)
     assert report.stack_rows[11] == 0b1000111111
 
 
