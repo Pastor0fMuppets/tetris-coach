@@ -670,6 +670,40 @@ class ColourTracker:
             return False
         return (was.cells <= cells or cells <= was.cells) and len(was.cells ^ cells) <= 1
 
+    def _continues(self, label: int, cells: frozenset[Cell]) -> bool:
+        """Is this the piece that was in flight last frame, moved or not?
+
+        The looser of the two continuity questions, and the one the
+        admission test in :meth:`_rank` is excused by. :meth:`_is_held`
+        asks whether a piece has STOOD STILL, which is what decides
+        whether it is board or still in hand; this asks only whether it is
+        the same piece, which is what decides whether a cell it is not
+        showing this frame is news.
+
+        The difference is the player's hand. A cell dropping to noise for
+        one frame was made fatal for a piece being DRAGGED -- it fails
+        :meth:`_is_held` because its cells moved, then fails
+        :meth:`_explicable` because three cells in open board have nothing
+        hiding the fourth -- so the candidate was dropped entirely: the
+        three cells it did show went into the settled stack, the lock and
+        spawn fired, and the hint came off the screen and re-solved. That
+        is the user's reported stutter, one frame at a time, and a
+        flickering cell is no rarer during a drag than while parked.
+
+        Same colour class, and at least one cell in common with last
+        frame's sighting. Overlap is what says "this one and not another":
+        this game is drag-to-drop and a piece moves a cell or two between
+        captures, which always leaves cells in common, while the stray
+        that stole the hint at (8, 8) shared none with the J at the top
+        edge. A piece that jumps clear of where it was gets no continuity
+        from this and is read on its own merits, which is right -- across
+        a jump we did not see, what is at the new place is a new sighting.
+        """
+        was = self._falling
+        if was is None or was.colour_class != label:
+            return False
+        return bool(was.cells & cells)
+
     def _hidden(self, r: int, c: int) -> bool:
         """Is this cell one the capture cannot see a piece in?
 
@@ -768,6 +802,15 @@ class ColourTracker:
         :meth:`_is_held` exactly where it is needed, since a parked piece
         that drops a cell to noise is a three-cell sighting in open board.
 
+        WHAT IS EXEMPT IS THE PIECE, NOT THE POSE (:meth:`_continues`, not
+        :meth:`_is_held`). A piece the player is DRAGGING has moved, so
+        the stricter question answers no, and the same one-cell dropout
+        then took the whole candidate away: the cells it did show went
+        into the stack, PIECE_LOCKED fired, the next frame raised
+        PIECE_SPAWNED, and the coach withdrew the hint and re-solved --
+        the reported symptom exactly, in the one case parking does not
+        cover.
+
         WHY THE LOAN HAS TO BE REPAID. "A candidate has to have been
         believed on an earlier frame to be exempt on this one" does not
         bound anything by itself, because the belief is handed on:
@@ -786,7 +829,7 @@ class ColourTracker:
         drift is bounded at one row rather than at the floor.
         """
         held = self._is_held(label, cells)
-        excused = held and self._on_loan < LOAN_FRAMES
+        excused = self._on_loan < LOAN_FRAMES and self._continues(label, cells)
         if not excused and not self._explicable(cells):
             return best  # fewer than four cells and nothing hiding the rest
         floating = not any(grounded[r, c] for r, c in cells)

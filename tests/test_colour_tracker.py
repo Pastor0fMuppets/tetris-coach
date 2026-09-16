@@ -425,6 +425,56 @@ def test_a_piece_that_MOVED_one_column_does_not_inherit_the_held_identity() -> N
                 assert not contained, (rotation.piece, rotation.index, dr, dc)
 
 
+def test_a_piece_being_dragged_survives_one_cell_flickering_too() -> None:
+    """The slack belongs to the piece, not to the pose it is holding.
+
+    A piece the player is MOVING has different cells this frame by
+    definition, so the parked-piece identity cannot cover it -- and the
+    admission test then refuses it, three cells in open board having
+    nothing to hide the fourth. Measured before this: the three visible
+    cells went into the settled stack, PIECE_LOCKED fired, the next frame
+    raised PIECE_SPAWNED, and the engine withdrew the hint and re-solved.
+    That is the reported stutter, in the one case parking does not cover,
+    and a cell flickering is no rarer during a drag than while parked.
+    """
+    track = tracker(settle_frames=3)
+    for row in (4, 5, 6):
+        whole = {(row, 4), (row, 5), (row + 1, 4), (row + 1, 5)}
+        moving = track.update(render(dict.fromkeys(whole, GREEN_O)))
+    assert moving.falling is not None and moving.falling.piece == "O"
+
+    dropped = {(7, 4), (7, 5), (8, 4)}  # it moves down one, and (8,5) reads empty
+    report = track.update(render(dict.fromkeys(dropped, GREEN_O)))
+    assert report.falling is not None and report.falling.piece == "O"
+    assert report.falling.cells == frozenset(dropped)
+    assert report.stack_rows == (0,) * ROWS, "not one cell of it is board"
+    assert report.events == ()
+
+    back = track.update(render(dict.fromkeys({(7, 4), (7, 5), (8, 4), (8, 5)}, GREEN_O)))
+    assert back.falling is not None and back.falling.cells == frozenset(
+        {(7, 4), (7, 5), (8, 4), (8, 5)}
+    )
+    assert back.events == (), "it never stopped being the same piece"
+
+
+def test_a_sighting_that_shares_no_cell_with_the_piece_continues_nothing() -> None:
+    """What keeps the slack from being a licence for any nearby fragment.
+
+    Overlap is the whole of the claim "this one and not another": this
+    game is drag-to-drop and a piece moves a cell or two between captures,
+    which always leaves cells in common. The stray that took the hint off
+    the real J shared none with it.
+    """
+    track = tracker(settle_frames=3)
+    for row in (4, 5, 6):
+        whole = {(row, 4), (row, 5), (row + 1, 4), (row + 1, 5)}
+        track.update(render(dict.fromkeys(whole, GREEN_O)))
+    elsewhere = {(2, 0), (2, 1), (3, 0)}  # same colour, three cells, nowhere near
+    report = track.update(render(dict.fromkeys(elsewhere, GREEN_O)))
+    assert report.falling is None
+    assert report.stack_rows[2] == 0b11
+
+
 def test_a_fragment_cannot_walk_into_open_board_on_borrowed_belief() -> None:
     """The exemption from the admission test is a loan of ONE frame.
 
