@@ -370,6 +370,61 @@ def test_a_resting_piece_is_still_in_hand_until_something_replaces_it() -> None:
     assert dealt.stack_rows[11] == 0b110000
 
 
+def test_a_parked_piece_survives_one_cell_flickering_at_its_edge() -> None:
+    """Identity across a frame must not depend on four cells out of four.
+
+    A cell at a colour boundary samples a shade either side of
+    EMPTY_DIST from time to time -- the most ordinary noise there is --
+    and the piece the player is holding is the thing most exposed to it,
+    because parking a piece over the landing spot while reading the advice
+    is how this game is played. Requiring the cell set to be EXACTLY last
+    frame's made one such cell reclassify a piece in hand as settled
+    board: no falling piece, the hint blank, and the solver handed a board
+    with the held piece already in it.
+    """
+    track = tracker(settle_frames=3)
+    falling = {(9, 4): GREEN_O, (9, 5): GREEN_O, (8, 4): GREEN_O, (8, 5): GREEN_O}
+    for _ in range(4):
+        track.update(render(falling))
+    landed = {(10, 4): GREEN_O, (10, 5): GREEN_O, (11, 4): GREEN_O, (11, 5): GREEN_O}
+    for _ in range(6):
+        parked = track.update(render(landed))
+    assert parked.falling is not None and not parked.falling.floating
+
+    flicker = dict(landed)
+    del flicker[(10, 5)]  # one cell reads as background for one frame
+    report = track.update(render(flicker))
+    assert report.falling is not None, "still the piece in hand, three cells of it"
+    assert report.falling.piece == "O"
+    assert report.falling.cells == frozenset({(10, 4), (11, 4), (11, 5)})
+    assert report.stack_rows[11] == 0, "and still not the board"
+    assert Event.PIECE_LOCKED not in report.events
+
+    back = track.update(render(landed))
+    assert back.falling is not None and back.falling.cells == frozenset(landed)
+    assert Event.PIECE_LOCKED not in back.events
+    assert Event.PIECE_SPAWNED not in back.events, "it never stopped being the same piece"
+
+
+def test_a_piece_that_MOVED_one_column_does_not_inherit_the_held_identity() -> None:
+    """The slack is a cell gained or lost, never a cell moved.
+
+    Every translation of every tetromino both adds and removes cells, so
+    "one set contains the other" is a test motion cannot pass -- which is
+    what keeps this from being a licence for any nearby sighting to take
+    over the piece in flight.
+    """
+    from tetris_coach.core.pieces import ROTATIONS
+
+    for rotations in ROTATIONS.values():
+        for rotation in rotations:
+            cells = {(r + 4, c + 3) for r, c in rotation.cells}
+            for dr, dc in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                moved = {(r + dr, c + dc) for r, c in cells}
+                contained = cells <= moved or moved <= cells
+                assert not contained, (rotation.piece, rotation.index, dr, dc)
+
+
 def test_a_hard_drop_between_captures_still_reports_one_lock() -> None:
     """A piece that jumps the whole board in one capture locks once.
 

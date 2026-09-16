@@ -586,11 +586,15 @@ class ColourTracker:
         parts = [part for part in _connected(young) if len(part) <= 4]
         # The piece the player is holding still, inside a component it has
         # aged into: young says nothing about it any more, and
-        # :meth:`_rank` is where it is decided on.
+        # :meth:`_rank` is where it is decided on. What of it this frame
+        # shows, rather than all of it, for :meth:`_is_held`'s reason --
+        # one cell flickering at a colour boundary must not cost the
+        # player the piece they are holding.
         held = self._falling  # what was in flight last frame
-        inside = held is not None and held.colour_class == label and held.cells <= cells
-        if inside and held is not None and held.cells not in parts:
-            parts.append(held.cells)
+        if held is not None and held.colour_class == label:
+            still = held.cells & cells
+            if len(held.cells - still) <= 1 and still and still not in parts:
+                parts.append(still)
         return parts
 
     def _is_held(self, label: int, cells: frozenset[Cell]) -> bool:
@@ -621,9 +625,31 @@ class ColourTracker:
         piece that has just landed. Both are what the player sees anyway
         while they hold it, which is the case this is for; the tracker
         cannot tell the two apart and this is the side worth erring on.
+
+        ONE CELL OF SLACK, and only of the right kind. ``==`` made the
+        identity of a parked piece depend on all four of its cells being
+        read the same way twice running, so a single cell flickering at a
+        colour boundary -- an antialiased edge sampling a shade either
+        side of :data:`EMPTY_DIST`, which is the most ordinary noise there
+        is -- reclassified a piece the player was still holding as settled
+        board. On this game that path is hit constantly, because parking a
+        piece over the landing spot while reading the advice is how it is
+        played.
+
+        So a sighting keeps the identity when it differs from last
+        frame's by at most one cell, GAINED or LOST but never moved: one
+        set contains the other. That is what a flickering cell looks like
+        and it is not what motion looks like -- every translation of every
+        tetromino both adds and removes cells, an I stepped one column
+        included, so no moved piece can inherit an identity through this.
+        A piece that grows a cell is not at risk of being called settled
+        anyway: the new cell's age is 0, and :meth:`_rank` only consults
+        this once every cell has aged past ``settle_frames``.
         """
         was = self._falling
-        return was is not None and was.colour_class == label and was.cells == cells
+        if was is None or was.colour_class != label:
+            return False
+        return (was.cells <= cells or cells <= was.cells) and len(was.cells ^ cells) <= 1
 
     def _hidden(self, r: int, c: int) -> bool:
         """Is this cell one the capture cannot see a piece in?
@@ -713,12 +739,24 @@ class ColourTracker:
         Floating beats resting, younger beats older, higher beats lower --
         among candidates that could be a piece at all
         (:meth:`_explicable`).
+
+        The piece already in flight is exempt from that admission test.
+        :meth:`_explicable` asks what could be hiding the cells a sighting
+        does not show, and for a piece we watched arrive the answer is on
+        record: it was four cells a moment ago and one of them is
+        misreading now. Applying the test to it would undo
+        :meth:`_is_held` exactly where it is needed, since a parked piece
+        that drops a cell to noise is a three-cell sighting in open board.
+        Nothing bootstraps through this: a candidate has to have been
+        believed on an earlier frame, on its own merits, to be exempt on
+        this one.
         """
-        if not self._explicable(cells):
+        held = self._is_held(label, cells)
+        if not held and not self._explicable(cells):
             return best  # fewer than four cells and nothing hiding the rest
         floating = not any(grounded[r, c] for r, c in cells)
         youth = min(int(self._age[r, c]) for r, c in cells)
-        if not floating and youth >= self.settle_frames and not self._is_held(label, cells):
+        if not floating and youth >= self.settle_frames and not held:
             return best  # resting and old: settled board, not a piece
         rank = (0 if floating else 1, youth, min(r for r, _ in cells))
         if best is not None and rank >= best[0]:
