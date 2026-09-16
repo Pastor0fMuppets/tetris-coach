@@ -153,12 +153,15 @@ def test_a_filled_translucent_ghost_would_be_read_as_its_piece() -> None:
     sits below its piece, in its piece's columns) is not measurable here.
     """
     ghost = blend(GREEN_O, 0.3)
-    frame = {(1, 4): GREEN_O, (1, 5): GREEN_O, (11, 4): ghost, (11, 5): ghost}
+    # The O half out of sight above row 0, which is where a two-cell
+    # sighting is explicable -- see
+    # ``test_a_lone_cell_in_open_board_is_not_a_piece_with_three_missing``.
+    frame = {(0, 4): GREEN_O, (0, 5): GREEN_O, (11, 4): ghost, (11, 5): ghost}
     track = tracker()
-    track.update(render({(1, 4): GREEN_O, (1, 5): GREEN_O}))  # learn the opaque colour
+    track.update(render({(0, 4): GREEN_O, (0, 5): GREEN_O}))  # learn the opaque colour
     report = track.update(render(frame))
     assert report.falling is not None
-    assert report.falling.cells == frozenset({(1, 4), (1, 5)})
+    assert report.falling.cells == frozenset({(0, 4), (0, 5)})
     assert report.stack_rows[11] == 0b110000, "the filled preview is read as stack"
 
 
@@ -201,7 +204,12 @@ def test_a_frame_that_is_not_a_board_is_refused_whole() -> None:
     not: reading a non-board frame interned junk colours permanently.
     """
     track = tracker()
-    board = {(11, c): BLUE_I for c in range(4)} | {(3, 6): GREEN_O, (3, 7): GREEN_O}
+    board = {(11, c): BLUE_I for c in range(4)} | {
+        (2, 6): GREEN_O,
+        (2, 7): GREEN_O,
+        (3, 6): GREEN_O,
+        (3, 7): GREEN_O,
+    }
     for _ in range(4):
         good = track.update(render(board))
     classes = len(track.palette.classes)
@@ -252,6 +260,61 @@ def test_cells_the_capture_cannot_see_are_not_content() -> None:
     assert report.falling is None
     assert report.stack_rows[0] == 0 and report.stack_rows[1] == 0
     assert report.stack_rows[11] == 0b1
+
+
+def test_a_lone_cell_in_open_board_is_not_a_piece_with_three_missing() -> None:
+    """A partial sighting needs something to be hiding the rest of it.
+
+    This is the shape the stutter arrived in: one cell, mid-board, in a
+    colour of its own, floating and therefore outranking the real piece
+    clipped by the top edge. It was the coach's own rotation badge, and
+    the reader no longer makes it (``own_paint_states``); this is the
+    second rule, so that the next noise source nobody has met has to beat
+    both.
+    """
+    stray = render({(8, 8): PALE_T, (11, 0): BLUE_I, (11, 1): BLUE_I})
+    report = tracker().update(stray)
+    assert report.falling is None, "nothing hides three cells at row 8"
+    assert report.stack_rows[8] == 1 << 8, "it is still content, just not a piece"
+
+
+def test_a_sighting_the_top_edge_or_the_panel_explains_is_still_a_piece() -> None:
+    """The two places a piece really can be half out of sight.
+
+    Neither may be refused by the rule above: a piece entering from above
+    shows one to three cells for its whole tenure at the ceiling (the
+    corpus' longest is 15 frames), and the NEXT panel covers the board's
+    top-right corner in every session captured here.
+    """
+    covered = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+    track = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=covered)
+
+    # Clipped by the top edge: the fourth cell is above row 0.
+    entering = track.update(render({(0, 3): PALE_T, (0, 4): PALE_T, (0, 5): PALE_T}))
+    assert entering.falling is not None
+    assert entering.falling.cells == frozenset({(0, 3), (0, 4), (0, 5)})
+
+    # Under the panel: a T at (1,6) (1,7) (1,8) (2,7) with (1,8) unseen.
+    behind = track.update(render({(1, 6): PALE_T, (1, 7): PALE_T, (2, 7): PALE_T}))
+    assert behind.falling is not None
+    assert behind.falling.cells == frozenset({(1, 6), (1, 7), (2, 7)})
+
+
+def test_the_floor_and_the_walls_do_not_hide_a_piece() -> None:
+    """Off the sides and below the floor are not places to be hidden.
+
+    The well has walls and a floor and a piece is never partly through
+    them, so a fragment against an edge gets no excuse from being there --
+    which matters because the edges are exactly where a board rectangle a
+    few pixels off puts its stray readings.
+    """
+    for cells in (
+        {(5, 0): PALE_T},  # against the left wall
+        {(5, 9): PALE_T},  # against the right wall
+        {(11, 4): PALE_T},  # on the floor
+    ):
+        report = tracker().update(render(cells | {(11, 0): BLUE_I}))
+        assert report.falling is None, cells
 
 
 # -- falling versus settled -------------------------------------------

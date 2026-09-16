@@ -96,6 +96,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..core.board import DEFAULT_HEIGHT, WIDTH
+from ..core.pieces import ROTATIONS
 from .colour_palette import (
     CLEAN,
     EMPTY,
@@ -624,6 +625,72 @@ class ColourTracker:
         was = self._falling
         return was is not None and was.colour_class == label and was.cells == cells
 
+    def _hidden(self, r: int, c: int) -> bool:
+        """Is this cell one the capture cannot see a piece in?
+
+        Two places, and only two. ABOVE ROW 0: this game deals a piece at
+        the ceiling and the player drags it down, so a piece entering
+        shows its bottom row or two and the rest is off the top of the
+        board region. UNDER THE NEXT PANEL: the panel overlaps the board
+        rectangle's top-right corner in every session captured here, and
+        those cells are named at construction.
+
+        Off the sides and below the floor are NOT hidden: the well has
+        walls and a floor, and a piece is never partly through them.
+        """
+        if r < 0:
+            return True
+        if not (0 <= r < self.rows and 0 <= c < self.cols):
+            return False
+        return not bool(self._observable[r, c])
+
+    def _explicable(self, cells: frozenset[Cell]) -> bool:
+        """Is this sighting one a whole tetromino could be behind?
+
+        A piece has four cells. Seeing fewer is only explicable where
+        something HIDES the rest, and the two places anything can hide are
+        :meth:`_hidden`'s. So a sub-tetromino candidate is admissible when
+        some placement of some rotation covers it and puts every cell it
+        does not account for in one of those places -- and nowhere else. A
+        lone cell in open board is not a piece with three cells missing;
+        it is a cell.
+
+        This is the rule the shipped shape tracker enforced and the
+        rewrite dropped, and it is restored here as a BOUND rather than as
+        a fix: measured over all nine committed windows, every one of the
+        170 sub-tetromino sightings the tracker picks is explicable, so
+        this changes not one frame of the corpus today. What it changes is
+        what a stray cell can cost. The coach's own rotation badge, read
+        as content by a reader that has since been fixed
+        (:func:`~tetris_coach.vision.colour_palette.own_paint_states`),
+        was a single cell at row 8 of open board, and it took the hint off
+        the real J on every other frame for 44 frames; a noise source
+        nobody has met yet would have done the same. Two independent rules
+        now have to fail together for that to happen again.
+
+        WHICH WAY IT ERRS: toward refusing a partial sighting. A piece
+        genuinely hidden by something this tracker does not model -- a
+        board rectangle cutting the playfield short, a game's own overlay
+        that is not the NEXT panel -- is read as stack rather than as a
+        piece, so the coach hints on a board with an extra blob in it
+        instead of hinting for an invented piece. Both are wrong; the
+        second is wrong in a way that moves the hint every frame.
+        """
+        missing = PIECE_CELLS - len(cells)
+        if missing <= 0:
+            return True
+        anchor = min(cells)
+        for rotations in ROTATIONS.values():
+            for rotation in rotations:
+                for ar, ac in rotation.cells:
+                    dr, dc = anchor[0] - ar, anchor[1] - ac
+                    placed = {(r + dr, c + dc) for r, c in rotation.cells}
+                    if not cells <= placed:
+                        continue
+                    if all(self._hidden(r, c) for r, c in placed - cells):
+                        return True
+        return False
+
     def _pick_falling(
         self, labels: NDArray[np.int16], grounded: NDArray[np.bool_]
     ) -> FallingPiece | None:
@@ -643,8 +710,12 @@ class ColourTracker:
     ) -> tuple[tuple[int, int, int], FallingPiece] | None:
         """Keep whichever of ``best`` and ``cells`` is the better candidate.
 
-        Floating beats resting, younger beats older, higher beats lower.
+        Floating beats resting, younger beats older, higher beats lower --
+        among candidates that could be a piece at all
+        (:meth:`_explicable`).
         """
+        if not self._explicable(cells):
+            return best  # fewer than four cells and nothing hiding the rest
         floating = not any(grounded[r, c] for r, c in cells)
         youth = min(int(self._age[r, c]) for r, c in cells)
         if not floating and youth >= self.settle_frames and not self._is_held(label, cells):
