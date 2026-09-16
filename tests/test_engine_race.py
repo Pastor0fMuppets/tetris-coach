@@ -1,13 +1,20 @@
 """What the overlay actually shows, pinned, for both tracker choices.
 
-The tracker-level race lives in ``test_race.py``; this is the same six
+The tracker-level race lives in ``test_race.py``; this is the same eight
 windows replayed through :class:`~tetris_coach.app.CoachEngine` itself, so
 what is asserted here is what a user would have seen on screen. The
 numbers, scored from frame ``WARMUP`` of each window:
 
     tracker  hints  MISNAMED  INVENTED  stale  latmed  latmax  moves  hintless
-    colour     418         0         0     21     0.0       0      0         4
-    shape      397         6         0     49     1.0       3      3        25
+    colour     470         0         0     21     0.0       0      0         4
+    shape      442         7         0     49     1.0       3      3        32
+
+``hint_stutter`` and ``stray_after_clear`` are the two windows committed
+for the flashing hint the user reported, and this is the table that
+measures what they were reported FOR: with the colour tracker both now
+score 0 moves, 0 misnamed and 0 hintless, on 31 and 21 scored frames. On
+the reading that shipped, hint_stutter alone put the hint on a different
+target and back 31 times in 51 frames.
 
 MISNAMED is the one that matters: a placement drawn for a piece the player
 does not have walks them into a hole and looks exactly like a placement
@@ -72,8 +79,8 @@ def test_the_default_tracker_is_the_colour_one() -> None:
 @pytest.mark.parametrize(
     ("tracker", "hints", "misnamed", "invented", "stale", "moves", "hintless"),
     [
-        ("colour", 418, 0, 0, 21, 0, 4),
-        ("shape", 397, 6, 0, 49, 3, 25),
+        ("colour", 470, 0, 0, 21, 0, 4),
+        ("shape", 442, 7, 0, 49, 3, 32),
     ],
 )
 def test_what_each_tracker_puts_on_screen(
@@ -94,21 +101,21 @@ def test_what_each_tracker_puts_on_screen(
         total.moves,
         total.hintless,
     ) == (hints, misnamed, invented, stale, moves, hintless)
-    assert total.frames == 422
+    assert total.frames == 474
 
 
 def test_no_frame_of_this_corpus_shows_a_hint_for_the_wrong_piece() -> None:
     # The headline. A hint can only be judged on a frame the oracle
     # answers AND the coach was drawing something: with the colour tracker
-    # that is all 397 of the answered frames -- the overlay is never blank
+    # that is all 449 of the answered frames -- the overlay is never blank
     # when the oracle can say what is falling -- and none of them names the
     # wrong piece.
     total = totals("colour")
     assert total.misnamed == 0
-    assert total.judged == 397
+    assert total.judged == 449
     shape = totals("shape")
-    assert shape.misnamed == 6
-    assert shape.judged == 372  # and blank on 25 answered frames besides
+    assert shape.misnamed == 7
+    assert shape.judged == 417  # and blank on 32 answered frames besides
 
 
 def test_a_hint_arrives_the_frame_the_piece_does() -> None:
@@ -120,12 +127,12 @@ def test_a_hint_arrives_the_frame_the_piece_does() -> None:
     # never hints a piece at all.
     assert shape.median_latency == 1.0
     assert shape.max_latency == 3
-    assert shape.never_hinted == 1
-    # Six of the eleven scored episodes can time anything at all: an
+    assert shape.never_hinted == 2
+    # Seven of the twelve scored episodes can time anything at all: an
     # episode whose predecessor was the same letter gets its name free.
-    assert colour.measurable == shape.measurable == 6
-    assert len(colour.latencies) == 6
-    assert len(shape.latencies) == 5  # the sixth was never hinted at all
+    assert colour.measurable == shape.measurable == 7
+    assert len(colour.latencies) == 7
+    assert len(shape.latencies) == 5  # two were never hinted at all
 
 
 def test_a_target_never_moves_while_its_piece_is_in_flight() -> None:

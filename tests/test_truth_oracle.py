@@ -294,14 +294,21 @@ class TestWhatTheOracleClaims:
                     frame["frame"],
                 )
 
-    def test_every_piece_is_named_by_its_shape(self, truth: dict[str, Any]) -> None:
+    def test_no_piece_in_the_corpus_is_named_by_a_palette(self, truth: dict[str, Any]) -> None:
         """No frame in the corpus needs colour to put a name to a piece.
 
         ``basis`` records which channel named the episode: its own four
-        cells, the preview's four cells, or -- last resort -- the colour ->
-        name map the other two produced. The last one is never reached
-        here, so a race judged against this answer sheet is not being
-        judged against a palette.
+        cells, the game's own landing preview, or -- last resort -- the
+        colour -> name map the other two produced. The last one is never
+        reached here, so a race judged against this answer sheet is not
+        being judged against a palette.
+
+        ``ghost`` was unreached too until ``stray_after_clear``, whose last
+        four frames hold an L that never descends past the top edge inside
+        the window. Three cells name no tetromino, so shape abstains and
+        the game's own preview of where it will land names it instead --
+        which is the oracle using a channel neither tracker has, and
+        exactly why the answer sheet is derived rather than read off one.
         """
         bases = {
             frame["falling"]["basis"]
@@ -309,7 +316,8 @@ class TestWhatTheOracleClaims:
             for frame in window["frames"]
             if frame.get("falling")
         }
-        assert bases == {"shape"}
+        assert bases == {"shape", "ghost"}
+        assert "colour" not in bases
 
     def test_colour_never_names_two_pieces(self, truth: dict[str, Any]) -> None:
         """The colour -> name map is a result, and it is consistent.
@@ -322,7 +330,15 @@ class TestWhatTheOracleClaims:
             assert window["notes"] == [], window["window"]
             for colour, name in window["colour_names"].items():
                 assert combined.setdefault(colour, name) == name, colour
-        assert combined == {"215,46,45": "I", "112,239,217": "O", "251,224,206": "T"}
+        assert combined == {
+            "215,46,45": "I",
+            "112,239,217": "O",
+            "251,224,206": "T",
+            "249,174,169": "J",
+            "94,220,125": "S",
+            "240,157,221": "Z",
+            "130,175,243": "L",
+        }
 
     def test_a_confident_frame_has_nothing_to_say_against_itself(
         self, truth: dict[str, Any]

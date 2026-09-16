@@ -4,28 +4,34 @@ These are the numbers the head-to-head verdict rests on, so they are
 asserted rather than printed. Run ``python -m tetris_coach.race`` for the
 table; this file is what stops it drifting.
 
-Read the numbers as: of the 397 frames the oracle will be quoted on, how
+Read the numbers as: of the 449 frames the oracle will be quoted on, how
 many does each tracker name right, name WRONG, or not name at all.
 
-    shipped     366 right    6 wrong   25 silent   board right 365/397
-    prototype   397 right    0 wrong    0 silent   board right 397/397
+    shipped     410 right    7 wrong   32 silent   board right 416/449
+    prototype   449 right    0 wrong    0 silent   board right 449/449
 
 Scored from frame :data:`WARMUP` of each window, because every window is a
 mid-session excerpt and both trackers are built fresh at its first frame.
-The uncorrected race -- scoring from frame 0 -- reads 412/7/98 and 439/517
-against 502/0/15 and 517/517, and roughly HALF that gap is the harness
-rather than the representation: 73 of the shipped tracker's 98 silences and
-46 of its 78 wrong boards are in a window's first twenty frames.
+The uncorrected race -- scoring from frame 0 -- reads 466/8/127 and 509/601
+against 586/0/15 and 600/601, and roughly HALF that gap is the harness
+rather than the representation: 95 of the shipped tracker's 127 silences and
+59 of its 92 wrong boards are in a window's first twenty frames.
 ``test_the_window_head_is_a_bootstrap_tax_not_a_result`` pins both readings
 side by side so the correction cannot be quietly undone in either
 direction.
 
-The shipped tracker's six wrong names are each exactly one frame long, and
+The shipped tracker's seven wrong names are each exactly one frame long, and
 each is the frame a new piece arrives on, where its committed state still
 holds the piece that just locked. It is a lag, not a guess -- worth saying
 plainly, because the user's report was that it "often guesses the piece
 wrong" and on THESE windows it does not guess wrong at all. What it does
 instead is go quiet.
+
+``hint_stutter`` and ``stray_after_clear`` joined the race after the two
+windows were committed for the hint stutter; they add 52 judged frames and
+the corpus' only J, L, S and Z. Every per-window row of the six that were
+here before is unchanged by their arrival and by the fixes that came with
+them -- the table is additive, which is the only reason these totals moved.
 """
 
 from __future__ import annotations
@@ -55,6 +61,8 @@ WINDOWS = (
     "absorbed_piece",
     "pale_piece",
     "ghost_beside_stack",
+    "hint_stutter",
+    "stray_after_clear",
 )
 
 
@@ -94,18 +102,22 @@ def test_both_trackers_see_every_frame_and_are_scored_on_the_same_ones() -> None
         # ...and scored from the same frame of it.
         assert shipped.warmup == prototype.warmup == WARMUP
         assert shipped.frames == prototype.frames == len(truth[window].frames) - WARMUP
-    assert sum(len(outputs[w]["shipped"]) for w in WINDOWS) == 542
-    assert sum(part(w, "shipped").frames for w in WINDOWS) == 422
+    assert sum(len(outputs[w]["shipped"]) for w in WINDOWS) == 634
+    assert sum(part(w, "shipped").frames for w in WINDOWS) == 474
 
 
 def test_the_episodes_are_the_pieces_the_oracle_saw() -> None:
-    """19 flights over the six windows, and which piece each one is.
+    """24 flights over the eight windows, and which piece each one is.
 
-    17 pieces, plus 2 more because the oracle abstains through
+    22 pieces, plus 2 more because the oracle abstains through
     ``spawn_latency``'s line-clear animation and through the four frames
     where a piece slides behind the NEXT panel: an abstention ends the
     episode rather than being guessed through, so the O on either side of
     each gap is counted as two flights.
+
+    The last five are the corpus' only J, L, S and Z, and they arrived
+    with the two windows committed for the hint stutter. Four letters, one
+    flight each: see ``test_evidence_base`` for what that is and is not.
     """
     truth = load_truth()
     seen = {window: [e.piece for e in episodes(truth[window].frames)] for window in WINDOWS}
@@ -116,16 +128,18 @@ def test_the_episodes_are_the_pieces_the_oracle_saw() -> None:
         "absorbed_piece": ["T", "I"],
         "pale_piece": ["T"],
         "ghost_beside_stack": ["I"],
+        "hint_stutter": ["I", "J"],
+        "stray_after_clear": ["S", "Z", "L"],
     }
-    assert sum(len(names) for names in seen.values()) == 19
+    assert sum(len(names) for names in seen.values()) == 24
 
 
 def test_only_a_piece_change_can_time_a_tracker() -> None:
     """Three I pieces in a row cannot measure how fast anything is.
 
     A tracker holding the last name gets the next one free when the two
-    are the same letter, so those episodes are excluded from latency; 14
-    of the 19 remain.
+    are the same letter, so those episodes are excluded from latency; 19
+    of the 24 remain.
     """
     truth = load_truth()
     timed = {window: len(measurable(episodes(truth[window].frames))) for window in WINDOWS}
@@ -136,18 +150,20 @@ def test_only_a_piece_change_can_time_a_tracker() -> None:
         "absorbed_piece": 2,
         "pale_piece": 1,
         "ghost_beside_stack": 1,
+        "hint_stutter": 2,
+        "stray_after_clear": 3,
     }
-    assert sum(timed.values()) == 14
+    assert sum(timed.values()) == 19
 
 
 @pytest.mark.parametrize(
     ("tracker", "right", "wrong", "silent"),
-    [("shipped", 366, 6, 25), ("prototype", 397, 0, 0)],
+    [("shipped", 410, 7, 32), ("prototype", 449, 0, 0)],
 )
 def test_identity_over_every_window(tracker: str, right: int, wrong: int, silent: int) -> None:
     """The headline: who names the falling piece, and who names it wrong."""
     total = overall(scores(), tracker)  # type: ignore[arg-type]
-    assert total.identity.judged == 397
+    assert total.identity.judged == 449
     assert (total.identity.correct, total.identity.wrong, total.identity.silent) == (
         right,
         wrong,
@@ -158,31 +174,37 @@ def test_identity_over_every_window(tracker: str, right: int, wrong: int, silent
 def test_the_window_head_is_a_bootstrap_tax_not_a_result() -> None:
     """Both readings, side by side, so the correction cannot be undone quietly.
 
-    Scored from frame 0 the shipped tracker reads 412/517 right and 439/517
-    board. Scored from frame 20 it reads 366/397 and 365/397. The prototype
-    barely moves. The difference is not a fix to either tracker: it is six
+    Scored from frame 0 the shipped tracker reads 466/601 right and 509/601
+    board. Scored from frame 20 it reads 410/449 and 416/449. The prototype
+    barely moves. The difference is not a fix to either tracker: it is eight
     fresh constructions of a design that carries state across frames, in
-    six excerpts that each begin in the middle of a session.
+    eight excerpts that each begin in the middle of a session.
 
     That the head is where the shipped tracker's trouble lives, rather than
     trouble being uniform and the head merely shorter, is the whole claim,
-    so it is asserted directly: 73 of its 98 silences are in the first
+    so it is asserted directly: 95 of its 127 silences are in the first
     twenty frames of a window.
+
+    The prototype's one cold board disagreement is stray_after_clear 00545,
+    a window's first frame, where the oracle marks three cells UNREADABLE
+    and declines to say what is in them. The tracker reads them as stack
+    and the measure scores an abstention as a miss. It is out of the race
+    at any warm-up above zero.
     """
     cold, warm = at(0), at(WARMUP)
     cold_shipped, warm_shipped = overall(cold, "shipped"), overall(warm, "shipped")
     cold_proto, warm_proto = overall(cold, "prototype"), overall(warm, "prototype")
 
-    assert (cold_shipped.identity.correct, cold_shipped.identity.judged) == (412, 517)
-    assert cold_shipped.board_right == 439
-    assert (cold_proto.identity.correct, cold_proto.identity.judged) == (502, 517)
-    assert cold_proto.board_right == 517
+    assert (cold_shipped.identity.correct, cold_shipped.identity.judged) == (466, 601)
+    assert cold_shipped.board_right == 509
+    assert (cold_proto.identity.correct, cold_proto.identity.judged) == (586, 601)
+    assert cold_proto.board_right == 600
 
-    # The head holds 73 of 98 silent frames and 46 of 78 wrong boards.
-    assert cold_shipped.identity.silent - warm_shipped.identity.silent == 73
+    # The head holds 95 of 127 silent frames and 59 of 92 wrong boards.
+    assert cold_shipped.identity.silent - warm_shipped.identity.silent == 95
     cold_wrong_board = cold_shipped.identity.judged - cold_shipped.board_right
     warm_wrong_board = warm_shipped.identity.judged - warm_shipped.board_right
-    assert (cold_wrong_board, warm_wrong_board) == (78, 32)
+    assert (cold_wrong_board, warm_wrong_board) == (92, 33)
 
     # Roughly half the published identity gap was the harness. The prototype
     # still wins on the corrected measure, by about half as much.
@@ -192,8 +214,8 @@ def test_the_window_head_is_a_bootstrap_tax_not_a_result() -> None:
     warm_gap = warm_proto.identity.rate(warm_proto.identity.correct) - warm_shipped.identity.rate(
         warm_shipped.identity.correct
     )
-    assert round(cold_gap, 1) == 17.4
-    assert round(warm_gap, 1) == 7.8
+    assert round(cold_gap, 1) == 20.0
+    assert round(warm_gap, 1) == 8.7
     assert warm_gap > 0, "the prototype still wins once the harness is corrected"
 
 
@@ -202,7 +224,7 @@ def test_the_warm_up_length_does_not_decide_the_verdict(warmup: int) -> None:
     """Anywhere the head effect is spent, the same thing is true.
 
     A correction chosen to produce an answer is not a correction. The
-    shipped tracker sits between 90% and 93% and the prototype at 100% for
+    shipped tracker sits between 89% and 93% and the prototype at 100% for
     every warm-up from a second to two seconds of capture, so the number 20
     is doing no work beyond naming where the bootstrap ends.
     """
@@ -210,8 +232,8 @@ def test_the_warm_up_length_does_not_decide_the_verdict(warmup: int) -> None:
     prototype = overall(at(warmup), "prototype")  # type: ignore[arg-type]
     right = shipped.identity.rate(shipped.identity.correct)
     board = 100.0 * shipped.board_right / shipped.identity.judged
-    assert 90.0 <= right <= 93.0, right
-    assert 90.0 <= board <= 92.0, board
+    assert 89.0 <= right <= 93.0, right
+    assert 91.0 <= board <= 93.0, board
     assert prototype.identity.correct == prototype.identity.judged
     assert prototype.board_right == prototype.identity.judged
 
@@ -229,48 +251,49 @@ def test_no_wrong_name_survives_a_single_frame_on_either_tracker() -> None:
 
 
 def test_silence_is_the_shipped_failure_mode_and_it_is_long() -> None:
-    """25 frames with nothing named, in a run of 16 (1.1 s at 15 fps).
+    """32 frames with nothing named, in a run of 16 (1.1 s at 15 fps).
 
     Once the window head is not scored the shipped tracker's silence is
     smaller but it does not go away, and it is still the whole of its
-    remaining gap: 25 silent against 6 wrong. The prototype is never silent
+    remaining gap: 32 silent against 7 wrong. The prototype is never silent
     on a scored frame of any window.
     """
     shipped = overall(scores(), "shipped")  # type: ignore[arg-type]
     prototype = overall(scores(), "prototype")  # type: ignore[arg-type]
     assert shipped.worst_silent_run == 16
-    assert shipped.identity.silent == 25
+    assert shipped.identity.silent == 32
     assert prototype.worst_silent_run == 0
     # The 16 is live_session 00119 onward, and it is NOT a cold start: it
     # is 51 frames into the window, well past anything a warm-up excuses.
     assert part("live_session", "shipped").worst_silent_run == 16
     elsewhere = [part(w, "shipped").worst_silent_run for w in WINDOWS if w != "live_session"]
-    assert max(elsewhere) == 3
+    assert max(elsewhere) == 4  # stray_after_clear, the Z entering after a clear
 
 
 @pytest.mark.parametrize(
     ("tracker", "latencies"),
-    [("shipped", [1, 1, 1, 1, 3]), ("prototype", [0, 0, 0, 0, 0, 0])],
+    [("shipped", [1, 1, 1, 1, 3]), ("prototype", [0, 0, 0, 0, 0, 0, 0])],
 )
 def test_latency_from_a_piece_appearing_to_it_being_named(
     tracker: str, latencies: list[int]
 ) -> None:
     """Frames each tracker waits before it can name the piece in play.
 
-    Only 6 of the 19 flights can be timed once the window head is unscored:
+    Only 7 of the 24 flights can be timed once the window head is unscored:
     an episode that opens inside the warm-up is excluded whole, because the
     tracker may have named it during the frames nobody is scoring and its
     latency would then read as zero for free. That cost is real and it
     falls on the prototype's headline as much as the shipped tracker's --
     it is what an honest correction costs.
 
-    The prototype names all 6 on the frame the piece appears. The shipped
-    tracker times 5: one measurable episode it never names correctly at all
-    (live_session's last O, where it is silent for 16 frames).
+    The prototype names all 7 on the frame the piece appears. The shipped
+    tracker times 5: two measurable episodes it never names correctly at
+    all (live_session's last O, where it is silent for 16 frames, and
+    stray_after_clear's Z).
     """
     total = overall(scores(), tracker)  # type: ignore[arg-type]
-    assert total.measurable == 6
-    assert total.episodes == 11
+    assert total.measurable == 7
+    assert total.episodes == 12
     assert sorted(total.latencies) == sorted(latencies)
 
 
@@ -376,15 +399,16 @@ def test_the_board_handed_to_the_solver() -> None:
     """A right name on a wrong board still draws the wrong square."""
     shipped = overall(scores(), "shipped")  # type: ignore[arg-type]
     prototype = overall(scores(), "prototype")  # type: ignore[arg-type]
-    assert prototype.board_right == 397, "the prototype's stack is the oracle's stack"
-    assert shipped.board_right == 365
-    # Where the shipped board is wrong, frame by frame: 68 of the 78 are
-    # runs of re-anchoring -- it begins every window believing the board
-    # is empty and has to re-derive the stack from what moves, and does it
-    # again after the oracle's own blind spell in spawn_latency (00134-
-    # 00153). The other 10 are single frames of commit lag, one per lock.
-    # Not corruption -- but 68 frames is 4.5 seconds of coaching a board
-    # that is not there, and the prototype has no such state to rebuild.
+    assert prototype.board_right == 449, "the prototype's stack is the oracle's stack"
+    assert shipped.board_right == 416
+    # Where the shipped board is wrong, frame by frame: 25 of the 33 are
+    # spawn_latency alone -- runs of re-anchoring, since it begins every
+    # window believing the board is empty and has to re-derive the stack
+    # from what moves, and does it again after the oracle's own blind
+    # spell there (00134-00153). The other 8 are single frames of commit
+    # lag, one per lock, spread over four windows. Not corruption -- but
+    # 25 frames is 1.7 seconds of coaching a board that is not there, and
+    # the prototype has no such state to rebuild.
     assert (
         part("spawn_latency", "shipped").identity.judged
         - part("spawn_latency", "shipped").board_right
@@ -419,8 +443,8 @@ def test_coverage_and_what_the_gate_costs() -> None:
     # could say otherwise (see
     # ``test_colour_tracker_sessions.test_the_clear_animation_is_refused_rather_than_named``,
     # and ``race.engine`` for the measure that can now see it).
-    assert (shipped.hintless_frames, prototype.hintless_frames) == (25, 25)
-    # 64 of the shipped tracker's 422 scored frames never reach it: the
+    assert (shipped.hintless_frames, prototype.hintless_frames) == (32, 25)
+    # 64 of the shipped tracker's 474 scored frames never reach it: the
     # confidence gate refuses them and the previous hint stays up.
     assert shipped.refused_frames == 64
     # The prototype refuses 21: pale_piece's 14 frames of web page, where

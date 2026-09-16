@@ -76,6 +76,8 @@ WINDOWS: tuple[WindowSpec, ...] = (
     WindowSpec("pale_piece", 12, (276, 314, 477, 578), (659, 317, 98, 95)),
     WindowSpec("ghost_beside_stack", 12, (276, 314, 477, 578), (659, 317, 98, 95)),
     WindowSpec("pale_preview", 12, (204, 311, 480, 577), (587, 309, 99, 102), consecutive=False),
+    WindowSpec("hint_stutter", 12, (198, 316, 480, 573), (581, 315, 98, 93)),
+    WindowSpec("stray_after_clear", 12, (198, 316, 480, 573), (581, 315, 98, 93)),
 )
 
 CONSECUTIVE = tuple(spec for spec in WINDOWS if spec.consecutive)

@@ -1,22 +1,22 @@
 """What the committed corpus can and cannot decide about the colour race.
 
-The head-to-head in ``tests/test_race.py`` is run over six windows of one
+The head-to-head in ``tests/test_race.py`` is run over eight windows of one
 session of one game. This file pins the shape of that evidence, so that a
 number from the race is never read as saying more than it can.
 
-The headline limit: nineteen flights across all six windows, and every one
-of them is an I, an O or a T. So the race measures a colour-first tracker
-against a shape-first one over three of the seven tetrominoes, and the two
-MIRROR PAIRS, which are the cases where the two representations genuinely
-differ, are never exercised by either.
+THE MIRROR PAIRS ARE IN IT NOW, THINLY. For six windows and nineteen
+flights every one was an I, an O or a T: no S, Z, J or L falling piece
+anywhere in the repository, which left the two MIRROR PAIRS -- the only
+case where the two representations genuinely differ -- argued from
+tetromino geometry and never once observed. ``hint_stutter`` and
+``stray_after_clear`` were committed for a bug that gap was hiding and
+close it on the way past: 24 flights now, one each of J, L, S and Z, and
+a derived colour name for all seven tetrominoes.
 
-That used to be true of the whole repository and is now true only of the
-race. ``hint_stutter`` and ``stray_after_clear``, committed for a bug the
-gap was hiding, hold a J and a Z falling on the board and a J, an L and a
-Z in the NEXT box. They are not in the six windows above and so decide
-nothing here yet; what they cost is that the sentence "there is no J
-anywhere in this repository" can no longer be written, and the
-measurements below say where each letter now is.
+One flight each is not a sample and the arithmetic below says so rather
+than rounding it up. What it settles is that the mirror pairs are no
+longer UNOBSERVED -- a claim about them can now be wrong about a real
+frame.
 
 What is demonstrated here instead is the mechanism, synthetically and
 labelled as such: from a partial sighting shape cannot separate J from L
@@ -50,22 +50,39 @@ WINDOWS = (
     "absorbed_piece",
     "pale_piece",
     "ghost_beside_stack",
+    "hint_stutter",
+    "stray_after_clear",
 )
 MIRRORS = (("J", "L"), ("S", "Z"))
 
 
-def test_the_corpus_holds_three_tetrominoes_of_seven() -> None:
-    """Every flight the oracle saw, and there are only three letters in it."""
+def test_the_corpus_holds_all_seven_and_four_of_them_once() -> None:
+    """Every flight the oracle saw, and how lopsided the letters are.
+
+    The shape of the count is the point, not the coverage. Eleven of the
+    24 flights are an I and four letters have exactly one flight each, so
+    "all seven are represented" and "all seven are tested" are different
+    sentences and only the first is true.
+    """
     truth = load_truth()
     flights = collections.Counter(
         episode.piece for window in WINDOWS for episode in episodes(truth[window].frames)
     )
-    assert dict(flights) == {"I": 10, "O": 6, "T": 3}
-    assert sum(flights.values()) == 19
+    assert dict(sorted(flights.items())) == {
+        "I": 11,
+        "J": 1,
+        "L": 1,
+        "O": 6,
+        "S": 1,
+        "T": 3,
+        "Z": 1,
+    }
+    assert sum(flights.values()) == 24
+    assert {piece for piece, n in flights.items() if n == 1} == {"J", "L", "S", "Z"}
 
     # And the colour->name map each window derives, which is the thing a
     # colour-first tracker is being credited with learning. Five rendered
-    # colours were claimed for this game; three of them have a fixture.
+    # colours were claimed for this game; all seven names now have one.
     payload = json.loads((FIXTURES / "oracle_truth.json").read_text())
     colours = {
         piece
@@ -73,7 +90,7 @@ def test_the_corpus_holds_three_tetrominoes_of_seven() -> None:
         if window["window"] in WINDOWS
         for piece in window["colour_names"].values()
     }
-    assert colours == {"I", "O", "T"}
+    assert colours == {"I", "J", "L", "O", "S", "T", "Z"}
 
 
 def test_what_every_next_box_in_the_repository_shows() -> None:
@@ -83,8 +100,9 @@ def test_what_every_next_box_in_the_repository_shows() -> None:
     board ever showing that piece, so a letter that appears only here is
     still evidence. Three do, all of them from the two windows committed
     for the hint stutter -- J 5 times, Z 9 and L 23 -- against the I, O and
-    T the six raced windows had between them. S is the one letter no
-    preview crop in this repository has ever shown.
+    T the other six had between them. S is the one letter no preview crop
+    in this repository has ever shown; the corpus' only S is a falling
+    piece, on ``stray_after_clear`` 00545.
     """
     seen: collections.Counter[str] = collections.Counter()
     boxes = 0
@@ -112,8 +130,10 @@ def test_shape_cannot_separate_a_mirror_pair_from_a_partial_sighting() -> None:
 
     J and L, and S and Z, are mirror images: a partial sighting of one is a
     partial sighting of the other, so no shape rule can name them before
-    they have descended. This is the whole of the colour-first argument,
-    and the six raced windows contain not one frame of any of the four.
+    they have descended. This is the whole of the colour-first argument.
+    The corpus now holds one flight of each of the four, which makes it
+    checkable against a real frame; the enumeration below is what makes it
+    GENERAL, over every rotation of all seven.
     """
     partial: dict[tuple[tuple[int, int], ...], set[str]] = collections.defaultdict(set)
     for piece, rotations in ROTATIONS.items():
@@ -186,11 +206,11 @@ def test_what_generalising_would_take_is_written_down() -> None:
     1. A window from a SECOND game. Every frame here is one session of ROAS
        Stacker: one light theme, flat colours, one background, one cell
        geometry, one hint overlay.
-    2. A RACED window containing a J or an L. Two windows now hold a J and
-       a Z, but neither is in the six the race is scored over, so the
-       mirror pairs -- the only case where the two representations
-       genuinely disagree -- are still argued from tetromino geometry and
-       never scored.
+    2. MORE THAN ONE window containing each mirror pair. There is now one
+       flight each of J, L, S and Z, from two windows of one session, so
+       the mirror pairs -- the only case where the two representations
+       genuinely disagree -- are observed rather than sampled. One flight
+       cannot show a rule holds across rotations, speeds or stack shapes.
     3. A theme that is not flat light colour: a dark theme, a gradient or
        textured cell, a piece recoloured by level. The flatness premise is
        now checked per frame (``board_readable``) but it has only ever been
@@ -201,5 +221,5 @@ def test_what_generalising_would_take_is_written_down() -> None:
     """
     doc = test_what_generalising_would_take_is_written_down.__doc__
     assert doc is not None
-    for needed in ("SECOND game", "RACED window", "not flat light colour", "FILLS"):
+    for needed in ("SECOND game", "each mirror pair", "not flat light colour", "FILLS"):
         assert needed in doc
