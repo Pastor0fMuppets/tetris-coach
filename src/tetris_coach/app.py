@@ -440,6 +440,57 @@ class CoachEngine:
         )
 
     @property
+    def second_hint(self) -> Move | None:
+        """Where the NEXT piece goes, if the hint on screen is followed.
+
+        The engine already solves this placement: :meth:`_precompute_next`
+        assumes the standing hint is taken, and pre-solves the upcoming
+        piece on the board that would leave, so that the moment the
+        current piece locks the hint for the next one flips instantly.
+        This is that same answer, shown a piece early.
+
+        It is CONDITIONAL, and everything here is about not letting it
+        mislead. A second target is only honest while the board it was
+        computed on is the board the player is about to produce, so it is
+        derived from the state rather than remembered:
+
+        * There has to be a hint on screen. Without one there is nothing
+          the second placement is conditional ON -- during a lock gap the
+          engine pre-solves against the SETTLED board instead
+          (:meth:`_update_hint`), which is a different prediction and not
+          one to draw.
+        * The precompute has to belong to the hint on screen. Every path
+          that moves the hint calls :meth:`_precompute_next` immediately
+          after, so this holds by construction; comparing the boards says
+          so out loud, and the moment the player puts the piece somewhere
+          else the next frame re-solves both and the second hint follows
+          the first rather than pointing at a board that never happened.
+        * The hint must clear no lines. A cleared row SHIFTS every row
+          above it down, so the predicted board's coordinates and the
+          screen's stop being the same coordinates, and a placement drawn
+          at the predicted row would point at the wrong row of the board
+          the player is looking at. There is no fix for that short of
+          drawing it after the clear, so it is not drawn.
+        * The two placements may not share a cell. They cannot: the
+          predicted board has the first hint's cells filled and no drop
+          lands in a filled cell. Checked anyway, because two hints
+          overlapping would also put one hint's rotation badge in a cell
+          belonging to the other, and a guarantee the renderer relies on
+          is worth one set intersection a frame.
+        """
+        hint = self.current_hint
+        upcoming = self._precomputed
+        if hint is None or upcoming is None:
+            return None
+        if self._predicted_board != hint.board:
+            return None
+        if hint.lines_cleared:
+            return None
+        if not set(upcoming.cells).isdisjoint(hint.cells):
+            return None
+        return upcoming
+
+    @property
     def classifier(self) -> GridClassifier:
         """The shipped reader's occupancy classifier (``--tracker shape``)."""
         vision = self.vision
@@ -646,6 +697,12 @@ class TickResult:
     hint: Move | None  # the hint to display; meaningful only when ok is True
     ok: bool  # the frame pair was captured and processed
     stop: bool  # the consecutive-failure cap was reached: shut the loop down
+    # Where the piece after this one goes, on the board `hint` would leave
+    # behind -- or None when the engine will not stand behind that
+    # prediction (see CoachEngine.second_hint). Carried beside the hint
+    # rather than asked for on the GUI thread: the engine is the worker
+    # thread's, and a property read across threads is a race.
+    second: Move | None = None
 
 
 class FrameWorker:
@@ -712,6 +769,7 @@ class FrameWorker:
             )
             self._dump_frames(board_image, next_image)
             hint = self.engine.process_frame(board_image, next_image)
+            second = self.engine.second_hint
         except Exception:  # noqa: BLE001 - one bad frame must not kill the loop
             self.consecutive_failures += 1
             if self.consecutive_failures == 1:
@@ -731,7 +789,7 @@ class FrameWorker:
                 return TickResult(hint=None, ok=False, stop=True)
             return TickResult(hint=None, ok=False, stop=False)
         self.consecutive_failures = 0
-        return TickResult(hint=hint, ok=True, stop=False)
+        return TickResult(hint=hint, ok=True, stop=False, second=second)
 
 
 def run(
