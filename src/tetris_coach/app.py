@@ -43,7 +43,7 @@ from .capture.screen import FrameSource, Rect
 from .core.board import DEFAULT_HEIGHT, FULL_ROW, WIDTH, Board
 from .solver.evaluate import DELLACHERIE, evaluate_drop
 from .solver.search import TOP_OUT_SCORE, Move, best_move, enumerate_drops
-from .vision.colour_palette import CELL_MARGIN
+from .vision.colour_palette import CELL_MARGIN, PAINT_PIXEL_TOL
 from .vision.colour_tracker import ColourTracker
 from .vision.grid import (
     DEFAULT_HINT_COLOR,
@@ -422,6 +422,62 @@ def fill_warning(config: CoachConfig) -> str | None:
     )
 
 
+def hint_color_conflict(config: CoachConfig) -> str | None:
+    """Why this pair of hint colours cannot be drawn safely, or ``None``.
+
+    ``hint_styles`` guards one direction -- only the CURRENT hint may
+    carry a fill, because the reader is told one paint colour -- but
+    nothing stopped the SECOND hint's colour from being the first's.
+
+    That matters only when a fill is configured, and then it matters a
+    lot. ``colour_palette.own_paint_states`` decides PAINTED from a ring
+    of hint colour around a clean patch, and the dashed outline rings its
+    cells just as the solid one does (each side band is 3/5 painted,
+    well past ``PAINT_EDGE_SHARE``). PAINTED means UN-COMPOSITE: subtract
+    a blend that is not there, and the board's own bare ground comes out
+    as a colour ``alpha/(1-alpha)`` of the way from the background AWAY
+    from the hint -- which is content, which floats, which is a piece the
+    player has not got. Measured on a bare-background frame with nothing
+    drawn on it but a dashed second hint in ``--hint-color``'s own colour:
+    the four cells read PAINTED and the engine names a phantom O falling
+    at (8,4),(8,5),(9,4),(9,5). With ``--hint-fill 0`` the same frame
+    reads clean, which is why the default is safe.
+
+    The rule cannot tell the two hints apart, because nothing in the cell
+    says which one painted it -- so the colours have to differ by more
+    than the reader's own per-channel tolerance
+    (``colour_palette.PAINT_PIXEL_TOL``), and that is checked against the
+    reader's number rather than a number of this function's own.
+
+    A colour this module cannot parse as hex turns the recognition rule
+    OFF (see ``OwnPaint.for_hint_color``), so a first colour it cannot
+    parse is safe -- there is no PAINTED state to reach. A second colour
+    it cannot parse is not: the painter will happily draw ``"cyan"`` and
+    nothing here can prove it is far enough away, so with a fill on it is
+    refused rather than guessed at.
+    """
+    if config.hint_fill_opacity <= 0.0 or not config.show_next_hint:
+        return None
+    first = OwnPaint.for_hint_color(config.hint_color)
+    if first is None:
+        return None  # the recognition rule is off; there is no PAINTED to reach
+    second = OwnPaint.for_hint_color(config.next_hint_color)
+    if second is not None:
+        apart = max(abs(a - b) for a, b in zip(first.color, second.color, strict=True))
+        if apart > PAINT_PIXEL_TOL:
+            return None
+    return (
+        f"tetris-coach: --next-hint-color {config.next_hint_color} is too close to "
+        f"--hint-color {config.hint_color} to be drawn alongside --hint-fill "
+        f"{config.hint_fill_opacity:g}. The fill is the one part of the overlay the "
+        "coach reads back, and it recognizes it by the colour of the outline round "
+        "it -- so a second hint in the same colour is read as a fill that was never "
+        "painted, and un-compositing it turns bare board into a piece you have not "
+        "got. Pick a second colour further away (more than "
+        f"{PAINT_PIXEL_TOL:g} per channel, as a hex colour), or drop --hint-fill."
+    )
+
+
 def hint_styles(config: CoachConfig) -> tuple[HintStyle, HintStyle | None]:
     """How the two hints are drawn, for this configuration.
 
@@ -440,9 +496,18 @@ def hint_styles(config: CoachConfig) -> tuple[HintStyle, HintStyle | None]:
     colour (``CoachEngine._own_paint``), so a fill in the second colour
     would be a blend nothing could un-composite -- and a fill is the one
     thing here a reader can see at all.
+
+    And a pair the reader could not tell apart is REFUSED rather than
+    drawn (:func:`hint_color_conflict`). ``cli.main`` checks the same
+    thing and exits with the message, so no invocation reaches this;
+    raising is for the programmatic caller, where a startup error is the
+    honest outcome and a phantom tetromino is not.
     """
     from .overlay.renderer import HintStyle
 
+    conflict = hint_color_conflict(config)
+    if conflict is not None:
+        raise ValueError(conflict)
     current = HintStyle(
         color=config.hint_color,
         dashed=False,
@@ -1027,6 +1092,7 @@ __all__ = [
     "TickResult",
     "compute_overlap_mask",
     "fill_warning",
+    "hint_color_conflict",
     "hint_styles",
     "make_vision",
     "preview_keep_out",

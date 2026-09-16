@@ -202,7 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="overlay: colour of the second hint -- where the NEXT piece goes "
         "if you follow the first one -- drawn as a dashed outline. It is the "
         "dashes that tell the two apart at a glance; the colour is so that "
-        "they also differ where each sits over a similar piece",
+        "they also differ where each sits over a similar piece. With "
+        "--hint-fill it must also be far enough from --hint-color for the "
+        "coach to tell its own two marks apart, or the run is refused",
     )
     parser.add_argument(
         "--no-next-hint",
@@ -279,6 +281,18 @@ def main(argv: list[str] | None = None) -> int:
             "the same number so that what it un-composites is what was painted.",
             file=sys.stderr,
         )
+        return 2
+
+    # The two hint colours are the reader's business as well as the eye's:
+    # with a fill configured, a second hint in (nearly) the first's colour
+    # is read back as a fill that was never painted, and un-compositing it
+    # invents a tetromino out of bare board. Refused rather than warned
+    # about, because the cost is a phantom piece and the fix is one flag.
+    from .app import hint_color_conflict
+
+    conflict = hint_color_conflict(coach_config(args))
+    if conflict is not None:
+        print(conflict, file=sys.stderr)
         return 2
 
     if args.demo:

@@ -348,3 +348,84 @@ def test_a_lock_moves_the_hint_on_to_the_next_piece() -> None:
     assert moved.piece == "I"
     assert coach.last_reading is not None
     assert coach.last_reading.stack_rows[floor] == 0b110000
+
+
+def test_a_second_hint_in_the_first_colour_would_invent_a_piece() -> None:
+    """Why ``app.hint_color_conflict`` refuses that pair: measured, not argued.
+
+    ``hint_styles`` guards one direction -- only the CURRENT hint may
+    carry a fill, because the reader is told one paint colour -- but
+    nothing stopped the SECOND hint's colour from being the first's. And
+    ``own_paint_states`` decides PAINTED from a ring of hint colour round
+    a clean patch, which the DASHED outline draws just as the solid one
+    does. PAINTED means un-composite, so a cell carrying no fill has one
+    subtracted from it, and the board's bare ground comes out as content.
+
+    Here is that, on a frame with nothing drawn on it but a second hint
+    in ``--hint-color``'s own colour: four cells read PAINTED and the
+    coach names an O the player has not got. With the shipped pair of
+    colours, and with no fill, the same frame reads clean -- which is why
+    nothing else in this suite catches it, and why the refusal is the fix
+    rather than a widened tolerance.
+    """
+    from tetris_coach.app import hint_color_conflict, hint_styles
+    from tetris_coach.core.board import Board
+    from tetris_coach.core.pieces import ROTATIONS
+    from tetris_coach.overlay.renderer import HintStyle
+    from tetris_coach.solver.search import Move
+    from tetris_coach.vision.colour_palette import CLEAN, PAINTED, own_paint_states
+    from tetris_coach.vision.grid import DEFAULT_HINT_COLOR, DEFAULT_NEXT_HINT_COLOR, OwnPaint
+
+    fill = 0.35
+    second = Move(
+        piece="O",
+        rotation=ROTATIONS["O"][0],
+        col=4,
+        row=8,
+        score=0.0,
+        lines_cleared=0,
+        board=Board((0,) * ROWS),
+    )
+    collides = CoachConfig(
+        rows=ROWS,
+        hint_color=DEFAULT_HINT_COLOR,
+        next_hint_color=DEFAULT_HINT_COLOR,
+        hint_fill_opacity=fill,
+    )
+    frame = paint_overlay(
+        render({}), second, HintStyle(color=collides.next_hint_color, dashed=True)
+    )
+    states = own_paint_states(
+        frame, ROWS, COLS, OwnPaint.for_hint_color(collides.hint_color, opacity=fill)
+    )
+    assert [int(states[r, c]) for r, c in second.cells] == [PAINTED] * 4
+    coach = CoachEngine(collides)
+    coach.process_frame(frame, None)
+    assert coach.last_reading is not None
+    assert coach.last_reading.falling_piece == "O", "the phantom this guard is for"
+
+    # The shipped pair, same frame, same fill: our second mark is not our
+    # first one's, so nothing is un-composited and nothing is invented.
+    apart = OwnPaint.for_hint_color(DEFAULT_HINT_COLOR, opacity=fill)
+    drawn_apart = paint_overlay(
+        render({}), second, HintStyle(color=DEFAULT_NEXT_HINT_COLOR, dashed=True)
+    )
+    states = own_paint_states(drawn_apart, ROWS, COLS, apart)
+    assert [int(states[r, c]) for r, c in second.cells] == [CLEAN] * 4
+    clean = CoachEngine(CoachConfig(rows=ROWS, hint_fill_opacity=fill))
+    clean.process_frame(drawn_apart, None)
+    assert clean.last_reading is not None
+    assert clean.last_reading.falling_piece is None
+
+    # And with no fill the collision is harmless: PAINTED is never reached,
+    # so the same colour twice costs the eye a distinction and the reader
+    # nothing. That is why the default is safe.
+    shipped = OwnPaint.for_hint_color(DEFAULT_HINT_COLOR, opacity=0.0)
+    no_fill = own_paint_states(frame, ROWS, COLS, shipped)
+    assert [int(no_fill[r, c]) for r, c in second.cells] == [CLEAN] * 4
+
+    # So the pair is refused where it is chosen, rather than tolerated
+    # where it is read.
+    assert hint_color_conflict(collides) is not None
+    with pytest.raises(ValueError, match="too close"):
+        hint_styles(collides)

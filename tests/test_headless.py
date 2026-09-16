@@ -279,6 +279,72 @@ def test_cli_rejects_an_impossible_fill(capsys: pytest.CaptureFixture[str]) -> N
     assert main(["--demo", "--hint-fill", "-0.1"]) == 2
 
 
+def test_two_hint_colours_the_reader_could_not_tell_apart() -> None:
+    """A fill plus a second hint in the first's colour is refused.
+
+    ``own_paint_states`` decides PAINTED -- meaning UN-COMPOSITE THIS CELL
+    -- from a ring of hint colour round a clean patch, and the dashed
+    outline rings its cells just as the solid one does. Nothing in the
+    cell says which hint painted it, so with a fill configured the second
+    hint's cells are un-composited as if they held a fill they do not, and
+    bare board comes out as a piece (measured in
+    ``tests/test_engine_colour.py``). The colours therefore have to differ
+    by more than the reader's own per-channel tolerance, and it is the
+    reader's number that is used.
+    """
+    from tetris_coach.app import CoachConfig, hint_color_conflict, hint_styles
+    from tetris_coach.vision.colour_palette import PAINT_PIXEL_TOL
+
+    assert hint_color_conflict(CoachConfig()) is None
+    assert hint_color_conflict(CoachConfig(hint_fill_opacity=0.35)) is None
+
+    same = CoachConfig(hint_color="#00e5ff", next_hint_color="#00e5ff", hint_fill_opacity=0.35)
+    said = hint_color_conflict(same)
+    assert said is not None and "--next-hint-color" in said and "--hint-fill" in said
+    with pytest.raises(ValueError, match="too close"):
+        hint_styles(same)
+
+    # Near enough counts: the reader matches a window of PAINT_PIXEL_TOL
+    # per channel around the colour it was told, not that exact value.
+    assert PAINT_PIXEL_TOL == 24.0
+    near = CoachConfig(hint_color="#00e5ff", next_hint_color="#04e0fa", hint_fill_opacity=0.35)
+    assert hint_color_conflict(near) is not None
+    apart = CoachConfig(hint_color="#00e5ff", next_hint_color="#00c5ff", hint_fill_opacity=0.35)
+    assert hint_color_conflict(apart) is None
+
+    # With no fill there is no PAINTED state to reach, so the same colour
+    # twice costs the eye a distinction and the reader nothing -- and the
+    # dashes still tell the two marks apart.
+    assert hint_color_conflict(CoachConfig(hint_color="#00e5ff", next_hint_color="#00e5ff")) is None
+    # No second hint, nothing to collide with.
+    assert (
+        hint_color_conflict(
+            CoachConfig(
+                hint_color="#00e5ff",
+                next_hint_color="#00e5ff",
+                hint_fill_opacity=0.35,
+                show_next_hint=False,
+            )
+        )
+        is None
+    )
+    # A first colour this module cannot parse turns the recognition rule
+    # off entirely, so there is nothing to confuse; a second one it cannot
+    # parse cannot be proved far enough away, so with a fill it is refused.
+    assert hint_color_conflict(CoachConfig(hint_color="cyan", hint_fill_opacity=0.35)) is None
+    assert hint_color_conflict(CoachConfig(next_hint_color="cyan", hint_fill_opacity=0.35))
+
+
+def test_cli_rejects_two_hint_colours_it_could_not_tell_apart(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["--demo", "--hint-fill", "0.35", "--next-hint-color", "#00e5ff"])
+    assert code == 2
+    assert "--next-hint-color" in capsys.readouterr().err
+    # The same pair without the fill is fine: nothing reads it back.
+    assert main(["--demo", "--pieces", "1", "--next-hint-color", "#00e5ff"]) == 0
+
+
 def test_overlay_window_raises_without_qt_or_constructs() -> None:
     from tetris_coach.overlay import window
 
