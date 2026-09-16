@@ -87,11 +87,25 @@ the evidence for three separate fixes:
   four sides of a cell, and calls anything else of ours opaque drawing --
   skipped, never un-composited;
 - `_rank` admits a sub-tetromino candidate only where something could be
-  hiding the rest of it: clipped by the top edge, or under the NEXT panel
-  (`unobservable_cells`). The J at (0,3) (0,4) (0,5) is the first; so are
-  the three-cell readings at 00390 and 00392-00397, whose fourth cell is
-  at (1,8) / (1,9) under the panel. A lone cell at row 8 of open board is
-  neither.
+  hiding the rest of it: clipped by the top edge, under the NEXT panel
+  (`unobservable_cells`), or under this tool's OWN OPAQUE PAINT, which
+  `Palette.classify` skips and so cannot read a piece through. The J at
+  (0,3) (0,4) (0,5) is the first; so are the three-cell readings at 00390
+  and 00392-00397, whose fourth cell is at (1,8) / (1,9) under the panel;
+  `pale_preview` board_00477 is the third, a T whose fourth cell is under
+  the badge itself. A lone cell at row 8 of open board is none of them.
+
+  Two later bounds on the same rule, both from a review of this work and
+  both reproduced before they were changed: the exemption that lets the
+  piece already in flight skip this test is a LOAN OF ONE FRAME (a
+  fragment was otherwise handed the belief a cell at a time and walked
+  four rows into open board), and it covers a piece being DRAGGED and not
+  only one parked (a cell dropping out of a moving piece was otherwise
+  fatal: stack, lock, spawn, hint withdrawn -- this very stutter, made by
+  the rule against it). Where a lone cell is admissible at all -- the
+  whole of row 0 and the panel's edge, 11 of this session's 120 cells --
+  it now sorts BELOW every other candidate, because one cell is the least
+  evidence there is and a stray up there floats.
 
 `tests/test_hint_stutter.py` replays this window and asserts all of it.
 All ten of its assertions fail against the reading that shipped.

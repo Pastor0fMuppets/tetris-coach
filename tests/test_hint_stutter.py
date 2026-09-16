@@ -66,15 +66,20 @@ def load(path: Path) -> np.ndarray:
 
 
 @lru_cache(maxsize=len(WINDOWS))
-def read(window: str) -> tuple[tuple[str, FrameReport], ...]:
-    """Every frame of a window through the tracker alone, in order."""
+def read(window: str) -> tuple[tuple[str, FrameReport, int], ...]:
+    """Every frame of a window through the tracker alone, in order.
+
+    Frame number, report, and how many frames running the piece has been
+    believed on its history rather than on its own sighting -- the loan in
+    ``_rank``, which is what the last test here is about.
+    """
     spec = by_name(window)
     track = ColourTracker(rows=spec.rows, cols=10, unobservable_cells=spec.geometry().unobservable)
     out = []
     for board in sorted((FIXTURES / window).glob("board_*.png")):
         crop = board.with_name(board.name.replace("board_", "next_"))
         report = track.update(load(board), load(crop) if crop.exists() else None)
-        out.append((board.stem.split("_")[1], report))
+        out.append((board.stem.split("_")[1], report, track._on_loan))
     return tuple(out)
 
 
@@ -117,10 +122,10 @@ def test_no_piece_blinks_out_and_back_while_it_is_in_flight(window: str) -> None
     the real piece is the frame the piece was not in flight at all, and the
     board handed to the solver had the piece in the stack.
     """
-    names = [None if r.falling is None else r.falling.piece for _, r in read(window)]
+    names = [None if r.falling is None else r.falling.piece for _, r, _ in read(window)]
     flicker = [
         (frame, names[i])
-        for i, (frame, _) in enumerate(read(window)[:-2])
+        for i, (frame, _, _) in enumerate(read(window)[:-2])
         if names[i] is not None and names[i + 1] is None and names[i + 2] == names[i]
     ]
     assert flicker == []
@@ -134,7 +139,7 @@ def test_the_settled_board_does_not_gain_and_lose_the_same_cells(window: str) ->
     player cannot see: on every other frame the solver was handed a board
     with the piece they are still holding already built into it.
     """
-    sizes = [sum(mask.bit_count() for mask in r.stack_rows) for _, r in read(window)]
+    sizes = [sum(mask.bit_count() for mask in r.stack_rows) for _, r, _ in read(window)]
     flapping = [i for i in range(len(sizes) - 2) if sizes[i] == sizes[i + 2] != sizes[i + 1]]
     assert flapping == []
 
@@ -147,7 +152,7 @@ def test_a_piece_locks_once(window: str, locks: int) -> None:
     advances what the coach thinks the next piece is -- so a phantom one
     every other frame is not a cosmetic problem.
     """
-    counted = sum(1 for _, r in read(window) for e in r.events if e is Event.PIECE_LOCKED)
+    counted = sum(1 for _, r, _ in read(window) for e in r.events if e is Event.PIECE_LOCKED)
     assert counted == locks
 
 
@@ -228,3 +233,22 @@ def test_no_hint_is_lost_for_a_single_frame_anywhere_in_the_corpus() -> None:
             and frames[i + 1].accepted
         ]
         assert lost == [], spec.name
+
+
+@pytest.mark.parametrize("window", WINDOWS)
+def test_no_frame_of_this_session_is_read_on_credit(window: str) -> None:
+    """Every frame here stands on its own sighting, not on the one before.
+
+    The piece already in flight may skip the admission test in ``_rank``,
+    which is how a piece survives a cell flickering out for a frame --
+    parked or being dragged. That exemption is a LOAN OF ONE FRAME,
+    because belief handed on a frame at a time is belief that drifts: a
+    one-cell stray stepping down column 7 was otherwise reported as the
+    piece four rows below the last row anything would have admitted it at.
+
+    What the bound costs the corpus is nothing, and this is where that is
+    checked rather than asserted: no frame of either window -- and,
+    measured the same way, no frame of any of the nine committed windows
+    -- needs the loan at all.
+    """
+    assert [frame for frame, _, loan in read(window) if loan] == []
