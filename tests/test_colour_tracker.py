@@ -425,6 +425,54 @@ def test_a_piece_that_MOVED_one_column_does_not_inherit_the_held_identity() -> N
                 assert not contained, (rotation.piece, rotation.index, dr, dc)
 
 
+def test_a_fragment_cannot_walk_into_open_board_on_borrowed_belief() -> None:
+    """The exemption from the admission test is a loan of ONE frame.
+
+    "Believed on an earlier frame" bounds nothing on its own, because the
+    belief is handed on: the identity test asks only about the previous
+    frame and tolerates a cell gained or lost, so a fragment admitted once
+    at row 0 -- where a lone cell IS excusable, the rest of it being above
+    the board -- keeps the exemption while it grows and shrinks by a cell
+    a frame, and walks down into open board where nothing would admit it.
+    A landing-preview outline or a panel edge bleeding along behind the
+    player's drag is exactly this shape.
+    """
+    track = tracker(settle_frames=3)
+    seen = []
+    for step in ({(0, 7)}, {(0, 7), (1, 7)}, {(1, 7)}, {(1, 7), (2, 7)}, {(2, 7)}, {(3, 7)}):
+        report = track.update(render(dict.fromkeys(step, PALE_T)))
+        seen.append(None if report.falling is None else sorted(report.falling.cells))
+    assert seen[0] == [(0, 7)], "at the top edge it is admissible on its own merits"
+    assert seen[1] == [(0, 7), (1, 7)], "and so is a vertical pair below it"
+    assert seen[2] == [(1, 7)], "one frame on credit: row 0 admitted this a moment ago"
+    assert seen[3:] == [None, None, None], "the loan is not renewed by spending it"
+
+
+def test_what_the_one_frame_loan_costs_a_piece_that_keeps_flickering() -> None:
+    """Stated as a measurement, because it is the price of the bound above.
+
+    A parked piece rides out a cell that drops for ONE frame (the case
+    that rule is for). A cell that reads background twice running is not
+    a flicker any more, and the piece is let go rather than believed
+    indefinitely on a history nothing has renewed. What that costs is a
+    blank frame; what it buys is that nothing can drift on borrowed
+    belief, and a stray that keeps the hint moving is the worse of the
+    two to leave in.
+    """
+    track = tracker(settle_frames=3)
+    for _ in range(4):
+        track.update(render({(8, 4): GREEN_O, (8, 5): GREEN_O, (9, 4): GREEN_O, (9, 5): GREEN_O}))
+    landed = {(10, 4): GREEN_O, (10, 5): GREEN_O, (11, 4): GREEN_O, (11, 5): GREEN_O}
+    for _ in range(6):
+        track.update(render(landed))
+    flicker = {cell: GREEN_O for cell in landed if cell != (10, 5)}
+    first = track.update(render(flicker))
+    assert first.falling is not None and first.falling.piece == "O"
+    second = track.update(render(flicker))
+    assert second.falling is None, "two frames of the same dropout is not a flicker"
+    assert second.stack_rows[11] == 0b110000, "it reads as board, which is what it looks like"
+
+
 def test_a_hard_drop_between_captures_still_reports_one_lock() -> None:
     """A piece that jumps the whole board in one capture locks once.
 

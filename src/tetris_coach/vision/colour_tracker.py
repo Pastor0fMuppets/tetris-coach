@@ -117,6 +117,15 @@ Cell = tuple[int, int]
 # Frames a cell must hold its colour before it counts as settled board.
 SETTLE_FRAMES = 3
 
+# Consecutive frames the piece in flight may be believed on its HISTORY
+# rather than on what this frame shows -- see :meth:`ColourTracker._rank`
+# on the exemption and :data:`PIECE_CELLS` on what it is an exemption
+# from. One, because the thing it excuses is one frame long: a cell that
+# samples the wrong side of a colour boundary reads right again next
+# frame, and a cell that reads background twice running is not flickering.
+# Measured over all nine committed windows, no frame needs even one.
+LOAN_FRAMES = 1
+
 # A tetromino. Also the budget for any ONE thing hanging over the void: a
 # Tetris board has one piece in flight and everything else is held up by
 # what is under it. See :meth:`ColourTracker._blind`.
@@ -285,6 +294,9 @@ class ColourTracker:
         # what is on the board has been there for all of the history we have.
         self._age = np.full((rows, cols), settle_frames, dtype=np.int32)
         self._falling: FallingPiece | None = None
+        # Consecutive frames the piece in flight has been believed on its
+        # history rather than on its own sighting (:data:`LOAN_FRAMES`).
+        self._on_loan = 0
         self._stack_rows: tuple[int, ...] = (0,) * rows
         self._stack_count = 0
         self._next_piece: str | None = None
@@ -336,6 +348,12 @@ class ColourTracker:
         self._labels = labels
 
         falling = self._pick_falling(labels, grounded)
+        # What the next frame's exemption is allowed to rest on: a piece
+        # read off this frame alone repays the loan, one read on credit
+        # extends it, and no piece at all ends it.
+        self._on_loan = (
+            self._on_loan + 1 if falling is not None and not self._explicable(falling.cells) else 0
+        )
         if falling is not None:
             falling = self._named(falling, colours, painted)
 
@@ -468,6 +486,7 @@ class ColourTracker:
         would rather hold make that choice itself.
         """
         self._falling = None
+        self._on_loan = 0
         self._labels = None
         self._age[:] = self.settle_frames
         return FrameReport(
@@ -740,19 +759,35 @@ class ColourTracker:
         among candidates that could be a piece at all
         (:meth:`_explicable`).
 
-        The piece already in flight is exempt from that admission test.
+        The piece already in flight is exempt from that admission test, and
+        the exemption is a LOAN OF ONE FRAME (:data:`LOAN_FRAMES`).
         :meth:`_explicable` asks what could be hiding the cells a sighting
         does not show, and for a piece we watched arrive the answer is on
         record: it was four cells a moment ago and one of them is
         misreading now. Applying the test to it would undo
         :meth:`_is_held` exactly where it is needed, since a parked piece
         that drops a cell to noise is a three-cell sighting in open board.
-        Nothing bootstraps through this: a candidate has to have been
-        believed on an earlier frame, on its own merits, to be exempt on
-        this one.
+
+        WHY THE LOAN HAS TO BE REPAID. "A candidate has to have been
+        believed on an earlier frame to be exempt on this one" does not
+        bound anything by itself, because the belief is handed on:
+        :meth:`_is_held` asks only about the PREVIOUS frame and tolerates
+        a cell gained or lost, so an identity admitted once where
+        :meth:`_explicable` is generous -- row 0, where a lone cell is
+        excusable -- keeps the exemption while it grows and shrinks by a
+        cell a frame, and walks into open board where no admission test
+        would have it. Measured on a one-cell stray stepping
+        (0,7) -> (0,7)+(1,7) -> (1,7) -> (1,7)+(2,7) -> ... it was
+        reported as the piece in flight at (4, 7), four rows below the
+        last row it could have been admitted at, and it would have kept
+        going. Every frame that rests on the exemption now counts against
+        :data:`LOAN_FRAMES`, and only a sighting that passes
+        :meth:`_explicable` on its own merits resets the count -- so the
+        drift is bounded at one row rather than at the floor.
         """
         held = self._is_held(label, cells)
-        if not held and not self._explicable(cells):
+        excused = held and self._on_loan < LOAN_FRAMES
+        if not excused and not self._explicable(cells):
             return best  # fewer than four cells and nothing hiding the rest
         floating = not any(grounded[r, c] for r, c in cells)
         youth = min(int(self._age[r, c]) for r, c in cells)
