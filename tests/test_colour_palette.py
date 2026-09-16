@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from tetris_coach.overlay.renderer import BADGE_HEIGHT
 from tetris_coach.vision.colour_palette import (
     CLEAN,
     EMPTY,
@@ -115,6 +116,52 @@ def test_a_disc_of_hint_colour_in_a_patch_is_our_drawing() -> None:
 
 
 # -- the NEXT box -----------------------------------------------------
+
+
+def test_a_sliver_of_hint_colour_on_a_cells_rim_is_our_drawing_not_our_fill() -> None:
+    """The one that shipped: the badge against an edge, on bare board.
+
+    Our fill is an outline around the WHOLE cell; our badge landing on a
+    cell's rim covers part of one side and nothing else. Deciding between
+    them on the sampled patch alone calls the second one a fill, and
+    un-doing a fill that is not there turns the board's own ground into a
+    colour ``alpha/(1-alpha)`` of the way from the background away from the
+    hint -- content, floating, one cell, age zero every frame. That is the
+    stutter the user reported, and ``tests/fixtures/hint_stutter`` is 51
+    captured frames of it.
+    """
+    image = render({})
+    hint = np.array(HINT, dtype=np.uint8)
+    # A band across the top of (8, 8), the depth the badge really has: it
+    # sits in the cell's top margin, above the patch either reader samples.
+    top, left = 8 * CELL, 8 * CELL
+    image[top : top + round(BADGE_HEIGHT * CELL), left + 5 : left + CELL - 5] = hint
+
+    states = own_paint_states(image, ROWS, COLS)
+    assert states[8, 8] == OURS, "ours, and unreadable -- never un-composited"
+
+    report = tracker().update(image)
+    assert report.falling is None, "the board is empty; nothing is in flight"
+    assert report.stack_rows == (0,) * ROWS
+
+
+def test_a_painted_cell_is_still_painted_with_the_badge_in_its_top_margin() -> None:
+    """Where the badge is drawn NOW, the fill underneath still reads.
+
+    The renderer puts the badge inside the hint's own top-left cell, in
+    that cell's top margin. The ring is intact on all four sides there, so
+    the cell stays PAINTED and the fill is still undone exactly -- which is
+    the whole reason that placement was chosen.
+    """
+    board = {(11, c): BLUE_I for c in range(4)}
+    image = paint_hint(render(board), [(11, c) for c in range(4)])
+    hint = np.array(HINT, dtype=np.uint8)
+    top = 11 * CELL
+    image[top : top + round(BADGE_HEIGHT * CELL), 5 : CELL - 5] = hint
+
+    assert own_paint_states(image, ROWS, COLS)[11, 0] == PAINTED
+    report = tracker().update(image)
+    assert report.stack_rows[11] == 0b1111
 
 
 @pytest.mark.parametrize(

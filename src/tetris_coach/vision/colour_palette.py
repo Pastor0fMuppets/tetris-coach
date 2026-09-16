@@ -64,11 +64,18 @@ Three classes of cell are not board content
   It is the one thing on screen whose exact appearance is known in advance
   rather than guessed at, and it signs itself: the hint is a translucent
   fill inside a THREE-PIXEL OUTLINE of the pure hint colour, so a painted
-  cell carries a ring of exactly ``#00e5ff`` (measured: 18-23% of the cell
-  rect on every painted cell in the fixtures, and 0.0% on every unpainted
-  one). That ring says which cells are painted; the fill is then undone
-  exactly, because its opacity is known too, recovering whatever the game
-  drew underneath. See :func:`own_paint_states`.
+  cell carries a ring of exactly ``#00e5ff`` running along all four of its
+  sides (measured: 18-26% of the cell rect, and never less than 36% of any
+  one side's strip, on all 1092 painted cells in the fixtures). That ring
+  says which cells are painted; the fill is then undone exactly, because
+  its opacity is known too, recovering whatever the game drew underneath.
+
+  "And 0.0% on every unpainted one" is what this used to say, and it was
+  measured on a corpus that happened not to contain the case: the rotation
+  BADGE is ours and opaque, and where it straddles a cell boundary it puts
+  5-6% of one edge's worth of hint colour into a cell carrying no fill at
+  all. Un-doing a fill that is not there is what turned bare board into a
+  piece. See :func:`own_paint_states`.
 Everything else is content, named when the palette knows its colour and
 unnamed (but still tracked) when it does not.
 
@@ -112,6 +119,7 @@ threshold that erases real pieces is not worth keeping on speculation.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -174,6 +182,23 @@ PAINT_RING_SHARE = 0.03
 # piece that happens to be that colour, not our paint.
 PAINT_PATCH_SHARE = 0.02
 PAINT_PATCH_SOLID = 0.9
+
+# Our fill is drawn as an outline AROUND each painted cell, so its signature
+# runs along all four sides. Depth of the strip each side is sampled over,
+# as a share of the cell, and the share of that strip the outline has to
+# cover. Measured over the nine committed windows: every one of the 1092
+# cells genuinely under our fill scores 0.36-0.54 on its weakest side, and
+# the rotation badge landing on a cell's RIM scores 0.00 on two of them --
+# it is a blob against one edge, not a ring. See :func:`own_paint_states`
+# on why that distinction is the whole difference between un-compositing a
+# cell and inventing content in it.
+#
+# The strip scales with the cell and the outline does not, so the floor is
+# outline_px / (PAINT_EDGE_BAND * cell_px): 0.52 at the corpus' 48 px cells
+# and 0.21 at the 120 px cell PAINT_RING_SHARE above reckons "very large".
+# The threshold sits below both and a long way above zero.
+PAINT_EDGE_BAND = 0.12
+PAINT_EDGE_SHARE = 0.15
 
 # Fraction of each cell inset before sampling (skips gridlines and borders).
 CELL_MARGIN = 0.25
@@ -570,6 +595,39 @@ def own_paint_states(
     shipped rule can only recognize the composite over the board's own
     ground, and a hint drawn over a piece reads there as a colour the game
     never rendered.
+
+    THE RING HAS TO BE A RING. The two states this tells apart are not
+    "more hint colour" and "less" — they are two different things to do
+    with the cell, and doing the wrong one is how the coach's own drawing
+    became a piece:
+
+    * :data:`PAINTED` is our translucent fill, and it means UN-COMPOSITE
+      this cell -- subtract a known blend and keep what is underneath.
+    * :data:`OURS` is our opaque drawing, and it means SKIP this cell --
+      what the game drew there is gone and cannot be recovered.
+
+    Deciding between them on the patch alone -- our fill never reaches the
+    patch, our badge is a disc that lands in it -- holds only while our
+    opaque drawing is either in the middle of a cell or not in it at all.
+    The rotation badge against a cell's RIM is in neither place: no hint
+    colour in the patch, so it read as PAINTED, and un-compositing a cell
+    that carries no fill turns the board's own bare ground into a colour
+    ``alpha/(1-alpha)`` of the way from the background AWAY from the hint
+    -- 55 units off on the captures this was found in, which is content,
+    which floats, which is one cell of a piece that is not there. Measured
+    on ``tests/fixtures/hint_stutter``: 16 frames of a phantom at (8, 8)
+    that alternated with the real J at the top edge and blanked the hint
+    every other frame.
+
+    So the fill is recognized by the shape of its own signature rather
+    than by where the badge is not: our fill outlines the cell, so it
+    scores on ALL FOUR sides (:data:`PAINT_EDGE_SHARE`). Anything else of
+    ours in the cell is opaque drawing, whether it covers the patch or
+    hugs an edge, and the cell is skipped rather than reinterpreted. That
+    errs toward losing a cell we cannot read over inventing one we can:
+    a hint cell whose outline is cut by a board rectangle a few pixels off
+    reads OURS and drops out of the frame, where before it would have been
+    un-composited on three good sides.
     """
     states = np.zeros((rows, cols), dtype=np.int8)
     img = np.asarray(image)
@@ -600,11 +658,28 @@ def own_paint_states(
                 continue
             ix0, ix1 = _inset(x0, x1)
             patch = share(iy0, iy1, ix0, ix1)
-            if patch < PAINT_PATCH_SHARE:
+            if patch >= PAINT_PATCH_SOLID:
+                continue  # a game piece that happens to be our colour
+            if patch < PAINT_PATCH_SHARE and _rings(share, y0, y1, x0, x1):
                 states[r, c] = PAINTED  # our fill, over whatever is beneath
-            elif patch < PAINT_PATCH_SOLID:
-                states[r, c] = OURS  # our own drawing: the rotation badge
+            else:
+                states[r, c] = OURS  # our own opaque drawing: the badge
     return states
+
+
+def _rings(
+    share: Callable[[int, int, int, int], float], y0: int, y1: int, x0: int, x1: int
+) -> bool:
+    """Does the hint colour in this cell run along all four of its sides?"""
+    dy = max(1, round((y1 - y0) * PAINT_EDGE_BAND))
+    dx = max(1, round((x1 - x0) * PAINT_EDGE_BAND))
+    sides = (
+        share(y0, min(y0 + dy, y1), x0, x1),
+        share(max(y1 - dy, y0), y1, x0, x1),
+        share(y0, y1, x0, min(x0 + dx, x1)),
+        share(y0, y1, max(x1 - dx, x0), x1),
+    )
+    return min(sides) >= PAINT_EDGE_SHARE
 
 
 def _inset(low: int, high: int) -> tuple[int, int]:
