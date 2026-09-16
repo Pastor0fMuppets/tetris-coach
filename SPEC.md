@@ -58,7 +58,7 @@ and through the real `CoachEngine`, which is what the user actually sees
 | tracker | hints | MISNAMED | INVENTED | stale | latency p50/max | target moves | blank |
 | ------- | ----- | -------- | -------- | ----- | --------------- | ------------ | ----- |
 | shape   | 442   | 7        | 0        | 49    | 1 / 3 frames    | 3            | 32    |
-| colour  | 418   | 0        | 0        | 21    | 0 / 0 frames    | 0            | 4     |
+| colour  | 470   | 0        | 0        | 21    | 0 / 0 frames    | 0            | 4     |
 
 MISNAMED can only be counted where the oracle answers, and what it abstains
 on is line clears and covered boards — which is exactly where a reader that
