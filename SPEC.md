@@ -127,7 +127,8 @@ rotation badge read as a falling piece and the overlay blanked every other
 frame at 15 fps (`tests/fixtures/hint_stutter`, 51 frames of it).
 
 **The property is measured, not argued** (`tests/test_hint_invisibility.py`),
-over every committed capture window:
+over every committed capture window — the nine of them, 649 frames, 77880
+sampled patches, and not one of those patches moves:
 
 - no hint changes one SAMPLED PATCH, on every frame of every window,
   compared exactly rather than within a tolerance — which is the property
@@ -145,6 +146,18 @@ over every committed capture window:
   sampled patch of every cell on the board;
 - and a control, so the comparison is known to be able to fail: put a fill
   back and the reading changes.
+
+All of that is taken through the NUMPY painter, because Qt cannot be driven
+in an ordinary headless run — which leaves one thing to check: that the
+painter which SHIPS stays inside the one that is measured.
+`tests/test_qt_painter_geometry.py` drives the real `QPainter` offscreen over
+all 19 rotations at four cell sizes in both styles, and every pixel
+`draw_hint` touches is one `paint_hint` touches too. A subset rather than an
+equality: the badge is an ellipse with a digit clipped into it, so it falls
+short of the corners of the bounding box the measured painter fills, and
+over-stating the paint is the direction that keeps the measurement honest.
+That file skips where PySide6 is absent, so the bridge is checked wherever
+the overlay can actually run and a headless run stays green.
 
 **The second hint is conditional**, and `CoachEngine.second_hint` derives it
 from the state rather than remembering it, so it cannot outlive what it is

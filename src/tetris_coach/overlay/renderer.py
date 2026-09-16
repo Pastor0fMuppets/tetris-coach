@@ -302,12 +302,15 @@ def paint_hint(
     changes nothing a reader reads -- is measured through this instead,
     over the same :func:`hint_paint_rects` geometry ``draw_hint`` fills.
     What could drift between the two is therefore only the FILL of a
-    rectangle, not which rectangles there are -- and it is measured not to:
-    driven offscreen through a real QPainter over all 19 rotations in both
-    styles, the pixels ``draw_hint`` touches are a SUBSET of the ones this
-    paints, differing only where the badge's ellipse does not reach the
-    corners of its own bounding box. A superset is the direction that keeps
-    the invisibility measurement honest.
+    rectangle, not which rectangles there are -- and it is measured not to,
+    by ``tests/test_qt_painter_geometry.py``: driven offscreen through a
+    real QPainter over all 19 rotations at four cell sizes in both styles,
+    the pixels ``draw_hint`` touches are a SUBSET of the ones this paints,
+    differing only where the badge's ellipse and its clipped digit do not
+    reach the corners of the badge's own bounding box. A superset is the
+    direction that keeps the invisibility measurement honest. That file
+    skips where PySide6 is absent, so the bridge is checked wherever the
+    overlay can actually run and a headless run stays green.
 
     ``frame`` is BGR, the order the capture pipeline produces, and is not
     modified: a copy comes back.
