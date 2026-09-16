@@ -46,7 +46,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from tetris_coach.app import CoachConfig, CoachEngine
+from tetris_coach.app import CoachConfig, CoachEngine, hint_styles
 from tetris_coach.core.board import Board
 from tetris_coach.core.pieces import ROTATIONS
 from tetris_coach.overlay.renderer import (
@@ -348,6 +348,58 @@ def test_both_hints_change_nothing_the_reader_reads(name: str, tracker: str) -> 
     ]
     assert not differences, (
         f"{name}/{tracker}: {len(differences)} frames changed: {differences[:3]}"
+    )
+
+
+@pytest.mark.parametrize("name", WINDOW_NAMES)
+def test_the_engine_own_pair_of_hints_changes_no_patch_either(name: str) -> None:
+    """The same measurement, on the placements the engine really picks.
+
+    The schedule above covers placements no session would produce, which is
+    the point of it; this covers the ones it does. Each frame is painted
+    with the hints that were ON SCREEN when it was captured -- the previous
+    frame's pair -- in the styles ``app.hint_styles`` builds from the
+    shipped configuration, which is the real feedback loop.
+
+    It measures the patch rather than the whole reading, because these
+    captures already contain an earlier generation of this overlay and the
+    engine's hints land on it constantly (same solver, same frames). That
+    collision is not something a live session can produce and
+    :func:`_already_painted` says why; what it cannot do either way is
+    reach a patch, and that is what is asserted.
+    """
+    spec = _spec(name)
+    config = CoachConfig(rows=spec.rows, hint_fill_opacity=SHIPPED_FILL)
+    current_style, second_style = hint_styles(config)
+    assert second_style is not None
+    engine = CoachEngine(config, unobservable_cells=spec.geometry().unobservable)
+    names, boards = load_window(FIXTURES, spec)
+    crops = next_crops(FIXTURES, spec, names)
+    on_screen: Pair = ()
+    pairs = 0
+    for index, (board, crop) in enumerate(zip(boards, crops, strict=True)):
+        frame = _painted(board, spec.rows, on_screen) if on_screen else board
+        before = cell_colors(board, spec.rows, 10, CELL_MARGIN)
+        after = cell_colors(frame, spec.rows, 10, CELL_MARGIN)
+        moved = np.argwhere(np.any(before != after, axis=-1))
+        assert not len(moved), f"{name} frame {index}: patches changed at {moved.tolist()[:5]}"
+        hint = engine.process_frame(frame, crop)
+        second = engine.second_hint
+        on_screen = tuple(
+            (move, style)
+            for move, style in ((hint, current_style), (second, second_style))
+            if move is not None
+        )
+        pairs += len(on_screen) == 2
+    # A guard against measuring nothing: on a genuine run of consecutive
+    # captures the coach has a plan on most frames. ``pale_preview`` is a
+    # SAMPLED window (see truth/windows.py) -- the tracker diffs frames
+    # against each other, so it can barely follow it at all -- and one
+    # frame is all it is asked for.
+    floor = len(boards) // 3 if spec.consecutive else 1
+    assert pairs >= floor, (
+        f"{name}: only {pairs} of {len(boards)} frames drew both hints -- "
+        "a measurement of one hint is not the measurement asked for"
     )
 
 

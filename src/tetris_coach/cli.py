@@ -21,6 +21,7 @@ from .core.board import DEFAULT_HEIGHT, WIDTH, Board
 from .core.pieces import PIECES
 from .region_select import MIN_BOARD_SIZE, MIN_PREVIEW_SIZE
 from .solver.search import Move, best_move
+from .vision.grid import DEFAULT_HINT_COLOR, DEFAULT_NEXT_HINT_COLOR
 from .vision.pieces_vision import SPAWN_ROWS
 
 if TYPE_CHECKING:  # pragma: no cover - import-time cost, not behaviour
@@ -112,6 +113,9 @@ def coach_config(args: argparse.Namespace) -> CoachConfig:
     return CoachConfig(
         poll_rate=args.poll_rate,
         hint_color=args.hint_color,
+        next_hint_color=args.next_hint_color,
+        show_next_hint=not args.no_next_hint,
+        hint_fill_opacity=args.hint_fill,
         rows=args.rows,
         debug=args.debug,
         dump_dir=args.dump_frames,
@@ -187,7 +191,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--poll-rate", type=float, default=15.0, help="overlay: captures per second"
     )
     parser.add_argument(
-        "--hint-color", default="#00e5ff", help="overlay: hint color (Qt color string)"
+        "--hint-color",
+        default=DEFAULT_HINT_COLOR,
+        help="overlay: colour of the hint for the piece in play, drawn as a "
+        "bold solid outline (Qt colour string)",
+    )
+    parser.add_argument(
+        "--next-hint-color",
+        default=DEFAULT_NEXT_HINT_COLOR,
+        help="overlay: colour of the second hint -- where the NEXT piece goes "
+        "if you follow the first one -- drawn as a dashed outline. It is the "
+        "dashes that tell the two apart at a glance; the colour is so that "
+        "they also differ where each sits over a similar piece",
+    )
+    parser.add_argument(
+        "--no-next-hint",
+        action="store_true",
+        help="overlay: show one target only. The second hint is where the "
+        "piece after this one goes on the board the first placement leaves "
+        "behind; some players would rather have the one square to aim at",
+    )
+    parser.add_argument(
+        "--hint-fill",
+        type=float,
+        default=0.0,
+        metavar="OPACITY",
+        help="overlay: fill the current hint's cells at this opacity (0-1, "
+        "default 0 = outline only). The outline is drawn in the outer band "
+        "of each cell, which is the part of a cell vision never samples, so "
+        "by default the coach cannot read its own drawing at all. A fill is "
+        "inside that sample, and a correct reading then depends on the paint "
+        "being recognized and removed again -- the path three of this tool's "
+        "own bugs came down",
     )
     parser.add_argument(
         "--debug",
@@ -233,6 +268,15 @@ def main(argv: list[str] | None = None) -> int:
             f"--rows must be at least {SPAWN_ROWS + 1} (got {args.rows}): "
             f"pieces spawn within the top {SPAWN_ROWS} rows, so a shorter "
             "board has no room to play.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not 0.0 <= args.hint_fill <= 1.0:
+        print(
+            f"--hint-fill must be between 0 and 1 (got {args.hint_fill}): it is "
+            "the opacity the hint's fill is drawn at, and the reader is told "
+            "the same number so that what it un-composites is what was painted.",
             file=sys.stderr,
         )
         return 2

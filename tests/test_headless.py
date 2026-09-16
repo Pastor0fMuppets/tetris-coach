@@ -179,6 +179,106 @@ def test_hint_style_defaults() -> None:
     assert 0.0 <= style.fill_opacity <= 1.0
 
 
+def test_the_badge_sits_inside_the_band_its_own_outline_paints() -> None:
+    """The badge adds no painted pixel the outline had not already put there.
+
+    It is the one opaque thing this tool draws, and the reason it is safe
+    is now geometric twice over: it is in the top margin of a cell the
+    hint occupies, and that margin is exactly the band the outline covers.
+    So the invisibility argument needs no separate case for it -- which is
+    what ``BADGE_HEIGHT is OUTLINE_DEPTH`` is for.
+    """
+    from tetris_coach.core.board import Board
+    from tetris_coach.core.pieces import ROTATIONS
+    from tetris_coach.overlay.renderer import OUTLINE_DEPTH
+    from tetris_coach.solver.search import Move
+
+    for piece, rotations in ROTATIONS.items():
+        for rotation in rotations:
+            move = Move(
+                piece=piece,
+                rotation=rotation,
+                col=3,
+                row=5,
+                score=0.0,
+                lines_cleared=0,
+                board=Board(),
+            )
+            for cell_w, cell_h in ((48.0, 48.1), (30.0, 25.0), (20.0, 20.0)):
+                bx, by, bw, bh = rotation_badge_rect(move, cell_w, cell_h)
+                row, col = round(by / cell_h), round(bx / cell_w)
+                # Flush with the top of a cell the hint paints, and no
+                # deeper into it than that cell's outline already goes.
+                assert (row, col) in move.cells
+                assert by == pytest.approx(row * cell_h)
+                assert bh <= OUTLINE_DEPTH * cell_h + 1e-9
+                assert bx >= col * cell_w and bx + bw <= (col + 1) * cell_w
+
+
+def test_hint_styles_say_how_the_two_hints_are_drawn() -> None:
+    from tetris_coach.app import CoachConfig, hint_styles
+
+    current, second = hint_styles(CoachConfig())
+    assert second is not None
+    # Told apart by STROKE, not by fading the second one: a faint mark sits
+    # down among the ghosts and pale pieces, a dash does not.
+    assert (current.dashed, second.dashed) == (False, True)
+    assert current.color != second.color
+    # Neither draws a fill by default: that is the whole design.
+    assert (current.fill_opacity, second.fill_opacity) == (0.0, 0.0)
+
+    one_only = hint_styles(CoachConfig(show_next_hint=False))
+    assert one_only[1] is None, "the overlay is told to draw nothing, not to ignore a style"
+
+    # A fill is the current hint's alone: the reader is told one paint
+    # colour, so a fill in the second could never be un-composited.
+    filled, second = hint_styles(CoachConfig(hint_fill_opacity=0.18))
+    assert filled.fill_opacity == 0.18
+    assert second is not None and second.fill_opacity == 0.0
+
+    recoloured = hint_styles(CoachConfig(hint_color="#111111", next_hint_color="#222222"))
+    assert (recoloured[0].color, recoloured[1].color) == ("#111111", "#222222")  # type: ignore[union-attr]
+
+
+def test_a_session_that_asks_for_a_fill_is_told_what_it_costs() -> None:
+    from tetris_coach.app import CoachConfig, fill_warning
+
+    assert fill_warning(CoachConfig()) is None
+    said = fill_warning(CoachConfig(hint_fill_opacity=0.18))
+    assert said is not None and "--hint-fill" in said and "read back" in said
+
+
+def test_cli_flags_for_the_second_hint_and_the_fill() -> None:
+    from tetris_coach.app import CoachConfig
+    from tetris_coach.cli import build_parser, coach_config
+
+    parser = build_parser()
+    default = coach_config(parser.parse_args([]))
+    assert default.show_next_hint is True
+    assert default.next_hint_color != default.hint_color
+    assert default.hint_fill_opacity == 0.0
+    # The library defaults agree with the flags' defaults.
+    assert (default.hint_color, default.next_hint_color) == (
+        CoachConfig().hint_color,
+        CoachConfig().next_hint_color,
+    )
+
+    off = coach_config(parser.parse_args(["--no-next-hint"]))
+    assert off.show_next_hint is False
+
+    recoloured = coach_config(parser.parse_args(["--next-hint-color", "#ff0000"]))
+    assert recoloured.next_hint_color == "#ff0000"
+
+    filled = coach_config(parser.parse_args(["--hint-fill", "0.18"]))
+    assert filled.hint_fill_opacity == 0.18
+
+
+def test_cli_rejects_an_impossible_fill(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--demo", "--hint-fill", "1.5"]) == 2
+    assert "--hint-fill must be between 0 and 1" in capsys.readouterr().err
+    assert main(["--demo", "--hint-fill", "-0.1"]) == 2
+
+
 def test_overlay_window_raises_without_qt_or_constructs() -> None:
     from tetris_coach.overlay import window
 

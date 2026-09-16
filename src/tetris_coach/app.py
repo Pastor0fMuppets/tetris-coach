@@ -35,6 +35,7 @@ from __future__ import annotations
 import sys
 import traceback
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -60,6 +61,9 @@ from .vision.readers import (
     render_debug_frame,
 )
 from .vision.state import GameStateTracker
+
+if TYPE_CHECKING:  # pragma: no cover - overlay/ pulls in PySide6; app must not
+    from .overlay.renderer import HintStyle
 
 
 @dataclass
@@ -320,6 +324,64 @@ def selection_warning(
         "below the next-piece bar, or the next-piece rectangle outside the "
         "board."
     )
+
+
+def fill_warning(config: CoachConfig) -> str | None:
+    """A note for the user when they have asked for a hint the reader can see.
+
+    The hint is an outline in the outer band of each cell, which is the
+    part of a cell neither reader samples, so by default nothing this tool
+    paints can reach a reading -- measured over every committed capture
+    window in ``tests/test_hint_invisibility.py``. A FILL is inside the
+    patch, and then a correct reading depends on the rule that recognizes
+    the paint and takes it back out again being right about this theme,
+    this background and whatever piece is underneath. It has been wrong
+    before, three times, and each time the user saw it as a hint that
+    flickered or pointed at a piece they did not have.
+
+    So the option stays and says so once, at startup, rather than being
+    quietly equivalent.
+    """
+    if config.hint_fill_opacity <= 0.0:
+        return None
+    return (
+        f"tetris-coach: --hint-fill {config.hint_fill_opacity:g} draws a "
+        "translucent fill inside the hint, which is the one part of the "
+        "overlay the coach can read back as board content. It is taken out "
+        "again by recognizing it, rather than by never being there; if the "
+        "hint flickers or names a piece you do not have, run without the flag."
+    )
+
+
+def hint_styles(config: CoachConfig) -> tuple[HintStyle, HintStyle | None]:
+    """How the two hints are drawn, for this configuration.
+
+    Split out of :func:`run`, which cannot run off macOS, so that what the
+    flags MEAN is testable headlessly -- the same reason
+    ``cli.coach_config`` exists. What is decided here is only WHICH styles;
+    where the paint lands is ``overlay.renderer``'s pure geometry, and
+    whether it can be read back is measured in
+    ``tests/test_hint_invisibility.py``.
+
+    The second style is ``None`` when the session asked for one target
+    only, which is how the overlay is told to draw nothing rather than
+    being handed a style it should ignore.
+
+    Only the CURRENT hint can carry a fill. The reader is told one paint
+    colour (``CoachEngine._own_paint``), so a fill in the second colour
+    would be a blend nothing could un-composite -- and a fill is the one
+    thing here a reader can see at all.
+    """
+    from .overlay.renderer import HintStyle
+
+    current = HintStyle(
+        color=config.hint_color,
+        dashed=False,
+        fill_opacity=config.hint_fill_opacity,
+    )
+    if not config.show_next_hint:
+        return current, None
+    return current, HintStyle(color=config.next_hint_color, dashed=True)
 
 
 def make_vision(
@@ -811,7 +873,6 @@ def run(
     from PySide6.QtWidgets import QApplication
 
     from .capture.screen import ScreenCapture
-    from .overlay.renderer import HintStyle
     from .overlay.window import OverlayWindow
 
     config = config or CoachConfig()
@@ -819,15 +880,19 @@ def run(
     # region; name those unobservable cells once (the rects are fixed for
     # the session).
     unobservable_cells = compute_overlap_mask(board_rect, next_rect, config.rows)
-    warning = selection_warning(unobservable_cells, tracker=config.tracker)
-    if warning is not None:
-        print(warning, file=sys.stderr)
+    for warning in (
+        selection_warning(unobservable_cells, tracker=config.tracker),
+        fill_warning(config),
+    ):
+        if warning is not None:
+            print(warning, file=sys.stderr)
     engine = CoachEngine(config, unobservable_cells=unobservable_cells)
     frame_source: FrameSource = source if source is not None else ScreenCapture()
     worker = FrameWorker(engine, frame_source, board_rect, next_rect)
 
     app = QApplication.instance() or QApplication([])
-    window = OverlayWindow(board_rect, HintStyle(color=config.hint_color), rows=config.rows)
+    current_style, second_style = hint_styles(config)
+    window = OverlayWindow(board_rect, current_style, rows=config.rows, second_style=second_style)
     window.show()
 
     class TickSignals(QObject):
@@ -862,7 +927,7 @@ def run(
             app.quit()
             return
         if result.ok:
-            window.set_hint(result.hint)
+            window.set_hint(result.hint, result.second)
 
     signals = TickSignals()
     # Explicitly queued: the signal is emitted from the pool thread, and the
@@ -884,6 +949,8 @@ __all__ = [
     "FrameWorker",
     "TickResult",
     "compute_overlap_mask",
+    "fill_warning",
+    "hint_styles",
     "make_vision",
     "render_debug_frame",
     "rescore",
