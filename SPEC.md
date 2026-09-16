@@ -1439,6 +1439,22 @@ overlay/
                   # and the fill opacity, that direction and not the other,
                   # because vision/ must stay importable with no display
                   # and overlay/ needs PySide6.)
+                  #
+                  # With a fill on, the two hint COLOURS also have to stay
+                  # apart: own_paint_states recognizes our fill by the ring
+                  # of hint colour round it, the dashed outline rings its
+                  # cells too, and nothing in a cell says which hint drew
+                  # it -- so a second hint in the first's colour is
+                  # un-composited as a fill that was never painted and
+                  # bare board comes out as a piece. app.hint_color_conflict
+                  # refuses that pair (cli exits, hint_styles raises),
+                  # against the reader's own PAINT_PIXEL_TOL.
+                  #
+                  # Both painters also subtract a KEEP-OUT rectangle: the
+                  # next-piece capture, which in these games lies under the
+                  # overlay window (app.preview_keep_out -> keep_out_rect).
+                  # The badge is dropped whole rather than clipped. See
+                  # "Two hints, drawn where no reader looks" above.
 region_select.py  # Full-screen dim + drag-rectangle picker (Qt), returns rect in
                   # logical coords; run twice (board, next box).
 app.py            # Main loop wiring: capture -> vision -> state -> solve -> overlay.
@@ -1552,8 +1568,12 @@ cli.py            # `tetris-coach` entry point: select regions, start loop; flag
    user-visible bugs here, and it is now not a thing that can happen. The
    recognition is kept as defence in depth, and `--hint-fill` can put the
    fill back for anyone who wants the old look, which is documented as
-   re-opening that path. See "Two hints, drawn where no reader looks" above
-   for the measurements.
+   re-opening that path -- and, with the fill on, forces the two hint
+   colours apart, since the recognition cannot tell which of our two marks
+   ringed a cell. The overlay also keeps out of the next-piece rectangle
+   entirely, because that is a SECOND capture with a second reader and no
+   sampled patch for the paint to miss. See "Two hints, drawn where no
+   reader looks" above for the measurements.
 
 ## What can be built & tested headless (Linux CI / cloud)
 

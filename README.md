@@ -64,7 +64,17 @@ that had to stay out of the way.
 drew it. That fill is inside the part of the cell vision reads, so turning it on
 re-opens exactly that path: the reading is then only correct because the paint is
 recognized and taken back out again. It is off by default and says so when you use
-it.
+it. With the fill on, `--next-hint-color` also has to be far enough from
+`--hint-color` for the coach to tell its own two marks apart — the recognition
+goes by the colour of the outline round the fill, so a second hint in the first's
+colour is read as a fill that was never painted. That pair is refused at startup
+rather than drawn.
+
+The overlay also keeps out of the next-piece rectangle. In games that float the
+NEXT box on top of the playfield, that box is inside the region you select as the
+board, so the window covers it — and a hint painted across it would blind the
+coach's own reading of the upcoming piece. The part of a hint that would land
+there is simply not drawn; it was behind the game's own panel anyway.
 
 ## Two trackers
 
