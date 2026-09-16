@@ -9,7 +9,7 @@ from __future__ import annotations
 from ..capture.screen import Rect
 from ..core.board import DEFAULT_HEIGHT, WIDTH
 from ..solver.search import Move
-from .renderer import HintStyle, draw_hint
+from .renderer import Fractions, HintStyle, draw_hint, keep_out_rect
 
 try:  # pragma: no cover - depends on platform
     from PySide6.QtCore import Qt
@@ -32,6 +32,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
             style: HintStyle | None = None,
             rows: int = DEFAULT_HEIGHT,
             second_style: HintStyle | None = None,
+            keep_out: Fractions | None = None,
         ) -> None:
             super().__init__(
                 None,
@@ -57,6 +58,13 @@ if HAVE_QT:  # pragma: no cover - macOS only
             # where a colour alone would not, over pieces the two hint
             # colours happen to sit near.
             self._second_style = second_style
+            # The next-piece capture, as a share of the board region, or
+            # None when it is not under this window. The overlay is sized
+            # to the whole board and that box can float inside it, so
+            # without this the hints are painted across the very crop the
+            # preview reader is handed next tick (see
+            # ``app.preview_keep_out``).
+            self._keep_out = keep_out
             self._rows = rows
             self._move: Move | None = None
             self._second: Move | None = None
@@ -85,6 +93,10 @@ if HAVE_QT:  # pragma: no cover - macOS only
             painter = QPainter(self)
             cell_width = self.width() / WIDTH
             cell_height = self.height() / self._rows
+            # Computed per paint rather than once: the window is sized from
+            # the board rectangle, and its own size is the only thing that
+            # turns the keep-out's fractions back into pixels honestly.
+            keep_out = keep_out_rect(self._keep_out, self.width(), self.height())
             try:
                 # The second hint first, so that where the two are next to
                 # each other the target the player acts on NOW is the one
@@ -97,6 +109,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
                         cell_width=cell_width,
                         cell_height=cell_height,
                         style=self._second_style,
+                        keep_out=keep_out,
                     )
                 draw_hint(
                     painter,
@@ -104,6 +117,7 @@ if HAVE_QT:  # pragma: no cover - macOS only
                     cell_width=cell_width,
                     cell_height=cell_height,
                     style=self._style,
+                    keep_out=keep_out,
                 )
             finally:
                 painter.end()
@@ -119,6 +133,7 @@ else:
             style: HintStyle | None = None,
             rows: int = DEFAULT_HEIGHT,
             second_style: HintStyle | None = None,
+            keep_out: Fractions | None = None,
         ) -> None:
             raise RuntimeError(
                 "OverlayWindow requires PySide6, which is only installed on "

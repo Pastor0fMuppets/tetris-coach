@@ -183,6 +183,39 @@ where the first one's cells are already filled, and a drop never lands in a
 filled cell — which is what lets each hint's rotation badge sit in a cell
 its own hint paints without either one landing in the other's.
 
+**There are two captures a tick, and the second one needs its own rule.**
+The board crop is the one the argument above is about — its cells have a
+sampled patch for the paint to miss. The NEXT crop
+(`vision/colour_preview.py`) has no cell grid at all: it is read at pixel
+level, so it recognizes this tool's translucent FILL and nothing else. And
+in the games this was built for the NEXT panel floats INSIDE the board
+rectangle (that is why `compute_overlap_mask` exists), while the overlay
+window is sized to the whole board — so a hint on one of those cells is
+painted straight across the box the next grab reads. Measured on
+`spawn_latency`, an O-hint on the four covered cells takes
+`identify_preview` from a piece to nothing on every frame tried, for the
+solid hint and the dashed one alike; isolating the ingredients, a
+translucent fill alone is read correctly and the full-opacity STROKE alone
+reproduces the failure. It is not a recognition that can be widened
+either: pure hint colour is a colour a game may render a piece in, and the
+paint is opaque, so recognizing it would say only that the piece has bars
+through it, not what was underneath.
+
+So the overlay does not paint there. `app.preview_keep_out` projects the
+next-piece rectangle into the board's unit square and both painters
+subtract it from every rectangle they fill (`overlay/renderer.keep_out_rect`;
+the rotation badge is dropped whole rather than clipped, since half a
+digit is not a rotation count). It is the same property kept the same way
+— the reader does not have to recognize the paint, because the paint is
+not there — and it is measured the same way, in
+`tests/test_hint_invisibility.py`: every frame of every window is handed
+the next crop as the capture would really produce it, with the overlay's
+own paint composited in, and not one pixel of it may be ours. The control
+turns the rule off and watches the preview reader go blind on every
+readable frame. What the user loses is the part of a hint that lay under
+the game's own opaque panel, where the board is not visible to them
+either.
+
 **The own-paint recognition stays in place.** It is defence in depth now
 rather than the primary mechanism: `own_paint_states` still names our cells
 from the ring of hint colour around them, and with no fill to undo the

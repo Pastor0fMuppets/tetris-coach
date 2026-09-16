@@ -63,7 +63,7 @@ from .vision.readers import (
 from .vision.state import GameStateTracker
 
 if TYPE_CHECKING:  # pragma: no cover - overlay/ pulls in PySide6; app must not
-    from .overlay.renderer import HintStyle
+    from .overlay.renderer import Fractions, HintStyle
 
 
 @dataclass
@@ -205,6 +205,80 @@ def rescore(board: Board, move: Move, next_piece: str | None) -> Move | None:
     return None
 
 
+def _next_box_fractions(
+    board_rect: Rect, next_rect: Rect | None
+) -> tuple[float, float, float, float] | None:
+    """The next-piece capture projected into the board's unit square.
+
+    ``(x0, y0, x1, y1)`` as shares of the board region, or ``None`` when
+    there is no next box or it lies wholly outside the board — the general
+    case, a preview drawn in its own corner of the screen.
+
+    Fractions rather than pixels because the capture may be Retina-scaled
+    and the overlay window is measured in points: only ratios mean the
+    same thing in both. Two callers need this projection and they must not
+    disagree about it — :func:`compute_overlap_mask`, which asks which
+    board CELLS the panel hides from the reader, and
+    :func:`preview_keep_out`, which asks which PIXELS the overlay may not
+    paint in because that second capture will read them back.
+    """
+    if next_rect is None or board_rect.width <= 0 or board_rect.height <= 0:
+        return None
+    fx0 = (next_rect.left - board_rect.left) / board_rect.width
+    fx1 = (next_rect.left + next_rect.width - board_rect.left) / board_rect.width
+    fy0 = (next_rect.top - board_rect.top) / board_rect.height
+    fy1 = (next_rect.top + next_rect.height - board_rect.top) / board_rect.height
+    # No overlap with the board's unit square [0, 1] x [0, 1].
+    if fx1 <= 0.0 or fx0 >= 1.0 or fy1 <= 0.0 or fy0 >= 1.0:
+        return None
+    return (fx0, fy0, fx1, fy1)
+
+
+def preview_keep_out(board_rect: Rect, next_rect: Rect | None) -> Fractions | None:
+    """The part of the board the overlay may not paint in, as fractions.
+
+    THE OVERLAY WINDOW IS SIZED TO THE WHOLE BOARD, and in the games this
+    tool was built for the NEXT panel floats inside the board rectangle
+    (that is why :func:`compute_overlap_mask` exists at all). So a hint on
+    one of those cells is painted straight across the box that
+    :meth:`FrameWorker.run_tick` grabs a moment later as ``next_image`` —
+    a SECOND capture, read by a second reader, which the board reader's
+    invisibility property says nothing about.
+
+    And that reader cannot be taught its way out of it. It works at pixel
+    level on a crop with no cell grid of its own, so it recognizes this
+    tool's translucent FILL (a colour short of the hint's own magnitude,
+    :data:`~tetris_coach.vision.colour_preview.PAINT_FILL_MAX`) and
+    nothing else. The outline is full-opacity hint colour, which is not
+    that — and could not be made that, because widening the rule to pure
+    hint colour would swallow a NEXT piece the game happens to render in
+    it. Worse, the paint is OPAQUE: recognizing it would only tell the
+    reader that the piece it is naming has bars through it, not what was
+    underneath. Measured on ``tests/fixtures/spawn_latency``, an O-hint on
+    the four covered cells takes ``identify_preview`` from a piece to
+    ``None`` on every frame tried, for the solid hint and the dashed one
+    alike.
+
+    Losing the next piece is not a cosmetic failure: hints drop to 1 ply,
+    ``_precompute_next(None)`` clears the second hint and the instant flip
+    on lock, and — because the next piece is one of the inputs the hint is
+    solved for — the hint MOVES, which moves the paint, which can make the
+    box readable again. That is the stutter feedback loop this project has
+    already paid for twice.
+
+    So the overlay keeps out of that rectangle entirely, and the property
+    is the same one the outline design rests on: the reader does not have
+    to recognize the paint, because the paint is not there. What the user
+    loses is the part of a hint that lay under the game's own opaque
+    panel, where the board is not visible to them either.
+    """
+    fractions = _next_box_fractions(board_rect, next_rect)
+    if fractions is None:
+        return None
+    fx0, fy0, fx1, fy1 = fractions
+    return (max(0.0, fx0), max(0.0, fy0), min(1.0, fx1), min(1.0, fy1))
+
+
 def compute_overlap_mask(
     board_rect: Rect,
     next_rect: Rect | None,
@@ -254,15 +328,10 @@ def compute_overlap_mask(
     general case: a next box drawn in a separate area outside the board),
     the mask is empty and downstream behavior is unchanged.
     """
-    if next_rect is None or board_rect.width <= 0 or board_rect.height <= 0:
+    fractions = _next_box_fractions(board_rect, next_rect)
+    if fractions is None:
         return frozenset()
-    fx0 = (next_rect.left - board_rect.left) / board_rect.width
-    fx1 = (next_rect.left + next_rect.width - board_rect.left) / board_rect.width
-    fy0 = (next_rect.top - board_rect.top) / board_rect.height
-    fy1 = (next_rect.top + next_rect.height - board_rect.top) / board_rect.height
-    # No overlap with the board's unit square [0, 1] x [0, 1].
-    if fx1 <= 0.0 or fx0 >= 1.0 or fy1 <= 0.0 or fy0 >= 1.0:
-        return frozenset()
+    fx0, fy0, fx1, fy1 = fractions
     masked: set[tuple[int, int]] = set()
     for r in range(rows):
         top, bottom = (r + CELL_MARGIN) / rows, (r + 1 - CELL_MARGIN) / rows
@@ -892,7 +961,15 @@ def run(
 
     app = QApplication.instance() or QApplication([])
     current_style, second_style = hint_styles(config)
-    window = OverlayWindow(board_rect, current_style, rows=config.rows, second_style=second_style)
+    window = OverlayWindow(
+        board_rect,
+        current_style,
+        rows=config.rows,
+        second_style=second_style,
+        # The next box may lie under this window; the overlay may not paint
+        # there, or the coach blinds its own preview reader.
+        keep_out=preview_keep_out(board_rect, next_rect),
+    )
     window.show()
 
     class TickSignals(QObject):
@@ -952,6 +1029,7 @@ __all__ = [
     "fill_warning",
     "hint_styles",
     "make_vision",
+    "preview_keep_out",
     "render_debug_frame",
     "rescore",
     "run",

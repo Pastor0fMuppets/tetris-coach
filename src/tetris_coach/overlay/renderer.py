@@ -23,6 +23,20 @@ transparency: the current piece gets a solid outline, the next piece a
 dashed one in a second colour. A fainter second mark would sit closer to
 the board background, which is the crowded band where ghosts and pale
 pieces already collide; a dash reads at a glance over any of them.
+
+THE BOARD IS NOT THE ONLY THING CAPTURED. There is a second grab every
+tick -- the NEXT-piece box -- and in the games this tool was built for
+that box floats INSIDE the board rectangle, so the overlay window, which
+is sized to the whole board, covers it. The invisibility argument above
+does not reach that reader at all: it is about the outer band of a BOARD
+cell, and the preview reader samples its own crop at pixel level, where a
+full-opacity stroke is not a translucent fill it can recognize but four
+solid bars through the middle of the piece it is trying to name. So the
+painters take a KEEP-OUT rectangle -- the next-piece capture, in
+board-relative pixels -- and no rectangle here is filled inside it (see
+:func:`keep_out_rect` and :data:`KEEP_OUT_SLACK`). The property is the
+same one and it is kept the same way: not by a rule that takes the paint
+back out, but by the paint never being there.
 """
 
 from __future__ import annotations
@@ -46,6 +60,20 @@ from ..vision.grid import (
 #: A pixel rectangle: (x, y, width, height), relative to the board region's
 #: top-left corner.
 Rect = tuple[float, float, float, float]
+
+#: A rectangle in board-relative FRACTIONS: (x0, y0, x1, y1), each in
+#: [0, 1]. Retina-agnostic, which is why the keep-out crosses module
+#: boundaries in this form: the overlay window measures itself in points
+#: and a captured frame may be twice that, and only ratios survive both.
+Fractions = tuple[float, float, float, float]
+
+#: Pixels the keep-out is grown by on every side. The painters snap their
+#: rectangles to whole pixels and fill them opaquely, so nothing spills on
+#: its own; this is for the rounding on the way IN -- a fraction of the
+#: board turned back into pixels against a raster whose size is not the
+#: one it was measured on. Over-stating the region the overlay must not
+#: touch is the safe direction, and one pixel of a hint is not a feature.
+KEEP_OUT_SLACK = 1
 
 # The band, as a share of a cell, that is INVISIBLE to both readers: the
 # part of the cell outside the central patch they sample. Anything drawn
@@ -165,6 +193,99 @@ def _snap_out(rect: Rect) -> Rect:
     return (float(left), float(top), float(max(1, right - left)), float(max(1, bottom - top)))
 
 
+def keep_out_rect(
+    keep_out: Fractions | None, board_width: float, board_height: float
+) -> Rect | None:
+    """The pixel rectangle the overlay may not paint in, on this raster.
+
+    ``keep_out`` is the NEXT-piece capture as a share of the board region
+    (:func:`~tetris_coach.app.preview_keep_out`), and this is that share
+    against a concrete board size: the overlay window's own, in points, or
+    a captured frame's, in pixels. ``None`` in, ``None`` out, which is the
+    ordinary case -- a next box drawn somewhere else on screen is not
+    under the overlay at all and nothing here applies.
+
+    Rounded OUTWARD and then grown by :data:`KEEP_OUT_SLACK`, because what
+    is being answered is "could a painted pixel land inside the second
+    grab", and the honest answer to that has to round the way that cannot
+    be wrong.
+    """
+    if keep_out is None:
+        return None
+    fx0, fy0, fx1, fy1 = keep_out
+    left = math.floor(fx0 * board_width) - KEEP_OUT_SLACK
+    top = math.floor(fy0 * board_height) - KEEP_OUT_SLACK
+    right = math.ceil(fx1 * board_width) + KEEP_OUT_SLACK
+    bottom = math.ceil(fy1 * board_height) + KEEP_OUT_SLACK
+    if right <= left or bottom <= top:
+        return None
+    return (float(left), float(top), float(right - left), float(bottom - top))
+
+
+def _overlaps(rect: Rect, other: Rect) -> bool:
+    x, y, w, h = rect
+    ox, oy, ow, oh = other
+    return x < ox + ow and x + w > ox and y < oy + oh and y + h > oy
+
+
+def _subtract(rect: Rect, keep_out: Rect) -> list[Rect]:
+    """``rect`` minus ``keep_out``, as up to four rectangles.
+
+    Subtraction rather than "drop the whole rectangle if it touches": an
+    outline side runs the full width of a cell, and a keep-out that
+    clipped whole sides would erase a hint two cells before the panel
+    actually reaches it. What is left is drawn; what is inside is not
+    drawn at all, in either painter, which is what makes the next crop
+    provably free of this tool's paint.
+    """
+    x, y, w, h = rect
+    x1, y1 = x + w, y + h
+    kx, ky, kw, kh = keep_out
+    kx1, ky1 = kx + kw, ky + kh
+    if not _overlaps(rect, keep_out):
+        return [rect]
+    parts: list[Rect] = []
+    if ky > y:
+        parts.append((x, y, w, ky - y))
+    if ky1 < y1:
+        parts.append((x, ky1, w, y1 - ky1))
+    top, bottom = max(y, ky), min(y1, ky1)
+    if kx > x:
+        parts.append((x, top, kx - x, bottom - top))
+    if kx1 < x1:
+        parts.append((kx1, top, x1 - kx1, bottom - top))
+    return [part for part in parts if part[2] > 0 and part[3] > 0]
+
+
+def _clip(rects: list[Rect], keep_out: Rect | None) -> list[Rect]:
+    """``rects`` with everything inside ``keep_out`` removed."""
+    if keep_out is None:
+        return rects
+    out: list[Rect] = []
+    for rect in rects:
+        out.extend(_subtract(rect, keep_out))
+    return out
+
+
+def _badge_rects(
+    move: Move, cell_width: float, cell_height: float, style: HintStyle, keep_out: Rect | None
+) -> list[Rect]:
+    """The badge's rectangle, or none at all.
+
+    The badge is the one thing here that is not a rectangle -- a disc with
+    a digit in it -- so it is dropped whole rather than clipped when it
+    reaches the keep-out. Half a disc with half a digit in it is not a
+    rotation count anybody can read, and an all-or-nothing rule is one
+    both painters can follow identically without Qt needing a clip region.
+    """
+    if not (style.show_rotation_badge and move.rotation.index):
+        return []
+    rect = _snap_out(rotation_badge_rect(move, cell_width, cell_height))
+    if keep_out is not None and _overlaps(rect, keep_out):
+        return []
+    return [rect]
+
+
 def _side_rects(
     x0: float, y0: float, x1: float, y1: float, depth_x: float, depth_y: float, dashed: bool
 ) -> list[Rect]:
@@ -269,8 +390,22 @@ def rotation_badge_rect(move: Move, cell_width: float, cell_height: float) -> Re
     )
 
 
+def _fill_rects(move: Move, cell_width: float, cell_height: float, style: HintStyle) -> list[Rect]:
+    """The hint's fill rectangles, on whole pixels; empty when there is no fill."""
+    if style.fill_opacity <= 0.0:
+        return []
+    return [
+        _snap(x, y, x + w, y + h)
+        for x, y, w, h in placement_cell_rects(move, cell_width, cell_height, style.inset)
+    ]
+
+
 def hint_paint_rects(
-    move: Move, cell_width: float, cell_height: float, style: HintStyle | None = None
+    move: Move,
+    cell_width: float,
+    cell_height: float,
+    style: HintStyle | None = None,
+    keep_out: Rect | None = None,
 ) -> list[Rect]:
     """Every pixel rectangle this hint puts paint in, opaque or not.
 
@@ -278,14 +413,17 @@ def hint_paint_rects(
     question the invisibility property is about. The badge is included as
     its bounding rectangle rather than as the disc actually drawn, which
     over-states the paint and is the safe direction to be wrong in.
+
+    ``keep_out`` is the region the overlay must leave alone -- the
+    next-piece capture, which in the games this was built for lies under
+    the overlay window (see this module's docstring). Nothing inside it is
+    returned, so the answer stays the single one: what is here is what is
+    painted.
     """
     style = style or HintStyle()
     rects = outline_rects(move, cell_width, cell_height, style)
-    if style.fill_opacity > 0.0:
-        rects.extend(placement_cell_rects(move, cell_width, cell_height, style.inset))
-    if style.show_rotation_badge and move.rotation.index:
-        rects.append(_snap_out(rotation_badge_rect(move, cell_width, cell_height)))
-    return rects
+    rects.extend(_fill_rects(move, cell_width, cell_height, style))
+    return _clip(rects, keep_out) + _badge_rects(move, cell_width, cell_height, style, keep_out)
 
 
 def paint_hint(
@@ -294,6 +432,7 @@ def paint_hint(
     cell_width: float,
     cell_height: float,
     style: HintStyle | None = None,
+    keep_out: Rect | None = None,
 ) -> NDArray[np.uint8]:
     """``frame`` with the hint painted on it: the headless mirror of :func:`draw_hint`.
 
@@ -312,6 +451,9 @@ def paint_hint(
     skips where PySide6 is absent, so the bridge is checked wherever the
     overlay can actually run and a headless run stays green.
 
+    ``keep_out`` is the region the overlay must not paint in, in this
+    frame's own pixels; see :func:`keep_out_rect`.
+
     ``frame`` is BGR, the order the capture pipeline produces, and is not
     modified: a copy comes back.
     """
@@ -321,18 +463,12 @@ def paint_hint(
         raise ValueError(f"paint_hint needs a hex colour, not {style.color!r}")
     out = np.array(frame, dtype=np.uint8, copy=True)
     colour = np.asarray(paint.color, dtype=np.float64)[: out.shape[2]]
-    if style.fill_opacity > 0.0:
-        for rect in placement_cell_rects(move, cell_width, cell_height, style.inset):
-            _blend(
-                out,
-                _snap(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]),
-                colour,
-                style.fill_opacity,
-            )
-    for rect in outline_rects(move, cell_width, cell_height, style):
+    for rect in _clip(_fill_rects(move, cell_width, cell_height, style), keep_out):
+        _blend(out, rect, colour, style.fill_opacity)
+    for rect in _clip(outline_rects(move, cell_width, cell_height, style), keep_out):
         _blend(out, rect, colour, 1.0)
-    if style.show_rotation_badge and move.rotation.index:
-        _blend(out, _snap_out(rotation_badge_rect(move, cell_width, cell_height)), colour, 1.0)
+    for rect in _badge_rects(move, cell_width, cell_height, style, keep_out):
+        _blend(out, rect, colour, 1.0)
     return out
 
 
@@ -354,6 +490,7 @@ def draw_hint(
     cell_width: float,
     cell_height: float,
     style: HintStyle | None = None,
+    keep_out: Rect | None = None,
 ) -> None:
     """Paint one placement hint onto the (transparent) overlay window.
 
@@ -362,6 +499,12 @@ def draw_hint(
     is decided here. Antialiasing is off for them so a filled rectangle
     covers exactly the whole pixels it was computed on; the badge, which
     is a disc with a digit in it, turns it back on for itself.
+
+    ``keep_out`` is subtracted from the rectangles in that same pure
+    geometry rather than applied here as a Qt clip region, so the two
+    painters cannot come to different answers about which pixels the
+    keep-out saves -- the one thing this function is not allowed to
+    decide for itself.
     """
     if not HAVE_QT:  # pragma: no cover - macOS only
         raise RuntimeError("draw_hint requires PySide6 (macOS overlay runtime)")
@@ -372,12 +515,12 @@ def draw_hint(
     if style.fill_opacity > 0.0:
         fill = QColor(color)
         fill.setAlphaF(style.fill_opacity)
-        for x, y, w, h in placement_cell_rects(move, cell_width, cell_height, style.inset):
-            painter.fillRect(QRectF(*_snap(x, y, x + w, y + h)), fill)
-    for x, y, w, h in outline_rects(move, cell_width, cell_height, style):
+        for rect in _clip(_fill_rects(move, cell_width, cell_height, style), keep_out):
+            painter.fillRect(QRectF(*rect), fill)
+    for x, y, w, h in _clip(outline_rects(move, cell_width, cell_height, style), keep_out):
         painter.fillRect(QRectF(x, y, w, h), color)
 
-    if style.show_rotation_badge and move.rotation.index:
+    if _badge_rects(move, cell_width, cell_height, style, keep_out):
         _draw_rotation_badge(painter, move, cell_width, cell_height, color)
 
 
@@ -406,12 +549,15 @@ __all__ = [
     "DEFAULT_NEXT_HINT_COLOR",
     "HINT_BAND",
     "HINT_FILL_OPACITY",
+    "KEEP_OUT_SLACK",
     "OUTLINE_DEPTH",
     "PATCH_CLEARANCE",
+    "Fractions",
     "HintStyle",
     "Rect",
     "draw_hint",
     "hint_paint_rects",
+    "keep_out_rect",
     "outline_rects",
     "paint_hint",
     "placement_cell_rects",

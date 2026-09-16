@@ -24,6 +24,19 @@ the hint blanked every other frame at 15 fps
 fixed by teaching the reader to recognize the paint. This design removes
 the question instead, and the recognition stays in place behind it.
 
+THERE ARE TWO CAPTURES A TICK AND SO TWO READERS. The board crop, whose
+cells have a sampled patch for the paint to miss, and the NEXT-piece crop,
+which has no cell grid at all and is read at pixel level
+(``vision.colour_preview``). In the games this tool was built for that
+second crop lies INSIDE the board rectangle, and the overlay window is
+sized to the whole board -- so the hints are painted straight across it,
+and the argument above says nothing about that reader. It is a separate
+property with a separate mechanism (``app.preview_keep_out``: the overlay
+does not paint in the rectangle the second grab reads) and it is measured
+here separately: every frame of every window is handed the next crop as
+the capture would really produce it, with the overlay's own paint
+composited in.
+
 Two things this file deliberately does NOT do:
 
 * It does not compare a reading against the truth oracle. The committed
@@ -46,7 +59,8 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from tetris_coach.app import CoachConfig, CoachEngine, hint_styles
+from tetris_coach.app import CoachConfig, CoachEngine, hint_styles, preview_keep_out
+from tetris_coach.capture.screen import Rect
 from tetris_coach.core.board import Board
 from tetris_coach.core.pieces import ROTATIONS
 from tetris_coach.overlay.renderer import (
@@ -56,12 +70,14 @@ from tetris_coach.overlay.renderer import (
     PATCH_CLEARANCE,
     HintStyle,
     hint_paint_rects,
+    keep_out_rect,
     paint_hint,
 )
 from tetris_coach.race.runners import next_crops
 from tetris_coach.solver.search import Move
 from tetris_coach.truth.windows import WINDOWS, WindowSpec, load_window
 from tetris_coach.vision.colour_palette import CELL_MARGIN, CLEAN, cell_colors, own_paint_states
+from tetris_coach.vision.colour_preview import identify_preview
 from tetris_coach.vision.grid import HINT_FILL_OPACITY, OwnPaint
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -124,8 +140,24 @@ def _move(index: int, rows: int, cols: int = 10) -> Move:
     )
 
 
+def _keep_out(
+    spec: WindowSpec, frame: NDArray[np.uint8]
+) -> tuple[float, float, float, float] | None:
+    """The rectangle the overlay may not paint in, in this frame's pixels.
+
+    Exactly what ``app.run`` hands the overlay window, put through the
+    same two functions -- so what these tests paint is what a session
+    paints, keep-out included, rather than a re-derivation of it.
+    """
+    fractions = preview_keep_out(Rect(*spec.board_rect), Rect(*spec.next_rect))
+    return keep_out_rect(fractions, frame.shape[1], frame.shape[0])
+
+
 def _painted(
-    frame: NDArray[np.uint8], rows: int, hints: tuple[tuple[Move, HintStyle], ...]
+    frame: NDArray[np.uint8],
+    spec: WindowSpec,
+    hints: tuple[tuple[Move, HintStyle], ...],
+    keep_out: bool = True,
 ) -> NDArray[np.uint8]:
     """``frame`` with every hint painted at the frame's own cell geometry.
 
@@ -133,12 +165,52 @@ def _painted(
     also the one the overlay window derives from the board rectangle it is
     placed over. Retina scaling cancels: both are the region divided by the
     grid.
+
+    ``keep_out`` is False only for the controls, which measure what the
+    overlay would do WITHOUT the rule -- the comparison has to be able to
+    fail or it is measuring nothing.
     """
-    cell_h = frame.shape[0] / rows
+    cell_h = frame.shape[0] / spec.rows
     cell_w = frame.shape[1] / 10
+    rect = _keep_out(spec, frame) if keep_out else None
     out = frame
     for move, style in hints:
-        out = paint_hint(out, move, cell_w, cell_h, style)
+        out = paint_hint(out, move, cell_w, cell_h, style, keep_out=rect)
+    return out
+
+
+def _next_capture(
+    spec: WindowSpec,
+    board: NDArray[np.uint8],
+    painted: NDArray[np.uint8],
+    crop: NDArray[np.uint8] | None,
+) -> NDArray[np.uint8] | None:
+    """The NEXT crop as the capture would really produce it, overlay and all.
+
+    The two grabs are of two rectangles of the SAME screen, and in these
+    windows the second lies inside the first, so whatever the overlay
+    painted there is in both. This puts it there: every pixel the hints
+    changed in the board grab, written into the next grab at the screen
+    position it shares.
+
+    Only the CHANGED pixels, not the whole overlapping region, so that the
+    two captures' own moment-to-moment differences are not mistaken for
+    the overlay's doing -- what is being measured is the paint.
+    """
+    if crop is None:
+        return None
+    y0 = spec.next_rect[1] - spec.board_rect[1]
+    x0 = spec.next_rect[0] - spec.board_rect[0]
+    assert board.shape[:2] == spec.board_rect[3:1:-1], "fixture raster is not 1:1 with its rect"
+    assert crop.shape[:2] == spec.next_rect[3:1:-1], "fixture crop is not 1:1 with its rect"
+    top, bottom = max(0, -y0), min(crop.shape[0], board.shape[0] - y0)
+    left, right = max(0, -x0), min(crop.shape[1], board.shape[1] - x0)
+    if bottom <= top or right <= left:
+        return crop
+    window = (slice(y0 + top, y0 + bottom), slice(x0 + left, x0 + right))
+    changed = np.any(painted[window] != board[window], axis=-1)
+    out = crop.copy()
+    out[top:bottom, left:right][changed] = painted[window][changed]
     return out
 
 
@@ -147,14 +219,23 @@ def _read(
     tracker: str,
     hints: list[tuple[tuple[Move, HintStyle], ...]] | None,
 ) -> list[Reading]:
-    """One window through one tracker, with ``hints`` painted over each frame."""
+    """One window through one tracker, with ``hints`` painted over each frame.
+
+    BOTH captures are painted. Handing the engine a pristine next crop
+    while the board crop carries the overlay would measure a session that
+    does not exist: the overlay covers the whole board rectangle, and in
+    every one of these windows the next box is inside it.
+    """
     config = CoachConfig(rows=spec.rows, tracker=tracker, hint_fill_opacity=SHIPPED_FILL)
     engine = CoachEngine(config, unobservable_cells=spec.geometry().unobservable)
     names, boards = load_window(FIXTURES, spec)
     crops = next_crops(FIXTURES, spec, names)
     out: list[Reading] = []
-    for index, (board, crop) in enumerate(zip(boards, crops, strict=True)):
-        frame = board if hints is None else _painted(board, spec.rows, hints[index])
+    for index, (board, raw_crop) in enumerate(zip(boards, crops, strict=True)):
+        frame, crop = board, raw_crop
+        if hints is not None:
+            frame = _painted(board, spec, hints[index])
+            crop = _next_capture(spec, board, frame, raw_crop)
         engine.process_frame(frame, crop)
         reading = engine.last_reading
         assert reading is not None
@@ -319,7 +400,7 @@ def test_no_hint_changes_one_sampled_patch(name: str) -> None:
             (_move(2 * index, spec.rows), CURRENT_STYLE),
             (_move(2 * index + 1, spec.rows), NEXT_STYLE),
         )
-        painted = _painted(frame, spec.rows, hints)
+        painted = _painted(frame, spec, hints)
         before = cell_colors(frame, spec.rows, 10, CELL_MARGIN)
         after = cell_colors(painted, spec.rows, 10, CELL_MARGIN)
         moved = np.argwhere(np.any(before != after, axis=-1))
@@ -367,6 +448,10 @@ def test_the_engine_own_pair_of_hints_changes_no_patch_either(name: str) -> None
     collision is not something a live session can produce and
     :func:`_already_painted` says why; what it cannot do either way is
     reach a patch, and that is what is asserted.
+
+    The NEXT crop is asserted on directly: it is a separate capture with
+    no patches to miss, so the property there is that the overlay changed
+    not one pixel of it.
     """
     spec = _spec(name)
     config = CoachConfig(rows=spec.rows, hint_fill_opacity=SHIPPED_FILL)
@@ -377,12 +462,16 @@ def test_the_engine_own_pair_of_hints_changes_no_patch_either(name: str) -> None
     crops = next_crops(FIXTURES, spec, names)
     on_screen: Pair = ()
     pairs = 0
-    for index, (board, crop) in enumerate(zip(boards, crops, strict=True)):
-        frame = _painted(board, spec.rows, on_screen) if on_screen else board
+    for index, (board, raw_crop) in enumerate(zip(boards, crops, strict=True)):
+        frame = _painted(board, spec, on_screen) if on_screen else board
+        crop = _next_capture(spec, board, frame, raw_crop)
         before = cell_colors(board, spec.rows, 10, CELL_MARGIN)
         after = cell_colors(frame, spec.rows, 10, CELL_MARGIN)
         moved = np.argwhere(np.any(before != after, axis=-1))
         assert not len(moved), f"{name} frame {index}: patches changed at {moved.tolist()[:5]}"
+        assert crop is None or np.array_equal(crop, raw_crop), (
+            f"{name} frame {index}: the overlay reached the next-piece capture"
+        )
         hint = engine.process_frame(frame, crop)
         second = engine.second_hint
         on_screen = tuple(
@@ -424,3 +513,119 @@ def test_the_measurement_would_notice_a_fill(tracker: str) -> None:
     filled = HintStyle(color=DEFAULT_HINT_COLOR, fill_opacity=0.5)
     schedule = [((_move(i, spec.rows), filled),) for i in range(len(boards))]
     assert _read(spec, tracker, schedule) != _raw("live_session", tracker)
+
+
+# -- the second reader: the NEXT-piece capture -------------------------
+
+
+def _over_the_preview(spec: WindowSpec) -> Move:
+    """An O placed exactly on the cells the game's NEXT panel covers.
+
+    Those cells are the whole exposure: the panel floats inside the board
+    rectangle, the overlay window is sized to that rectangle, so a hint
+    there is painted across the box the next grab reads. In every
+    committed window they are (0, 8), (0, 9), (1, 8), (1, 9), and an O in
+    its one rotation covers all four.
+    """
+    covered = sorted(spec.geometry().unobservable)
+    assert covered, f"{spec.name}: no cell is under the next box"
+    row = min(r for r, _ in covered)
+    col = min(c for r, c in covered if r == row)
+    return Move(
+        piece="O",
+        rotation=ROTATIONS["O"][0],
+        col=min(col, 8),
+        row=row,
+        score=0.0,
+        lines_cleared=0,
+        board=Board((0,) * spec.rows),
+    )
+
+
+@pytest.mark.parametrize("style", [CURRENT_STYLE, NEXT_STYLE])
+@pytest.mark.parametrize("name", WINDOW_NAMES)
+def test_no_hint_reaches_the_next_piece_capture(name: str, style: HintStyle) -> None:
+    """The property for the second reader: the next crop is untouched.
+
+    Pixel equality on the crop itself rather than a reading off it, for
+    the same reason the patch test above is pixel equality: a reader that
+    is handed the identical image cannot report anything different, and
+    that is the property at its source. Both styles, because the dashed
+    hint's colour is one the preview reader is not even told about -- it
+    would have no way to recognize that paint, so it must not meet it.
+
+    The placement is the worst case rather than a typical one: an O on the
+    four cells the panel covers, which is where the hint really does land
+    (a near-top-out board puts it there often), painted on every frame of
+    every window.
+    """
+    spec = _spec(name)
+    names, boards = load_window(FIXTURES, spec)
+    crops = next_crops(FIXTURES, spec, names)
+    move = _over_the_preview(spec)
+    for index, (board, raw_crop) in enumerate(zip(boards, crops, strict=True)):
+        if raw_crop is None:
+            continue
+        painted = _painted(board, spec, ((move, style),))
+        crop = _next_capture(spec, board, painted, raw_crop)
+        assert crop is not None
+        changed = int(np.count_nonzero(np.any(crop != raw_crop, axis=-1)))
+        assert not changed, f"{name} frame {index}: {changed} pixels of the next crop are ours"
+
+
+def _preview_piece(crop: NDArray[np.uint8]) -> str | None:
+    reading = identify_preview(crop, OwnPaint.for_hint_color(DEFAULT_HINT_COLOR, opacity=0.0))
+    return None if reading is None else reading.piece
+
+
+@cache
+def _raw_preview(name: str) -> tuple[str | None, ...]:
+    """What the preview reader names on each bare frame of a window."""
+    spec = _spec(name)
+    names, _boards = load_window(FIXTURES, spec)
+    return tuple(
+        None if crop is None else _preview_piece(crop) for crop in next_crops(FIXTURES, spec, names)
+    )
+
+
+@pytest.mark.parametrize("style", [CURRENT_STYLE, NEXT_STYLE])
+def test_the_measurement_would_notice_paint_in_the_next_box(style: HintStyle) -> None:
+    """The control: without the keep-out, the preview reader goes blind.
+
+    The same hint, the same frames, the same composite -- and the keep-out
+    off. The next crop changes and ``identify_preview`` stops naming a
+    piece at all, on EVERY frame that named one to begin with. That is the
+    failure the rule exists to prevent, and the proof that the test above
+    is measuring something.
+
+    Both styles, because it is the full-opacity STROKE that does this and
+    both hints have one. The translucent fill the overlay used to draw is
+    the one thing here the preview reader can recognize
+    (``colour_preview.PAINT_FILL_MAX``); moving the hint's weight out of
+    the fill and into the stroke is exactly what put it out of reach.
+
+    Losing the next piece is not cosmetic: the hint drops to 1 ply, the
+    second hint disappears with the precompute that feeds it, and because
+    the next piece is one of the inputs the hint is solved for, the hint
+    MOVES -- which moves the paint, which can make the box readable again.
+    That loop is the stutter, from a new direction.
+    """
+    spec = _spec("spawn_latency")
+    _names, boards = load_window(FIXTURES, spec)
+    crops = next_crops(FIXTURES, spec, _names)
+    move = _over_the_preview(spec)
+    readable = _raw_preview("spawn_latency")
+    blinded = 0
+    for board, raw_crop, before in zip(boards, crops, readable, strict=True):
+        assert raw_crop is not None
+        painted = _painted(board, spec, ((move, style),), keep_out=False)
+        crop = _next_capture(spec, board, painted, raw_crop)
+        assert crop is not None
+        assert not np.array_equal(crop, raw_crop)
+        if before is None:
+            continue  # the box says nothing on this frame either way
+        assert _preview_piece(crop) is None
+        blinded += 1
+    # Most of the window is readable; a control that blinded three frames
+    # of a hundred and sixty would not be saying much.
+    assert blinded >= len(boards) // 2, f"only {blinded} of {len(boards)} frames were readable"
