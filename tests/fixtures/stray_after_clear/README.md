@@ -26,10 +26,22 @@ same column, and again nowhere near the piece it displaces. The Z is at
 the top edge on (0,4) (0,5) while the stray sits at the bottom of column
 8, so the two candidates share no cell and no neighbourhood.
 
-Two things this window adds over `hint_stutter`:
+The stray is the same thing it is in `hint_stutter`: this tool's own
+rotation badge, hung at the corner of the hint's bounding box. On 00555
+the hint is (9,9) (10,8) (10,9) (11,8) -- an S/Z orientation whose
+bounding-box corner (9, 8) the piece does not occupy -- and the badge puts
+134 hint-coloured pixels into the top margin of that empty cell. See
+`hint_stutter/README.md` for the mechanism and the three fixes.
+
+Three things this window adds over that one:
 
 - the stray is at a DIFFERENT cell, so a fix that hard-codes (8, 8) or
   reasons about one screen position does not pass here;
 - the piece it displaces is two cells wide at spawn (00554-00563), which
   is the shortest legitimate clipped sighting in the corpus. Whatever rule
-  admits a partial sighting has to keep admitting this one.
+  admits a partial sighting has to keep admitting this one;
+- it holds the corpus' only S (falling, 00545) and its only L named by the
+  game's own landing preview (00582-00585, where the L never descends past
+  the top edge inside the window and three cells name no tetromino). That
+  L is the first episode in the corpus the oracle names by anything other
+  than shape.

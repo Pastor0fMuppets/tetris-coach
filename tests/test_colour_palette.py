@@ -7,13 +7,20 @@ is this tool's own paint rather than the game's, and what the NEXT box holds
 
 from __future__ import annotations
 
+import itertools
+import json
+import math
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from tetris_coach.overlay.renderer import BADGE_HEIGHT
 from tetris_coach.vision.colour_palette import (
+    ANGLE_TOL,
     CLEAN,
     EMPTY,
+    LINE_TOL,
     OURS,
     PAINTED,
     Palette,
@@ -116,6 +123,56 @@ def test_a_disc_of_hint_colour_in_a_patch_is_our_drawing() -> None:
 
 
 # -- the NEXT box -----------------------------------------------------
+
+
+def test_the_closest_two_colours_this_game_draws_and_what_is_left_over() -> None:
+    """The matching margin, pinned, because the corpus is what sets it.
+
+    Both gates compare a cell to a class's RAY: an angle (ANGLE_TOL) and
+    the perpendicular distance to it (LINE_TOL). What is left over is the
+    separation between the two nearest colours the game actually renders,
+    and that shrank when ``hint_stutter`` brought a J into the corpus:
+
+        six windows    T / I    14.48 deg   13.22 units   was the closest
+        eight windows  J / I     5.90 deg   11.62 units   is the closest
+
+    against tolerances of 5.0 degrees and 10.0 units. So the margin went
+    from 9.5 degrees and 3.2 units to 0.90 and 1.62. Nothing in the corpus
+    misclassifies -- ``test_race`` names all 449 judged frames right -- but
+    a claim of an order of magnitude of headroom would now be false, and a
+    future window that narrows this further should fail here rather than
+    fail on somebody's screen.
+
+    The colours are the oracle's own derived map, not a compiled-in
+    palette: each window works them out from shape alone.
+    """
+    payload = json.loads((Path(__file__).parent / "fixtures" / "oracle_truth.json").read_text())
+    colours = {
+        name: np.array([float(x) for x in key.split(",")])
+        for window in payload["windows"]
+        for key, name in window["colour_names"].items()
+    }
+    assert set(colours) == {"I", "J", "L", "O", "S", "T", "Z"}
+
+    background = np.array([252.0, 251.9, 250.9])  # this session's board ground
+    vectors = {name: colour - background for name, colour in colours.items()}
+
+    def separation(a: str, b: str) -> tuple[float, float]:
+        va, vb = vectors[a], vectors[b]
+        cos = float(np.dot(va, vb) / (np.linalg.norm(va) * np.linalg.norm(vb)))
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+        perpendicular = min(np.linalg.norm(va), np.linalg.norm(vb)) * math.sin(math.radians(angle))
+        return angle, float(perpendicular)
+
+    pairs = sorted((separation(a, b), a, b) for a, b in itertools.combinations(sorted(vectors), 2))
+    (angle, perpendicular), left, right = pairs[0]
+    assert {left, right} == {"I", "J"}
+    assert round(angle, 2) == 5.90
+    assert round(perpendicular, 2) == 11.62
+
+    # Both gates have to hold, so both margins matter and both are small.
+    assert round(angle - ANGLE_TOL, 2) == 0.90
+    assert round(perpendicular - LINE_TOL, 2) == 1.62
 
 
 def test_a_sliver_of_hint_colour_on_a_cells_rim_is_our_drawing_not_our_fill() -> None:

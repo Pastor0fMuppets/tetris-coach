@@ -4,10 +4,10 @@ THE DEFAULT READER since the race in :mod:`tetris_coach.race`: ``app.py``
 reads frames with this unless ``--tracker shape`` asks for the other one,
 which is still there, still tested, and still answers the same questions
 from a different representation. What the two put on screen through the
-real engine, over the six committed windows and 422 frames, is pinned in
-``tests/test_engine_race.py``: no hint for the wrong piece against six, no
+real engine, over the eight committed windows and 474 frames, is pinned in
+``tests/test_engine_race.py``: no hint for the wrong piece against seven, no
 wait from a piece appearing to its hint against one to three frames, no
-target moving mid-flight against three, 4 blank frames against 25.
+target moving mid-flight against three, 4 blank frames against 32.
 
 The older design keeps ONE authoritative memory — the committed stack —
 and derives the falling piece as a set difference against it. Every error is
@@ -78,12 +78,12 @@ naming: a piece whose colour is unknown AND whose sighting is incomplete.
 Shape cannot name 1-3 cells (they fit several tetrominoes — that is the
 whole reason this design exists), so such a piece is tracked and reported
 with ``piece=None`` until it is whole or the NEXT box names its colour. It
-costs a cold start per colour and nothing after it: measured over the six
+costs a cold start per colour and nothing after it: measured over the eight
 committed windows, 15 frames in all carry a piece in flight with no name —
 14 of them absorbed_piece's opening T, unnamed until it is whole enough to
 spell itself because the NEXT box never shows it in that window, and 1
 ghost_session's first frame. Every other frame of every window names its
-piece.
+piece, the J and the Z the two newest windows brought included.
 """
 
 from __future__ import annotations
@@ -382,9 +382,9 @@ class ColourTracker:
         panel floating over the playfield -- a leaderboard, any modal drawn
         in one colour -- arrives as dozens of cells resting on nothing.
         Measured, it costs the corpus NOTHING: over all accepted board
-        frames of the six windows the largest airborne reading is 4 cells,
-        exactly one tetromino, never once more; the web page, fed past (1),
-        shows 58 in a single component.
+        frames of the eight windows the largest airborne reading is 4
+        cells, exactly one tetromino, never once more; the web page, fed
+        past (1), shows 58 in a single component.
 
         The two budgets are separate because they answer different
         questions and a single one cannot do both. What says "not a board"

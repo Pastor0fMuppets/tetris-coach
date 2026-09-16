@@ -43,14 +43,30 @@ deals are pale (a lavender and a mint, measured on a live session). An
 earlier version of this docstring called the margin "two orders of
 magnitude" of headroom; that was the separation between the colours, which
 is not the quantity the gate compares. The quantity the gate compares was
-measured over every cell of the six committed windows: the worst angle any
+measured over every cell of the committed windows: the worst angle any
 cell sits off its own class's ray is 1.15 degrees (0.90 units
-perpendicular), while the closest two DIFFERENT colours -- the pale
-periwinkle T and the blue I -- are 14.5 degrees apart, which puts that T
-13.2 units off the I's ray. Ten units of perpendicular tolerance left 3.2
-units of margin there; five degrees of angular tolerance leaves 9.5, and
-still admits the NEXT box's rendering of a piece, which is 0.3 degrees off
-the board's and 44 units away in magnitude.
+perpendicular). Against that, the gate still admits the NEXT box's
+rendering of a piece, which is 0.3 degrees off the board's and 44 units
+away in magnitude.
+
+THE MARGIN TO THE NEAREST OTHER COLOUR IS MUCH SMALLER THAN IT WAS, and
+the corpus is what shrank it rather than anything in the code. On six
+windows the closest two DIFFERENT colours were the pale periwinkle T and
+the blue I, 14.5 degrees apart, putting that T 13.2 units off the I's ray:
+3.2 units of margin under :data:`LINE_TOL` and 9.5 degrees under
+:data:`ANGLE_TOL`. ``hint_stutter`` brought this game's J, and J sits
+**5.90 degrees** off the I -- 11.62 units perpendicular, since a J cell is
+only 113 units from the background where an I cell is 293. The margins are
+therefore 0.90 degrees and 1.62 units, and the pair that decides them is
+now I/J.
+
+That is still a pass rather than a squeak -- the race names the falling
+piece correctly on all 449 judged frames, the J's whole descent included,
+and no cell of the corpus lands in the wrong class. But the headroom is no
+longer an order of magnitude, the two gates are now doing comparable work
+where ANGLE_TOL used to have all of it, and the next pale colour this game
+deals could be the one that does not fit. ``test_colour_palette`` pins the
+closest pair so it cannot narrow again unnoticed.
 
 A colour on the far side of the background is never a match however small
 its perpendicular distance: the ray is a RAY.
@@ -98,9 +114,9 @@ But it is an OUTLINE. The centre of the cell is pure background over 84% of
 the sampled patch, so a centre-patch sampler cannot see it at all, and
 neither this tracker nor the shipped one ever had to. The translucency rule
 therefore never once fired on a real landing preview. What it did fire on,
-over the six committed windows, was 26 cells of the line-clear flash on
-frames the oracle abstains from, and 332 cells of a browser page that had
-replaced the game.
+over the six windows that existed when it was removed, was 26 cells of the
+line-clear flash on frames the oracle abstains from, and 332 cells of a
+browser page that had replaced the game.
 
 Against that it erased whole pieces. Two shades of one hue are the same
 class by construction — same direction, different magnitude — so a piece

@@ -54,12 +54,44 @@ The next frame it flips back. That is the stutter.
 changes every frame, so its age is 0 on every frame it is read and it
 outranks a J that has held still.
 
-## Why the stray is admissible at all
+## What the stray cell is: THE COACH'S OWN ROTATION BADGE
 
-`_pick_falling` / `_rank` accept a sub-tetromino candidate ANYWHERE on the
-board. A partial sighting is only explicable where something hides the
-rest of the piece: clipped by the top edge of the board region, or under
-the NEXT panel (`unobservable_cells`). The J at (0,3) (0,4) (0,5) is the
-first; so are the three-cell readings at 00390 and 00392-00397, whose
-fourth cell is at (1,8) / (1,9) under the panel. A lone cell at row 8 in
-open board is neither.
+It is not noise, and it is not the game's landing preview. Cell (8, 8)
+holds no board content at all -- its sampled patch reads
+(252.0, 251.9, 250.9), the background, to within a tenth of a uint8 unit.
+What is in it is 122 pixels of `#00e5ff` across its **top margin**: the
+rotation badge of this tool's own hint, which on 00357 is drawn as a J at
+(8,9) (9,9) (10,8) (10,9).
+
+`rotation_badge_rect` hung the badge at `min(row), min(col)` -- the corner
+of the hint's BOUNDING BOX -- and for 6 of the 19 rotations that is a cell
+the piece does not occupy. Both T verticals, S and Z in one orientation
+each, one each of J and L. That is why the session's counts are
+{J: 16, Z: 11, T: 2} and why no I or O ever appears in them.
+
+On a cell of bare board the badge covers part of one edge and none of the
+sampled patch, so `own_paint_states` -- which told our translucent FILL
+from our opaque DRAWING by the patch alone -- called it a fill. Undoing a
+fill that is not there maps the board's own ground to a vector
+`alpha/(1-alpha)` of the way from the background AWAY from the hint
+colour: 55 units off, which is content, which floats, and whose colour
+class is re-interned every frame so its age is always 0 and it outranks
+everything.
+
+So the stutter is the coach reading its own drawing, and this window is
+the evidence for three separate fixes:
+
+- the badge now goes in the leftmost cell of the hint's TOP ROW, which
+  every rotation occupies;
+- `own_paint_states` recognizes our fill by its ring running along all
+  four sides of a cell, and calls anything else of ours opaque drawing --
+  skipped, never un-composited;
+- `_rank` admits a sub-tetromino candidate only where something could be
+  hiding the rest of it: clipped by the top edge, or under the NEXT panel
+  (`unobservable_cells`). The J at (0,3) (0,4) (0,5) is the first; so are
+  the three-cell readings at 00390 and 00392-00397, whose fourth cell is
+  at (1,8) / (1,9) under the panel. A lone cell at row 8 of open board is
+  neither.
+
+`tests/test_hint_stutter.py` replays this window and asserts all of it.
+All ten of its assertions fail against the reading that shipped.

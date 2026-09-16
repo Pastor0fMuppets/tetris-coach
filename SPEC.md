@@ -39,25 +39,25 @@ the tree:
   memory. Every error is permanent until something explains it away, which
   is what the resync/reset/heal/retract machinery exists to handle.
 
-**Why colour is the default.** Both were raced over the six consecutive
+**Why colour is the default.** Both were raced over the eight consecutive
 capture windows in `tests/fixtures/`, refereed by the independent
 pixel-derived answer sheet in `truth/` (`tests/fixtures/oracle_truth.json`),
 which no tracker code takes part in building. At the tracker boundary
 (`python -m tetris_coach.race`, pinned in `tests/test_race.py`), over the
-397 frames the oracle answers:
+449 frames the oracle answers:
 
 | tracker   | judged | right | WRONG | silent | board | worst freeze |
 | --------- | ------ | ----- | ----- | ------ | ----- | ------------ |
-| shape     | 397    | 366   | 6     | 25     | 91.9% | 27 frames    |
-| colour    | 397    | 397   | 0     | 0      | 100%  | none         |
+| shape     | 449    | 410   | 7     | 32     | 92.6% | 27 frames    |
+| colour    | 449    | 449   | 0     | 0      | 100%  | none         |
 
 and through the real `CoachEngine`, which is what the user actually sees
 (the second table of the same command, pinned in
-`tests/test_engine_race.py`), over 422 frames:
+`tests/test_engine_race.py`), over 474 frames:
 
 | tracker | hints | MISNAMED | INVENTED | stale | latency p50/max | target moves | blank |
 | ------- | ----- | -------- | -------- | ----- | --------------- | ------------ | ----- |
-| shape   | 397   | 6        | 0        | 49    | 1 / 3 frames    | 3            | 25    |
+| shape   | 442   | 7        | 0        | 49    | 1 / 3 frames    | 3            | 32    |
 | colour  | 418   | 0        | 0        | 21    | 0 / 0 frames    | 0            | 4     |
 
 MISNAMED can only be counted where the oracle answers, and what it abstains

@@ -105,13 +105,13 @@ class CoachConfig:
     # by the same policy either way.
     #
     # The default is the colour reader because of what the two put ON
-    # SCREEN over the six committed windows, replayed through this very
+    # SCREEN over the eight committed windows, replayed through this very
     # class (`python -m tetris_coach.race`, pinned in
-    # tests/test_engine_race.py): over 422 frames it drew 0 hints for the
-    # wrong piece against the shipped reader's 6, was never late (median 0
+    # tests/test_engine_race.py): over 474 frames it drew 0 hints for the
+    # wrong piece against the shipped reader's 7, was never late (median 0
     # frames from a piece appearing to its hint, against 1 and a worst case
     # of 3), never moved a target mid-flight against 3, and left the
-    # overlay blank on 4 frames against 25.
+    # overlay blank on 4 frames against 32.
     #
     # "shape" stays reachable as an escape hatch (--tracker shape). The two
     # fail on different evidence -- the colour reader refuses a frame whose

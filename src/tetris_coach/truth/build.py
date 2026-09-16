@@ -2,7 +2,7 @@
 
 ``python -m tetris_coach.truth.build`` regenerates
 ``tests/fixtures/oracle_truth.json`` from the committed capture windows.
-The file is checked in: deriving it takes a minute and reads 542 PNGs, and
+The file is checked in: deriving it takes a minute and reads 634 PNGs, and
 a race between two trackers should be comparing them against the same
 frozen answer sheet rather than against whatever the oracle happens to say
 today. ``tests/test_truth_oracle.py`` fails if the two drift apart.
