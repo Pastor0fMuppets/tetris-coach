@@ -134,3 +134,39 @@ hint distances are unchanged everywhere else (absorbed_piece 15,
 ghost_session 2, live_session 2 — before and after), no window gains or
 loses a lock or a reset, and no frame in any window carries a hint for a
 piece other than the one the tracker has committed as falling.
+
+## What else is in this window: board_00477, the badge over a piece
+
+Sampled and not consecutive, this window is left out of the oracle and of
+the race, and it has been left out of measurements it should have been in.
+The admission rule in `ColourTracker._rank` (a sub-tetromino sighting is
+only admissible where something could be hiding the rest) was committed
+with "measured over all nine committed windows, every one of the 170
+sub-tetromino sightings the tracker picks is explicable" — measured over a
+corpus this window was not in. Replayed, it holds 5 more such sightings,
+and one of them was the counterexample:
+
+    board_00477   falling T at (2,1) (3,1) (3,2)
+
+The fourth cell is (4,1), and (4,1) is not empty. Its commonest colour is
+the piece's own pale periwinkle — the same value as (3,1), 1073 of its
+pixels — under 520 pixels of `#00e5ff`: this tool's own rotation badge,
+from the days it was hung in the cell ABOVE the hint's top-left corner,
+which is a cell the falling piece passes through. `Palette.classify` skips
+a cell our opaque drawing covers, so the cell arrives EMPTY whatever the
+game drew in it, and the sighting is three cells in open board.
+
+What refusing it costs is not a blank frame, it is a wrong one. With the
+top edge and the NEXT panel as the only hiding places, this frame reads
+
+    falling I at (4,0) (5,0) (6,0) (7,0)
+
+— a grounded column of the settled stack — and hands the solver a board
+with a four-cell hole in column 0: a hint solved for a piece that is not
+in flight. So `_hidden` has a third place in it now, our own opaque paint,
+and this frame is the captured evidence for it (`tests/
+test_colour_tracker_sessions.py::test_a_piece_cell_under_our_own_badge_is_read_as_hidden`).
+
+With that place counted, all 175 sub-tetromino sightings across all nine
+windows are explicable, and turning the rule off changes no frame of any
+window — this one included.

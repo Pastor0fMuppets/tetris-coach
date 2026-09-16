@@ -760,10 +760,28 @@ class ColourTracker:
 
         This is the rule the shipped shape tracker enforced and the
         rewrite dropped, and it is restored here as a BOUND rather than as
-        a fix: measured over all nine committed windows, every one of the
-        170 sub-tetromino sightings the tracker picks is explicable, so
-        this changes not one frame of the corpus today. What it changes is
-        what a stray cell can cost. The coach's own rotation badge, read
+        a fix: measured over all nine committed windows -- ``pale_preview``
+        included, which is sampled rather than consecutive and which the
+        first version of this count quietly left out -- the tracker picks
+        175 sub-tetromino sightings, and with this rule off or on it reads
+        every one of those frames the same way. So it changes not one
+        frame of the corpus.
+
+        WHAT THE LEFT-OUT WINDOW HELD, because leaving it out is what made
+        the earlier sentence ("170 over nine windows") true: the one
+        sighting the rule refused was in it. ``pale_preview`` 00477 is a
+        T at (2,1) (3,1) (3,2) whose fourth cell, (4,1), holds the piece's
+        own pale colour under 520 pixels of ours -- the rotation badge, in
+        the days it was hung ABOVE the hint. Refused, the frame read a
+        grounded column of the settled stack as the piece instead, ``I``
+        at (4,0) (5,0) (6,0) (7,0), and handed the solver a board with a
+        four-cell hole in column 0: a hint solved for a piece that is not
+        in flight, which is the worse of the two errors by far. That frame
+        is the captured evidence for :meth:`_hidden`'s third place, and
+        with it counted the window costs nothing.
+
+        What the rule changes is what a stray cell can cost. The coach's
+        own rotation badge, read
         as content by a reader that has since been fixed
         (:func:`~tetris_coach.vision.colour_palette.own_paint_states`),
         was a single cell at row 8 of open board, and it took the hint off

@@ -34,8 +34,16 @@ from PIL import Image
 
 from tetris_coach.race.measures import load_truth
 from tetris_coach.vision import colour_tracker
-from tetris_coach.vision.colour_palette import EMPTY, EMPTY_DIST, board_colours, flat_cells
+from tetris_coach.vision.colour_palette import (
+    EMPTY,
+    EMPTY_DIST,
+    OURS,
+    board_colours,
+    flat_cells,
+    own_paint_states,
+)
 from tetris_coach.vision.colour_tracker import ColourTracker, Event, FrameReport, _grounded
+from tetris_coach.vision.grid import HINT_PAINT
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ROWS, COLS = 12, 10
@@ -196,6 +204,53 @@ def test_our_own_paint_never_arrives_as_a_piece() -> None:
     assert {r.stack_rows[11] for r in reports} == {0b1100000000}
     assert all(Event.PIECE_LOCKED not in r.events for r in reports)
     assert {r.falling.piece for r in reports if r.falling} == {"I"}
+
+
+def test_a_piece_cell_under_our_own_badge_is_read_as_hidden() -> None:
+    """pale_preview 00477, the corpus' one frame of the third hiding place.
+
+    A T at (2,1) (3,1) (3,2) whose fourth cell is (4,1) -- and (4,1) holds
+    the piece's own pale colour under our rotation badge, from the days it
+    was hung ABOVE the hint's top-left corner. ``Palette.classify`` skips a
+    cell our opaque drawing covers, so the cell arrives EMPTY and the
+    sighting is three cells in open board.
+
+    Refusing it does not cost a blank frame, it costs a WRONG one: with
+    the top edge and the panel as the only hiding places this frame reads
+    ``I`` at (4,0) (5,0) (6,0) (7,0) -- a grounded column of the settled
+    stack -- and hands the solver a board with a four-cell hole in column
+    0. A hint solved for a piece that is not in flight is the worse of the
+    two errors, and this is a captured frame of it.
+    """
+    numbers, reports = replay("pale_preview")
+    report = reports[numbers.index("00477")]
+    assert report.falling is not None and report.falling.piece == "T"
+    assert sorted(report.falling.cells) == [(2, 1), (3, 1), (3, 2)]
+    assert [r for r, mask in enumerate(report.stack_rows) if mask & 1] == list(range(4, 12))
+
+    image = load(FIXTURES / "pale_preview" / "board_00477.png")
+    states = own_paint_states(image, ROWS, COLS)
+    assert states[4, 1] == OURS
+    # The piece really is under there: the cell's commonest colour is the
+    # one the cells above it are drawn in, with our badge over the rest.
+    height, width = image.shape[0] / ROWS, image.shape[1] / COLS
+
+    def commonest(r: int, c: int) -> tuple[int, ...]:
+        patch = image[
+            int(r * height) : int((r + 1) * height), int(c * width) : int((c + 1) * width)
+        ].reshape(-1, 3)
+        values, counts = np.unique(patch, axis=0, return_counts=True)
+        return tuple(int(v) for v in values[int(np.argmax(counts))])
+
+    assert commonest(4, 1) == commonest(3, 1)
+    assert HINT_PAINT is not None
+    assert np.any(np.all(image[int(4 * height) : int(5 * height)] == HINT_PAINT.color, axis=-1))
+
+    # And the rule that makes the difference is exactly the third place.
+    tracker = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=COVERED)
+    cells = frozenset({(2, 1), (3, 1), (3, 2)})
+    assert not tracker._explicable(cells, ~tracker._observable)
+    assert tracker._explicable(cells, ~tracker._observable | (states == OURS))
 
 
 def test_the_ghost_windows_hold_no_ghost() -> None:
