@@ -3,8 +3,9 @@
 A game-agnostic Tetris training overlay for macOS. You highlight the region of the
 screen where any Tetris game is being played; Tetris Coach watches the board, computes
 the optimal placement for the current piece (using the next piece for lookahead), and
-draws a ghost outline of that placement on a transparent click-through overlay — so a
-human player can learn optimal stacking by playing toward the hint.
+draws that placement — and where the piece after it goes — on a transparent
+click-through overlay, so a human player can learn optimal stacking by playing toward
+the hint.
 
 **It never touches the game.** No keystrokes, no memory reading, no integration —
 purely visual: screen capture in, overlay out. Built as a training tool to develop
@@ -22,8 +23,45 @@ placement intuition.
    all placements of the next piece, scored by a Dellacherie-style evaluation
    (bitboard implementation for speed).
 4. **Show** — a transparent, always-on-top, click-through Qt window aligned to the
-   board draws the target placement. The next hint is precomputed while you play, so
-   it appears within a frame of each piece locking.
+   board draws both targets: a bold solid outline where the piece in play goes, and
+   a dashed outline in a second colour where the piece after it goes if you take the
+   first. The second one is already computed while you play, so the hint also flips
+   within a frame of each piece locking.
+
+## Two hints
+
+The overlay shows two placements at once, and they are told apart by the stroke
+rather than by one of them being faint:
+
+| | drawn as | means |
+|---|---|---|
+| current piece | bold **solid** outline (`--hint-color`) | put this piece here |
+| next piece | **dashed** outline, second colour (`--next-hint-color`) | ...and then the next one goes here |
+
+The second hint is conditional, and it disappears rather than mislead you. It is
+where the next piece goes on the board the first placement would leave behind, so
+it is only shown while that is still the board you are about to produce: put the
+piece somewhere else and the next frame re-solves both. It is also not shown when
+the first placement clears a line, because a clear shifts every row above it and
+the two would no longer be talking about the same rows. `--no-next-hint` turns it
+off for good if you would rather have one square to aim at.
+
+### Why the hints are outlines
+
+Both hints are drawn entirely in the outer quarter of each cell. That band is the
+part of a cell the vision code never samples — it reads each cell from its middle —
+so the coach physically cannot read its own drawing back as board content. This is
+worth a line in a README because it is the bug this tool has had three times: a
+hint that flickered, a hint that pointed at a piece you did not have, a phantom
+piece made of the coach's own paint. It is now geometry rather than a rule, and the
+rule is kept behind it. It also means the hints can be a lot bolder than a hint
+that had to stay out of the way.
+
+`--hint-fill 0.18` fills the current hint's cells again, the way older versions
+drew it. That fill is inside the part of the cell vision reads, so turning it on
+re-opens exactly that path: the reading is then only correct because the paint is
+recognized and taken back out again. It is off by default and says so when you use
+it.
 
 ## Two trackers
 
@@ -57,6 +95,19 @@ are I, O and T.
 ## Status
 
 Under construction. See [SPEC.md](SPEC.md) for the full architecture and build plan.
+
+## Options
+
+```
+--hint-color COLOR        colour of the current hint (default #00e5ff)
+--next-hint-color COLOR   colour of the next-piece hint (default #ff00e5)
+--no-next-hint            show one target only
+--hint-fill OPACITY       fill the current hint's cells (default 0 = outline only)
+--tracker {colour,shape}  which reader reads the frames (default colour)
+--rows N                  board height in rows (width is always 10)
+--poll-rate N             captures per second (default 15)
+--debug                   print what vision sees, frame by frame
+```
 
 ## Requirements
 

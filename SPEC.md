@@ -105,6 +105,67 @@ the cells the NEXT panel covers treated as unknown rather than empty, and
 what `_solver_board` hands the solver for them — apply to both readers by
 construction rather than by being implemented twice.
 
+## Two hints, drawn where no reader looks
+
+The overlay shows TWO placements: where the piece in play goes, and where
+the piece after it goes on the board that placement leaves behind. The
+second one costs no search — `CoachEngine._precompute_next` already solves
+it, so that the hint flips the instant the current piece locks — so this is
+that same answer shown a piece early.
+
+**Outline only, and no fill.** Both readers name a cell from the mean
+colour of its central patch, inset `CELL_MARGIN` (0.25) on every side
+(`vision/grid._cell_colors`, which `vision/colour_palette` imports rather
+than reimplements). Anything drawn in the outer quarter-band of a cell is
+therefore invisible to the reader BY CONSTRUCTION. Moving the hint's visual
+weight out of the fill and into that band makes the hints bolder — ~10 px
+of stroke on a real capture against the 3 px pen it replaced — and at the
+same time removes the whole class of bug where the coach reads its own
+paint. That class is not hypothetical: it caused three separate
+user-visible bugs in this project, most recently the stutter, where the
+rotation badge read as a falling piece and the overlay blanked every other
+frame at 15 fps (`tests/fixtures/hint_stutter`, 51 frames of it).
+
+**The property is measured, not argued** (`tests/test_hint_invisibility.py`),
+over every committed capture window:
+
+- no hint changes one SAMPLED PATCH, on every frame of every window,
+  compared exactly rather than within a tolerance — which is the property
+  at its source, since a reader that sees no changed patch can report no
+  changed occupancy, piece or stack;
+- both trackers read the bare frame and the same frame with two hints
+  painted over it at the real cell geometry, and the whole reading must be
+  identical: accepted, the named falling piece, the derived stack, the next
+  piece, the transitions;
+- the same, on the placements the engine really picks, painted in the
+  styles a shipping session builds;
+- as geometry, independent of which frames are committed: every rectangle
+  either painter fills, for all 19 rotations at five cell sizes, grown a
+  pixel on every side to stand in for an antialiased edge, misses the
+  sampled patch of every cell on the board;
+- and a control, so the comparison is known to be able to fail: put a fill
+  back and the reading changes.
+
+**The second hint is conditional**, and `CoachEngine.second_hint` derives it
+from the state rather than remembering it, so it cannot outlive what it is
+conditional on. No hint on screen, no second target. A hint that clears
+lines shows none either: the clear shifts every row above it, so the
+predicted board's coordinates and the screen's stop being the same
+coordinates. And when the player puts the piece somewhere else, the next
+frame re-solves both and the second hint follows the first rather than
+pointing at a placement computed for a board that never happened.
+
+The two placements can never share a cell — the second is solved on a board
+where the first one's cells are already filled, and a drop never lands in a
+filled cell — which is what lets each hint's rotation badge sit in a cell
+its own hint paints without either one landing in the other's.
+
+**The own-paint recognition stays in place.** It is defence in depth now
+rather than the primary mechanism: `own_paint_states` still names our cells
+from the ring of hint colour around them, and with no fill to undo the
+correction it applies is the identity. The moment `--hint-fill` asks for a
+fill, the rule is doing its old job on the real composite again.
+
 ## Module layout (`src/tetris_coach/`)
 
 ```
@@ -1287,16 +1348,41 @@ overlay/
                   # window (WA_TransparentForMouseEvents, WindowStaysOnTopHint,
                   # WindowTransparentForInput, NoDropShadowWindowHint) positioned
                   # exactly over the board region.
-  renderer.py     # Draw target placement: 4 cell outlines + subtle fill; distinct
-                  # color (configurable); optional arrow/rotation count badge.
-                  # What is painted here comes back round in the next
-                  # capture, so HintStyle.fill_opacity is IMPORTED from
-                  # vision.grid.HINT_FILL_OPACITY rather than written
-                  # twice: the painter and the classifier that has to
-                  # recognize the composite again cannot be allowed to
-                  # drift. (That direction, overlay -> vision, and not the
-                  # other, because vision/ must stay importable with no
-                  # display and overlay/ needs PySide6.)
+  renderer.py     # Draw the two target placements. Everything is drawn IN THE
+                  # OUTER BAND OF A CELL -- OUTLINE_DEPTH (0.20 of a cell)
+                  # in from each edge, inside the CELL_MARGIN (0.25) band
+                  # that neither reader samples -- so what is painted here
+                  # cannot reach a reading at all. See "Two hints, drawn
+                  # where no reader looks" above for why that, and not a
+                  # rule, is the mechanism.
+                  #
+                  # The geometry is pure and is where the decisions live:
+                  # hint_paint_rects returns the exact pixel rectangles a
+                  # hint covers, draw_hint fills them through QPainter
+                  # (macOS only) and paint_hint fills the same ones into a
+                  # numpy frame, which is what the headless tests measure.
+                  # Both are handed rectangles snapped to whole pixels, so
+                  # they cannot disagree about one.
+                  #
+                  # Current piece: bold SOLID outline. Next piece: DASHED,
+                  # in a second colour (--next-hint-color, --no-next-hint).
+                  # Stroke rather than transparency, because a fainter mark
+                  # sits closer to the board background, which is the
+                  # crowded band where ghosts and pale pieces already
+                  # collide.
+                  #
+                  # The fill is OFF by default and --hint-fill turns it
+                  # back on for the current hint only. It is the one thing
+                  # here a reader can see, and the session that asks for it
+                  # is told so at startup (app.fill_warning). It is kept
+                  # rather than deleted because the recognition is kept:
+                  # HintStyle.fill_opacity reaches the reader as
+                  # CoachConfig.hint_fill_opacity -> OwnPaint.opacity, so
+                  # the painter and the rule that has to un-composite the
+                  # result cannot drift. (vision/ owns both hint colours
+                  # and the fill opacity, that direction and not the other,
+                  # because vision/ must stay importable with no display
+                  # and overlay/ needs PySide6.)
 region_select.py  # Full-screen dim + drag-rectangle picker (Qt), returns rect in
                   # logical coords; run twice (board, next box).
 app.py            # Main loop wiring: capture -> vision -> state -> solve -> overlay.
@@ -1318,12 +1404,23 @@ app.py            # Main loop wiring: capture -> vision -> state -> solve -> ove
                   # max_stale_frames (45, ~3 s: above every real obscuration
                   # measured, an order of magnitude below the game-over
                   # screen that once held a hint for 326 frames).
+                  # second_hint is the other placement on screen: the
+                  # precompute above, shown a piece early, and DERIVED from
+                  # the state rather than remembered so it cannot outlive
+                  # the hint it is conditional on (no first hint, a first
+                  # hint that clears lines, or a board the player did not
+                  # produce -> nothing drawn). hint_styles says how the two
+                  # are drawn and is pure, because Qt is untestable
+                  # headlessly and what the flags MEAN must not be.
                   # The loop is a FEEDBACK loop, not a pipeline: the
                   # overlay it draws is on screen when the next capture is
-                  # taken. CoachConfig.hint_color therefore goes to the
-                  # classifier as well as to the renderer, so the coach
-                  # looks for the paint it actually drew (see
-                  # vision.grid._own_paint_layer).
+                  # taken. That is now closed by geometry -- the hints are
+                  # painted in the band no reader samples -- rather than by
+                  # a rule, but CoachConfig.hint_color still goes to the
+                  # classifier as well as to the renderer, together with
+                  # hint_fill_opacity, so a session that re-opens the path
+                  # with --hint-fill looks for exactly the paint it drew
+                  # (see vision.grid._own_paint_layer).
                   # compute_overlap_mask: when the next-piece region overlaps
                   # the board region (a preview floated over the top corner),
                   # project next_rect into the board's unit square (board-
@@ -1388,6 +1485,20 @@ cli.py            # `tetris-coach` entry point: select regions, start loop; flag
    reader always was. The user has since scoped this tool to one game (ROAS
    Stacker), which is what made the trade worth making rather than hedging.
 
+7. **The overlay paints only where no reader samples**, and shows TWO
+   placements. Anything drawn in the outer quarter-band of a cell is
+   invisible to both readers by construction, so the hint is a bold outline
+   there and carries no fill; the current piece's target is solid, the next
+   piece's is dashed in a second colour, and they are told apart by STROKE
+   rather than by fading one of them into the band where ghosts and pale
+   pieces already live. This replaces a rule with a geometric fact: the
+   coach reading its own paint back as board content caused three
+   user-visible bugs here, and it is now not a thing that can happen. The
+   recognition is kept as defence in depth, and `--hint-fill` can put the
+   fill back for anyone who wants the old look, which is documented as
+   re-opening that path. See "Two hints, drawn where no reader looks" above
+   for the measurements.
+
 ## What can be built & tested headless (Linux CI / cloud)
 
 - All of `core/`, `solver/`: pure logic. Unit tests + a self-play simulation test
@@ -1399,7 +1510,13 @@ cli.py            # `tetris-coach` entry point: select regions, start loop; flag
   Jstris/Tetr.io boards).
 - `capture/screen.py` and `overlay/` are macOS-only at runtime: keep them thin,
   isolate behind interfaces, write them to spec, exclude from headless test runs
-  (import-guard so the package imports cleanly without a display).
+  (import-guard so the package imports cleanly without a display). THIN is the
+  operative word for `overlay/renderer.py`: the QPainter calls decide nothing,
+  they fill rectangles that `hint_paint_rects` computed, and `paint_hint` fills
+  the same ones into a numpy frame — which is how a Qt-free test run can measure
+  what the overlay puts on screen (`tests/test_hint_invisibility.py`). What the
+  flags MEAN is likewise pure and tested (`app.hint_styles`, `cli.coach_config`),
+  so the untestable part is only the call into Qt.
 
 ## Definition of done for the headless phase
 

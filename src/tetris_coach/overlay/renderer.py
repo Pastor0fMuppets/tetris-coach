@@ -27,6 +27,7 @@ pieces already collide; a dash reads at a glance over any of them.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -144,6 +145,23 @@ def _snap(x0: float, y0: float, x1: float, y1: float) -> Rect:
     """
     left, top = round(x0), round(y0)
     right, bottom = round(x1), round(y1)
+    return (float(left), float(top), float(max(1, right - left)), float(max(1, bottom - top)))
+
+
+def _snap_out(rect: Rect) -> Rect:
+    """``rect`` grown to the whole pixels it touches.
+
+    For the badge, which is the one thing here drawn as a shape rather
+    than as a rectangle: Qt renders the ellipse antialiased, so it tints
+    the pixels its bounding box lands a fraction of the way into, and
+    rounding that box to the nearest pixel would under-state the paint by
+    one. Over-stating it is the safe direction -- everything that reads
+    these rectangles is asking whether the paint can reach somewhere it
+    must not.
+    """
+    x, y, w, h = rect
+    left, top = math.floor(x), math.floor(y)
+    right, bottom = math.ceil(x + w), math.ceil(y + h)
     return (float(left), float(top), float(max(1, right - left)), float(max(1, bottom - top)))
 
 
@@ -266,7 +284,7 @@ def hint_paint_rects(
     if style.fill_opacity > 0.0:
         rects.extend(placement_cell_rects(move, cell_width, cell_height, style.inset))
     if style.show_rotation_badge and move.rotation.index:
-        rects.append(rotation_badge_rect(move, cell_width, cell_height))
+        rects.append(_snap_out(rotation_badge_rect(move, cell_width, cell_height)))
     return rects
 
 
@@ -284,7 +302,12 @@ def paint_hint(
     changes nothing a reader reads -- is measured through this instead,
     over the same :func:`hint_paint_rects` geometry ``draw_hint`` fills.
     What could drift between the two is therefore only the FILL of a
-    rectangle, not which rectangles there are.
+    rectangle, not which rectangles there are -- and it is measured not to:
+    driven offscreen through a real QPainter over all 19 rotations in both
+    styles, the pixels ``draw_hint`` touches are a SUBSET of the ones this
+    paints, differing only where the badge's ellipse does not reach the
+    corners of its own bounding box. A superset is the direction that keeps
+    the invisibility measurement honest.
 
     ``frame`` is BGR, the order the capture pipeline produces, and is not
     modified: a copy comes back.
@@ -306,15 +329,8 @@ def paint_hint(
     for rect in outline_rects(move, cell_width, cell_height, style):
         _blend(out, rect, colour, 1.0)
     if style.show_rotation_badge and move.rotation.index:
-        _blend(
-            out, _snap(*_corners(rotation_badge_rect(move, cell_width, cell_height))), colour, 1.0
-        )
+        _blend(out, _snap_out(rotation_badge_rect(move, cell_width, cell_height)), colour, 1.0)
     return out
-
-
-def _corners(rect: Rect) -> tuple[float, float, float, float]:
-    x, y, w, h = rect
-    return (x, y, x + w, y + h)
 
 
 def _blend(frame: NDArray[np.uint8], rect: Rect, colour: NDArray[np.float64], alpha: float) -> None:
