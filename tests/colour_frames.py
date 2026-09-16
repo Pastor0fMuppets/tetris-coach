@@ -97,3 +97,22 @@ def paint_badge(image: np.ndarray, move: Move, cell: int = CELL) -> np.ndarray:
     inside = ((yy - cy) / ry) ** 2 + ((xx - cx) / rx) ** 2 <= 1.0
     out[inside] = np.array(HINT, dtype=np.uint8)
     return out
+
+
+def paint_opaque(image: np.ndarray, cells: list[tuple[int, int]], cell: int = CELL) -> np.ndarray:
+    """Mark cells with an OPAQUE patch of our own colour, as a badge is.
+
+    Not a ring, so ``own_paint_states`` reads it as our drawing rather
+    than as our translucent fill: the cell is SKIPPED, whatever the game
+    drew in it. That is what the rotation badge is, and what a hint cell
+    whose outline is cut short by a board rectangle a few pixels off
+    becomes -- the widening commit fba8c0f made deliberately, erring
+    toward losing a cell we cannot read over inventing one we can.
+    """
+    out = image.copy()
+    for r, c in cells:
+        cy, cx = int((r + 0.5) * cell), int((c + 0.5) * cell)
+        radius = max(2, round(0.2 * cell))
+        yy, xx = np.mgrid[0 : out.shape[0], 0 : out.shape[1]]
+        out[(yy - cy) ** 2 + (xx - cx) ** 2 <= radius**2] = np.array(HINT, dtype=np.uint8)
+    return out

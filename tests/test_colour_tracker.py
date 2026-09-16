@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from tetris_coach.vision.colour_palette import OURS, own_paint_states
 from tetris_coach.vision.colour_tracker import ColourTracker, Event
 
 from .colour_frames import (
@@ -21,6 +22,7 @@ from .colour_frames import (
     ROWS,
     WHITE,
     blend,
+    paint_opaque,
     preview,
     render,
     tracker,
@@ -455,6 +457,36 @@ def test_a_piece_being_dragged_survives_one_cell_flickering_too() -> None:
         {(7, 4), (7, 5), (8, 4), (8, 5)}
     )
     assert back.events == (), "it never stopped being the same piece"
+
+
+def test_a_piece_cell_under_our_own_opaque_mark_is_hidden_not_missing() -> None:
+    """The third hiding place, and the only one this tool makes itself.
+
+    ``own_paint_states`` skips a cell our drawing covers opaquely -- the
+    rotation badge, or a hint cell whose outline a board rectangle a few
+    pixels off cuts short -- so the cell arrives as EMPTY whatever the
+    game drew in it. The admission test did not know that, so a piece cell
+    under our own paint was indistinguishable from a cell that is not
+    there: measured, an O dragged under the mark lost its fourth cell,
+    was refused, went into the settled stack and raised PIECE_LOCKED. Our
+    paint FOLLOWS THE HINT, so the next frame did it again -- the same
+    self-inflicted loop hint_stutter documents, deleting the piece instead
+    of inventing one.
+    """
+    track = tracker(settle_frames=3)
+    for row in (4, 5, 6):
+        whole = {(row, 4), (row, 5), (row + 1, 4), (row + 1, 5)}
+        track.update(render(dict.fromkeys(whole, GREEN_O)))
+
+    for row in (7, 8, 9):  # it keeps moving, and our mark rides along on it
+        whole = {(row, 4), (row, 5), (row + 1, 4), (row + 1, 5)}
+        frame = paint_opaque(render(dict.fromkeys(whole, GREEN_O)), [(row + 1, 5)])
+        assert own_paint_states(frame, ROWS, COLS)[row + 1, 5] == OURS
+        report = track.update(frame)
+        assert report.falling is not None and report.falling.piece == "O"
+        assert report.falling.cells == whole - {(row + 1, 5)}
+        assert report.stack_rows == (0,) * ROWS, "none of it is board"
+        assert report.events == ()
 
 
 def test_a_sighting_that_shares_no_cell_with_the_piece_continues_nothing() -> None:

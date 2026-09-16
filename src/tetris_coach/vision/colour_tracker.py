@@ -101,6 +101,7 @@ from .colour_palette import (
     CLEAN,
     EMPTY,
     EMPTY_DIST,
+    OURS,
     Palette,
     board_colours,
     board_readable,
@@ -347,12 +348,18 @@ class ColourTracker:
             self._age = np.where(labels != self._labels, 0, self._age + 1)
         self._labels = labels
 
-        falling = self._pick_falling(labels, grounded)
+        # Cells nothing can be read in: off the capture (the NEXT panel,
+        # named once at construction) and under our own opaque mark, which
+        # moves with the hint and so is this frame's alone.
+        covered = ~self._observable | (painted == OURS)
+        falling = self._pick_falling(labels, grounded, covered)
         # What the next frame's exemption is allowed to rest on: a piece
         # read off this frame alone repays the loan, one read on credit
         # extends it, and no piece at all ends it.
         self._on_loan = (
-            self._on_loan + 1 if falling is not None and not self._explicable(falling.cells) else 0
+            self._on_loan + 1
+            if falling is not None and not self._explicable(falling.cells, covered)
+            else 0
         )
         if falling is not None:
             falling = self._named(falling, colours, painted)
@@ -704,15 +711,32 @@ class ColourTracker:
             return False
         return bool(was.cells & cells)
 
-    def _hidden(self, r: int, c: int) -> bool:
+    def _hidden(self, r: int, c: int, covered: NDArray[np.bool_]) -> bool:
         """Is this cell one the capture cannot see a piece in?
 
-        Two places, and only two. ABOVE ROW 0: this game deals a piece at
-        the ceiling and the player drags it down, so a piece entering
-        shows its bottom row or two and the rest is off the top of the
-        board region. UNDER THE NEXT PANEL: the panel overlaps the board
-        rectangle's top-right corner in every session captured here, and
-        those cells are named at construction.
+        Three places. ABOVE ROW 0: this game deals a piece at the ceiling
+        and the player drags it down, so a piece entering shows its bottom
+        row or two and the rest is off the top of the board region. UNDER
+        THE NEXT PANEL: the panel overlaps the board rectangle's top-right
+        corner in every session captured here, and those cells are named
+        at construction. UNDER OUR OWN OPAQUE PAINT: the coach draws the
+        hint over the board it is reading, and where that drawing is
+        opaque rather than a translucent fill it is not un-composited but
+        SKIPPED (:func:`~.colour_palette.own_paint_states`), so the cell
+        arrives here as EMPTY whatever the game drew in it.
+
+        The third one is this tool's own doing, which is why it was missed:
+        the first two are properties of the capture and are fixed for a
+        session, and ``covered`` is this frame's, because where we paint
+        moves with the hint. Leaving it out made a piece cell under our own
+        mark indistinguishable from a cell that is not there -- measured,
+        an O dragged under the rotation badge lost its fourth cell, failed
+        the admission test, went into the settled stack and raised
+        PIECE_LOCKED, and the badge follows the hint so the next frame did
+        it again. That is the loop ``tests/fixtures/hint_stutter``
+        documents (coach paints, reader misreads, hint moves, paint
+        moves), pointing the other way: it deletes the piece rather than
+        inventing one.
 
         Off the sides and below the floor are NOT hidden: the well has
         walls and a floor, and a piece is never partly through them.
@@ -721,13 +745,13 @@ class ColourTracker:
             return True
         if not (0 <= r < self.rows and 0 <= c < self.cols):
             return False
-        return not bool(self._observable[r, c])
+        return bool(covered[r, c])
 
-    def _explicable(self, cells: frozenset[Cell]) -> bool:
+    def _explicable(self, cells: frozenset[Cell], covered: NDArray[np.bool_]) -> bool:
         """Is this sighting one a whole tetromino could be behind?
 
         A piece has four cells. Seeing fewer is only explicable where
-        something HIDES the rest, and the two places anything can hide are
+        something HIDES the rest, and the places anything can hide are
         :meth:`_hidden`'s. So a sub-tetromino candidate is admissible when
         some placement of some rotation covers it and puts every cell it
         does not account for in one of those places -- and nowhere else. A
@@ -766,18 +790,21 @@ class ColourTracker:
                     placed = {(r + dr, c + dc) for r, c in rotation.cells}
                     if not cells <= placed:
                         continue
-                    if all(self._hidden(r, c) for r, c in placed - cells):
+                    if all(self._hidden(r, c, covered) for r, c in placed - cells):
                         return True
         return False
 
     def _pick_falling(
-        self, labels: NDArray[np.int16], grounded: NDArray[np.bool_]
+        self,
+        labels: NDArray[np.int16],
+        grounded: NDArray[np.bool_],
+        covered: NDArray[np.bool_],
     ) -> FallingPiece | None:
         """The one component that is in flight, if any."""
         best: tuple[tuple[int, int, int], FallingPiece] | None = None
         for label, component in _components(labels):
             for cells in self._candidates(label, component):
-                best = self._rank(best, label, cells, grounded)
+                best = self._rank(best, label, cells, grounded, covered)
         return None if best is None else best[1]
 
     def _rank(
@@ -786,6 +813,7 @@ class ColourTracker:
         label: int,
         cells: frozenset[Cell],
         grounded: NDArray[np.bool_],
+        covered: NDArray[np.bool_],
     ) -> tuple[tuple[int, int, int], FallingPiece] | None:
         """Keep whichever of ``best`` and ``cells`` is the better candidate.
 
@@ -830,7 +858,7 @@ class ColourTracker:
         """
         held = self._is_held(label, cells)
         excused = self._on_loan < LOAN_FRAMES and self._continues(label, cells)
-        if not excused and not self._explicable(cells):
+        if not excused and not self._explicable(cells, covered):
             return best  # fewer than four cells and nothing hiding the rest
         floating = not any(grounded[r, c] for r, c in cells)
         youth = min(int(self._age[r, c]) for r, c in cells)
