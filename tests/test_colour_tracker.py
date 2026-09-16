@@ -302,6 +302,55 @@ def test_a_sighting_the_top_edge_or_the_panel_explains_is_still_a_piece() -> Non
     assert behind.falling.cells == frozenset({(1, 6), (1, 7), (2, 7)})
 
 
+def test_one_stray_cell_at_the_top_edge_cannot_take_the_piece_in_hand() -> None:
+    """Where a lone cell IS admissible, it still loses to anything else.
+
+    The admission test bounds where one cell can be read as a piece, but
+    the places it leaves are the whole of row 0 and the edge of the panel
+    -- 11 of this session's 120 cells -- because a vertical I entering
+    really does show exactly one cell. That is precisely where this game
+    deals its pieces and where the panel's own boundary bleeds, so it is
+    the likeliest place for the next stray. Floating sorted first, so one
+    noise cell up there outranked a whole O the player had parked: the
+    hint jumped to it, the O's four cells fell into the stack, and
+    PIECE_LOCKED and PIECE_SPAWNED fired on every other frame. That is
+    the reported flashing, from one cell.
+    """
+    track = tracker(settle_frames=3)
+    for _ in range(4):
+        track.update(render({(8, 4): GREEN_O, (8, 5): GREEN_O, (9, 4): GREEN_O, (9, 5): GREEN_O}))
+    parked = {(9, 4): GREEN_O, (9, 5): GREEN_O, (10, 4): GREEN_O, (10, 5): GREEN_O}
+    for _ in range(3):
+        track.update(render(parked))
+
+    for frame in range(6):
+        stray = {(0, 7): PALE_T} if frame % 2 == 0 else {}
+        report = track.update(render(parked | stray))
+        assert report.falling is not None and report.falling.piece == "O"
+        assert report.falling.cells == frozenset(parked)
+        assert report.events == ()
+        # It is still content, and reads as the one thing it looks like:
+        # a cell of board. That is the error worth having -- it sits
+        # still, where a phantom piece moves the hint every frame.
+        assert report.stack_rows[0] == (1 << 7 if stray else 0)
+
+
+def test_a_lone_cell_is_still_the_piece_when_it_is_the_only_candidate() -> None:
+    """The demotion above is an ordering, not a second refusal.
+
+    ``stray_after_clear`` 00578-00580 is a Z dragged behind the NEXT
+    panel with one cell of it left showing, and it is reported on all
+    three frames. Losing those would blank the hint on a piece that is
+    really there, which is the failure this whole area is about.
+    """
+    covered = frozenset({(0, 8), (0, 9), (1, 8), (1, 9)})
+    track = ColourTracker(rows=ROWS, cols=COLS, unobservable_cells=covered)
+    report = track.update(render({(2, 8): PALE_T, (11, 0): BLUE_I, (11, 1): BLUE_I}))
+    assert report.falling is not None
+    assert report.falling.cells == frozenset({(2, 8)})
+    assert report.stack_rows[2] == 0
+
+
 def test_the_floor_and_the_walls_do_not_hide_a_piece() -> None:
     """Off the sides and below the floor are not places to be hidden.
 

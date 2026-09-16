@@ -801,7 +801,7 @@ class ColourTracker:
         covered: NDArray[np.bool_],
     ) -> FallingPiece | None:
         """The one component that is in flight, if any."""
-        best: tuple[tuple[int, int, int], FallingPiece] | None = None
+        best: tuple[tuple[int, int, int, int], FallingPiece] | None = None
         for label, component in _components(labels):
             for cells in self._candidates(label, component):
                 best = self._rank(best, label, cells, grounded, covered)
@@ -809,17 +809,39 @@ class ColourTracker:
 
     def _rank(
         self,
-        best: tuple[tuple[int, int, int], FallingPiece] | None,
+        best: tuple[tuple[int, int, int, int], FallingPiece] | None,
         label: int,
         cells: frozenset[Cell],
         grounded: NDArray[np.bool_],
         covered: NDArray[np.bool_],
-    ) -> tuple[tuple[int, int, int], FallingPiece] | None:
+    ) -> tuple[tuple[int, int, int, int], FallingPiece] | None:
         """Keep whichever of ``best`` and ``cells`` is the better candidate.
 
-        Floating beats resting, younger beats older, higher beats lower --
-        among candidates that could be a piece at all
-        (:meth:`_explicable`).
+        Anything beats a LONE CELL; then floating beats resting, younger
+        beats older, higher beats lower -- among candidates that could be
+        a piece at all (:meth:`_explicable`).
+
+        A SINGLE CELL IS THE LEAST EVIDENCE THERE IS, and it must not
+        displace more. :meth:`_explicable` bounds where a lone cell may be
+        read as a piece at all, but the places it leaves are the whole of
+        row 0 and the edge of the panel -- 11 of this session's 120 cells
+        -- because a vertical I entering really does show exactly one
+        cell, and that is precisely where this game deals its pieces and
+        where the panel's own boundary bleeds. A stray up there is
+        floating, and floating sorted first, so one noise cell at (0, 7)
+        outranked a whole O the player had parked: measured on synthetic
+        frames, falling went O -> the stray -> O with the O's four cells
+        dropping into the stack and a PIECE_LOCKED and PIECE_SPAWNED on
+        every other frame -- the reported flashing, at 15 fps, from one
+        cell.
+
+        Demoting it costs nothing where a lone cell is the only candidate:
+        the piece entering behind the panel in ``stray_after_clear`` is
+        one cell for three frames (00578-00580) and is still reported on
+        all three. What it costs is a frame or two of a lock, where a new
+        piece shows one cell while the last one is still parked -- and
+        that is the hint staying on the piece the player is holding, which
+        is what they are looking at.
 
         The piece already in flight is exempt from that admission test, and
         the exemption is a LOAN OF ONE FRAME (:data:`LOAN_FRAMES`).
@@ -864,7 +886,12 @@ class ColourTracker:
         youth = min(int(self._age[r, c]) for r, c in cells)
         if not floating and youth >= self.settle_frames and not held:
             return best  # resting and old: settled board, not a piece
-        rank = (0 if floating else 1, youth, min(r for r, _ in cells))
+        rank = (
+            0 if len(cells) > 1 else 1,
+            0 if floating else 1,
+            youth,
+            min(r for r, _ in cells),
+        )
         if best is not None and rank >= best[0]:
             return best
         return (
