@@ -45,7 +45,7 @@ from numpy.typing import NDArray
 from tetris_coach.app import CoachConfig, CoachEngine
 from tetris_coach.core.board import Board
 from tetris_coach.solver.search import Move, best_move
-from tetris_coach.truth.windows import WindowSpec, load_window
+from tetris_coach.truth.windows import CAPTURED_FILL_OPACITY, WindowSpec, load_window
 from tetris_coach.vision.colour_tracker import ColourTracker
 
 Cell = tuple[int, int]
@@ -98,7 +98,7 @@ def next_crops(root: Path, spec: WindowSpec, names: list[str]) -> list[NDArray[n
 
 def run_shipped(root: Path, spec: WindowSpec) -> list[FrameOutput]:
     """Replay a window through ``CoachEngine``, wired as ``app.run`` wires it."""
-    config = CoachConfig(rows=spec.rows, tracker="shape")
+    config = CoachConfig(rows=spec.rows, tracker="shape", hint_fill_opacity=CAPTURED_FILL_OPACITY)
     engine = CoachEngine(config, unobservable_cells=spec.geometry().unobservable)
     names, boards = load_window(root, spec)
     crops = next_crops(root, spec, names)

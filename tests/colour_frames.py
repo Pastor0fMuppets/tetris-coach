@@ -4,16 +4,20 @@ Every frame these tests use is drawn here from a grid of flat colours, so
 each test states exactly the rendering it is about. The colours are the ones
 measured off the real fixtures (``tests/fixtures/*``), which is what keeps a
 synthetic case honest — and the hint is composited the way
-``overlay.renderer.draw_hint`` composites it, fill inside a solid outline,
-because recognizing that signature is what keeps the coach's own paint out
-of its own reading.
+``overlay.renderer`` draws it. There are two of those now and the
+difference is the point: :func:`paint_overlay` is what the overlay paints
+TODAY (outlines in the band no reader samples, no fill), and
+:func:`paint_hint` is the fill-inside-an-outline it used to paint and can
+be asked for again -- which is the signature ``own_paint_states`` has to
+go on recognizing.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from tetris_coach.overlay.renderer import rotation_badge_rect
+from tetris_coach.overlay.renderer import HintStyle, rotation_badge_rect
+from tetris_coach.overlay.renderer import paint_hint as _render_hint
 from tetris_coach.solver.search import Move
 from tetris_coach.vision.colour_tracker import ColourTracker
 from tetris_coach.vision.grid import HINT_FILL_OPACITY, HINT_PAINT
@@ -44,8 +48,28 @@ def render(
     return image
 
 
+def paint_overlay(
+    image: np.ndarray, move: Move, style: HintStyle | None = None, cell: int = CELL
+) -> np.ndarray:
+    """Draw the hint the way the overlay draws it TODAY.
+
+    The renderer's own painter rather than a copy of it, for the reason
+    :func:`paint_badge` gives: a copy would go on agreeing with itself
+    after the renderer moved, and what these tests are for is that what
+    the coach paints can still be read back.
+    """
+    return _render_hint(image, move, cell, cell, style)
+
+
 def paint_hint(image: np.ndarray, cells: list[tuple[int, int]], cell: int = CELL) -> np.ndarray:
-    """Draw this tool's own hint over ``cells``: fill inside a solid outline."""
+    """Draw the hint as it was drawn when the fixtures were captured.
+
+    A translucent fill inside a solid outline -- what the overlay paints
+    when a session asks for a fill (``--hint-fill``), and what every
+    committed window in ``tests/fixtures`` contains. The recognition rule
+    that un-composites it is kept for exactly this, so the frames that
+    test the rule are drawn the way the rule expects.
+    """
     out = image.copy()
     hint = np.array(HINT, dtype=np.float64)
     for r, c in cells:

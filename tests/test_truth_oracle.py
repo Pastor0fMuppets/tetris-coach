@@ -386,10 +386,17 @@ class TestTheOracleOwesNothingToTheTracker:
         Written out, they can drift; this is what stops them.
         """
         from tetris_coach.overlay.renderer import HintStyle
+        from tetris_coach.vision.grid import HINT_FILL_OPACITY
 
         red, green, blue = (int(HintStyle.color[i : i + 2], 16) for i in (1, 3, 5))
         assert oracle.HINT_PEN_BGR == (blue, green, red)
-        assert oracle.HINT_FILL_OPACITY == HintStyle.fill_opacity
+        # The fill is the READER's constant, not the painter's: the overlay
+        # draws none by default now (HintStyle.fill_opacity is 0, the hint
+        # is an outline in the band no reader samples), but these captures
+        # have one in them and both the oracle and the rule that
+        # un-composites it have to agree about which one.
+        assert HintStyle.fill_opacity == 0.0
+        assert oracle.HINT_FILL_OPACITY == HINT_FILL_OPACITY
 
     def test_the_unobservable_cells_are_the_engines(self) -> None:
         """Derived here from the two rectangles, and it had better match."""

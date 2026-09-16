@@ -677,7 +677,16 @@ def own_paint_states(
             if patch >= PAINT_PATCH_SOLID:
                 continue  # a game piece that happens to be our colour
             if patch < PAINT_PATCH_SHARE and _rings(share, y0, y1, x0, x1):
-                states[r, c] = PAINTED  # our fill, over whatever is beneath
+                # Our outline, with our fill inside it -- unless there is
+                # no fill, and then this cell is CLEAN: the ring is ours
+                # but the patch is the game's own pixels, untouched, and
+                # PAINTED would both un-composite nothing and take the
+                # cell out of the background estimate for no reason. The
+                # overlay draws no fill by default
+                # (``overlay.renderer.HintStyle.fill_opacity``), which is
+                # what makes this branch the ordinary case rather than the
+                # exotic one.
+                states[r, c] = PAINTED if paint.opacity > 0.0 else CLEAN
             else:
                 states[r, c] = OURS  # our own opaque drawing: the badge
     return states

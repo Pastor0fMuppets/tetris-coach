@@ -248,11 +248,25 @@ class OwnPaint(NamedTuple):
         return cls((b, g, r), opacity, tolerance)
 
 
+# The two colors this tool paints its hints in. They live here, beside
+# the opacity, for the same reason the opacity does: vision/ must stay
+# importable without a display and overlay/ may not, and these are the
+# numbers the painter and the reader are not allowed to disagree about.
+#
+# Only the FIRST is a reader's business. The second hint (where the piece
+# after this one goes) is drawn as a dashed outline with no fill, entirely
+# in the band of a cell no reader samples, so nothing here has to be able
+# to recognize it -- tests/test_hint_invisibility.py is the measurement
+# that this is true rather than merely intended.
+DEFAULT_HINT_COLOR = "#00e5ff"
+DEFAULT_NEXT_HINT_COLOR = "#ff00e5"
+
 # The default hint paint: app.CoachConfig.hint_color at HINT_FILL_OPACITY,
 # in the capture pipeline's BGR order. app.CoachEngine passes its own
-# configured color in; this default keeps a bare classify_grid call
-# recognizing the overlay the tool actually ships with.
-HINT_PAINT = OwnPaint.for_hint_color("#00e5ff")
+# configured color AND its configured opacity in; this default keeps a
+# bare classify_grid call recognizing the overlay as the fixtures in
+# tests/ were captured with it.
+HINT_PAINT = OwnPaint.for_hint_color(DEFAULT_HINT_COLOR)
 
 
 def _cell_colors(
@@ -837,6 +851,16 @@ def _own_paint_cells(
     if it were (see :func:`_classify_scored`).
     """
     if paint is None:
+        return None
+    if paint.opacity <= 0.0:
+        # No fill is being drawn, so there is no composite to recognize.
+        # The expression below would degenerate to "cells that ARE the
+        # background" -- every empty cell on the board, which is not this
+        # tool's paint, it is the board. With the hint drawn as an outline
+        # in the band no reader samples
+        # (``overlay.renderer``), there is nothing here for this rule to
+        # find and saying so is the honest answer; it comes back the
+        # moment a session asks for a fill again.
         return None
     if len(paint.color) != int(colors.shape[-1]):
         return None

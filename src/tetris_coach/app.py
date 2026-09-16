@@ -44,7 +44,12 @@ from .solver.evaluate import DELLACHERIE, evaluate_drop
 from .solver.search import TOP_OUT_SCORE, Move, best_move, enumerate_drops
 from .vision.colour_palette import CELL_MARGIN
 from .vision.colour_tracker import ColourTracker
-from .vision.grid import GridClassifier, OwnPaint
+from .vision.grid import (
+    DEFAULT_HINT_COLOR,
+    DEFAULT_NEXT_HINT_COLOR,
+    GridClassifier,
+    OwnPaint,
+)
 from .vision.readers import (
     FRESH_EVENTS,
     ColourVision,
@@ -60,7 +65,25 @@ from .vision.state import GameStateTracker
 @dataclass
 class CoachConfig:
     poll_rate: float = 15.0  # frames per second
-    hint_color: str = "#00e5ff"
+    hint_color: str = DEFAULT_HINT_COLOR
+    # Colour of the SECOND hint: where the piece after this one goes, on
+    # the board this hint's placement leaves behind. It is drawn dashed
+    # rather than faint (see overlay/renderer.py), so the two are told
+    # apart by stroke even where their colours sit over similar pieces.
+    next_hint_color: str = DEFAULT_NEXT_HINT_COLOR
+    # Show that second hint at all. Some players want one target only.
+    show_next_hint: bool = True
+    # Opacity of the fill inside the CURRENT hint's cells. 0 -- the
+    # default -- means the hint is an outline, drawn entirely in the outer
+    # band of each cell, which is the part of a cell no reader samples: the
+    # coach then cannot read its own drawing back at all
+    # (tests/test_hint_invisibility.py measures exactly that, over every
+    # committed window). Raising it RE-OPENS that path, and the reader is
+    # told the same number so that what it un-composites is what was
+    # painted -- the painter and the reader may not disagree about the
+    # blend. It applies to the current hint only: the reader can be told
+    # one paint colour, so only one hint may carry a fill.
+    hint_fill_opacity: float = 0.0
     # The confidence floor the SHAPE reader's gate applies to its own
     # occupancy reading (vision/grid.py). The colour reader gates on
     # different evidence and ignores this: a frame whose cells are not
@@ -358,7 +381,15 @@ class CoachEngine:
         # reads the hint back as board content. It is the configured color,
         # not the default, or a session run with --hint-color would paint
         # one thing and look for another.
-        self._own_paint = OwnPaint.for_hint_color(self.config.hint_color)
+        # The opacity is the CONFIGURED one, not the module default: with
+        # no fill (the default) there is nothing to un-composite and the
+        # rules say so, and with one there is exactly the blend that was
+        # painted. Handing over a number the painter does not use is how a
+        # rule that rewrites cells goes wrong -- measured, in
+        # tests/fixtures/hint_stutter.
+        self._own_paint = OwnPaint.for_hint_color(
+            self.config.hint_color, opacity=self.config.hint_fill_opacity
+        )
         self.vision: FrameVision = vision or make_vision(
             self.config, self._unobservable_cells, self._own_paint
         )

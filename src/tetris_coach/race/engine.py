@@ -60,7 +60,12 @@ from tetris_coach.race.measures import (
     measurable,
 )
 from tetris_coach.race.runners import HintTarget, next_crops
-from tetris_coach.truth.windows import CONSECUTIVE, WindowSpec, load_window
+from tetris_coach.truth.windows import (
+    CAPTURED_FILL_OPACITY,
+    CONSECUTIVE,
+    WindowSpec,
+    load_window,
+)
 
 #: The tracker choices ``--tracker`` offers, in the order the table prints
 #: them: the default first, the escape hatch second.
@@ -90,7 +95,7 @@ class ShownFrame:
 
 def replay(root: Path, spec: WindowSpec, tracker: str) -> list[ShownFrame]:
     """One window through the real engine, with ``tracker`` doing the reading."""
-    config = CoachConfig(rows=spec.rows, tracker=tracker)
+    config = CoachConfig(rows=spec.rows, tracker=tracker, hint_fill_opacity=CAPTURED_FILL_OPACITY)
     engine = CoachEngine(config, unobservable_cells=spec.geometry().unobservable)
     names, boards = load_window(root, spec)
     crops = next_crops(root, spec, names)

@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from tetris_coach.app import CoachConfig, CoachEngine
+from tetris_coach.vision.grid import HINT_FILL_OPACITY
 from tetris_coach.vision.readers import ColourVision, ShapeVision
 
 from .colour_frames import (
@@ -28,8 +29,8 @@ from .colour_frames import (
     GREEN_O,
     PALE_T,
     ROWS,
-    paint_badge,
     paint_hint,
+    paint_overlay,
     preview,
     render,
 )
@@ -196,12 +197,41 @@ def test_a_piece_parked_on_the_stack_keeps_its_hint() -> None:
 
 
 def test_the_coach_never_reads_its_own_paint_as_the_board() -> None:
-    # The coach captures its own overlay. Drawing the hint it just chose
-    # over the board must change nothing it believes: same piece, same
-    # target, no new piece arriving out of its own paint.
-    from .colour_frames import paint_hint
+    """The overlay as it is drawn now, read back: nothing the coach believes moves.
 
+    The hint is an outline in the outer band of each cell, which is the
+    part of a cell neither reader samples, so this cannot go wrong by
+    construction -- ``tests/test_hint_invisibility.py`` measures that over
+    every committed capture window. Here it is measured once more end to
+    end through the engine, on a frame whose every pixel a test chose.
+    """
     coach = engine()
+    box = preview(I_CELLS, BLUE_I)
+    coach.process_frame(render({}), box)
+    falling = {(0, 4): BLUE_I, (0, 5): BLUE_I, (0, 6): BLUE_I, (0, 7): BLUE_I}
+    hint = coach.process_frame(render(falling), box)
+    assert hint is not None and hint.piece == "I"
+    painted = paint_overlay(render(falling), hint)
+    for _ in range(4):
+        again = coach.process_frame(painted, box)
+        assert again is not None
+        assert (again.piece, again.cells) == (hint.piece, hint.cells)
+    assert coach.last_reading is not None
+    assert coach.last_reading.falling_piece == "I"
+    assert coach.last_reading.stack_rows == (0,) * ROWS
+
+
+def test_a_hint_drawn_with_a_fill_is_still_recognized() -> None:
+    """Defence in depth: turn the fill back on and the rule still takes it out.
+
+    ``--hint-fill`` re-opens the one path by which the coach can read its
+    own drawing -- paint inside the patch the readers sample -- and the
+    recognition that closes it is kept for exactly that. The engine hands
+    the reader the opacity it paints with, so the composite the rule looks
+    for is the composite that was drawn; this is the test that they agree.
+    """
+
+    coach = engine(hint_fill_opacity=HINT_FILL_OPACITY)
     box = preview(I_CELLS, BLUE_I)
     coach.process_frame(render({}), box)
     falling = {(0, 4): BLUE_I, (0, 5): BLUE_I, (0, 6): BLUE_I, (0, 7): BLUE_I}
@@ -238,8 +268,7 @@ def test_the_rotation_badge_no_longer_deletes_the_piece() -> None:
     hint = coach.process_frame(render(piece), box)
     assert hint is not None and hint.piece == "I"
 
-    painted = paint_hint(render(piece), list(hint.cells))
-    again = coach.process_frame(paint_badge(painted, hint), box)
+    again = coach.process_frame(paint_overlay(render(piece), hint), box)
     assert again is not None and again.piece == "I"
     reading = coach.last_reading
     assert reading is not None and reading.falling_piece == "I"

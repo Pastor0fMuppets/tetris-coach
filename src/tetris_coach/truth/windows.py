@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from tetris_coach.truth.oracle import Cell, Geometry
+from tetris_coach.truth.oracle import HINT_FILL_OPACITY, Cell, Geometry
 
 Rect = tuple[int, int, int, int]  # left, top, width, height
 
@@ -39,6 +39,28 @@ class WindowSpec:
 #: same margin both readers use, written out here rather than imported for
 #: the reason the mask below is written out here.
 SAMPLED_MARGIN = 0.25
+
+#: The opacity of the hint FILL that is in these captures.
+#:
+#: Every window here was recorded with this tool running, so the coach's
+#: own overlay of the day is in the pixels -- and at the time it drew a
+#: translucent fill inside each hint cell. The overlay no longer does
+#: (``overlay.renderer.HintStyle.fill_opacity`` is 0; the hint is an
+#: outline drawn in the band no reader samples), but these frames cannot
+#: be re-recorded, and a reader that is not told what painted its input
+#: gets it exactly as wrong either way: told nothing, it reads the fill as
+#: a piece; told a fill that is not there, it un-composites bare ground
+#: into one.
+#:
+#: So anything that REPLAYS a committed window and cares what the reading
+#: is -- ``race/`` and the session tests -- configures the engine with
+#: this, which is the session that captured them. A live session gets its
+#: own ``app.CoachConfig.hint_fill_opacity``, which is 0.
+#:
+#: It is the oracle's own number: that module already has to model this
+#: fill to read truth off these same pixels, and two answers to "what is
+#: in the captures" is one too many.
+CAPTURED_FILL_OPACITY = HINT_FILL_OPACITY
 
 
 def overlap_mask(spec: WindowSpec, cols: int = 10) -> frozenset[Cell]:
