@@ -5,12 +5,18 @@ session of one game. This file pins the shape of that evidence, so that a
 number from the race is never read as saying more than it can.
 
 The headline limit: nineteen flights across all six windows, and every one
-of them is an I, an O or a T. There is no S, Z, J or L falling piece
-anywhere in this repository -- not on a board, not in a NEXT box, not in
-any window's derived colour map. So the race measures a colour-first
-tracker against a shape-first one over three of the seven tetrominoes, and
-the two MIRROR PAIRS, which are the cases where the two representations
-genuinely differ, are never exercised by either.
+of them is an I, an O or a T. So the race measures a colour-first tracker
+against a shape-first one over three of the seven tetrominoes, and the two
+MIRROR PAIRS, which are the cases where the two representations genuinely
+differ, are never exercised by either.
+
+That used to be true of the whole repository and is now true only of the
+race. ``hint_stutter`` and ``stray_after_clear``, committed for a bug the
+gap was hiding, hold a J and a Z falling on the board and a J, an L and a
+Z in the NEXT box. They are not in the six windows above and so decide
+nothing here yet; what they cost is that the sentence "there is no J
+anywhere in this repository" can no longer be written, and the
+measurements below say where each letter now is.
 
 What is demonstrated here instead is the mechanism, synthetically and
 labelled as such: from a partial sighting shape cannot separate J from L
@@ -70,12 +76,15 @@ def test_the_corpus_holds_three_tetrominoes_of_seven() -> None:
     assert colours == {"I", "O", "T"}
 
 
-def test_no_next_box_in_the_repository_ever_shows_a_fourth_piece() -> None:
-    """Not on a board and not in a preview either -- including pale_preview.
+def test_what_every_next_box_in_the_repository_shows() -> None:
+    """The other way a colour is learned, counted over every crop there is.
 
-    Worth checking separately: the NEXT box is the other way this tracker
-    learns a colour, so a piece that appeared only there would still be
-    evidence. None does.
+    Worth checking separately: the NEXT box names a colour without the
+    board ever showing that piece, so a letter that appears only here is
+    still evidence. Three do, all of them from the two windows committed
+    for the hint stutter -- J 5 times, Z 9 and L 23 -- against the I, O and
+    T the six raced windows had between them. S is the one letter no
+    preview crop in this repository has ever shown.
     """
     seen: collections.Counter[str] = collections.Counter()
     boxes = 0
@@ -89,7 +98,9 @@ def test_no_next_box_in_the_repository_ever_shows_a_fourth_piece() -> None:
             if reading is not None:
                 seen[reading.piece] += 1
     assert boxes > 500, "this is over every NEXT crop in the repo"
-    assert set(seen) == {"I", "O", "T"}
+    assert set(seen) == {"I", "J", "L", "O", "T", "Z"}
+    assert {piece: seen[piece] for piece in ("J", "L", "Z")} == {"J": 5, "L": 23, "Z": 9}
+    assert "S" not in seen
 
 
 def test_shape_cannot_separate_a_mirror_pair_from_a_partial_sighting() -> None:
@@ -102,7 +113,7 @@ def test_shape_cannot_separate_a_mirror_pair_from_a_partial_sighting() -> None:
     J and L, and S and Z, are mirror images: a partial sighting of one is a
     partial sighting of the other, so no shape rule can name them before
     they have descended. This is the whole of the colour-first argument,
-    and the corpus contains not one frame of any of the four.
+    and the six raced windows contain not one frame of any of the four.
     """
     partial: dict[tuple[tuple[int, int], ...], set[str]] = collections.defaultdict(set)
     for piece, rotations in ROTATIONS.items():
@@ -131,10 +142,12 @@ def test_shape_cannot_separate_a_mirror_pair_from_a_partial_sighting() -> None:
 def test_two_colours_name_a_partial_sighting_that_two_shapes_cannot() -> None:
     """The same two-cell sighting, named or not named, by colour alone.
 
-    Synthetic, and it has to be: there is no captured frame of a J or an L
-    in this repository to run it on. What it shows is only that the
-    tracker's naming does what it claims WHEN the colours differ -- which
-    is the hypothesis, not evidence for it.
+    Synthetic, and it stays so: ``hint_stutter`` holds a captured J and
+    ``stray_after_clear`` a captured Z, but no committed frame shows a
+    mirror pair's two halves rendered in two colours, which is the thing
+    this asserts. What it shows is only that the tracker's naming does what
+    it claims WHEN the colours differ -- which is the hypothesis, not
+    evidence for it.
     """
     # Two cells side by side fit O, S, Z, J and L. Shape can say nothing.
     entering = frozenset({(0, 4), (0, 5)})
@@ -173,9 +186,11 @@ def test_what_generalising_would_take_is_written_down() -> None:
     1. A window from a SECOND game. Every frame here is one session of ROAS
        Stacker: one light theme, flat colours, one background, one cell
        geometry, one hint overlay.
-    2. A window containing a J or an L. Without one, the mirror pairs --
-       the only case where the two representations genuinely disagree --
-       are argued from tetromino geometry and never observed.
+    2. A RACED window containing a J or an L. Two windows now hold a J and
+       a Z, but neither is in the six the race is scored over, so the
+       mirror pairs -- the only case where the two representations
+       genuinely disagree -- are still argued from tetromino geometry and
+       never scored.
     3. A theme that is not flat light colour: a dark theme, a gradient or
        textured cell, a piece recoloured by level. The flatness premise is
        now checked per frame (``board_readable``) but it has only ever been
@@ -186,5 +201,5 @@ def test_what_generalising_would_take_is_written_down() -> None:
     """
     doc = test_what_generalising_would_take_is_written_down.__doc__
     assert doc is not None
-    for needed in ("SECOND game", "J or an L", "not flat light colour", "FILLS"):
+    for needed in ("SECOND game", "RACED window", "not flat light colour", "FILLS"):
         assert needed in doc

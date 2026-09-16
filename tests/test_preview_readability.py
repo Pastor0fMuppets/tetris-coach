@@ -59,6 +59,17 @@ READING: dict[str, list[tuple[str | None, int]]] = {
     "pale_piece": [("T", 47), (None, 14)],
     # Was [(None, 15)]: the same T, in the window committed for it.
     "pale_preview": [(None, 2), ("T", 13)],
+    # The two windows committed for the hint stutter. Between them they
+    # are the only J, L and Z any NEXT box in this repo has ever shown.
+    "hint_stutter": [("J", 5), ("T", 35), ("O", 7), ("T", 4)],
+    "stray_after_clear": [
+        ("Z", 9),
+        ("L", 23),
+        (None, 1),
+        ("O", 3),
+        (None, 1),
+        ("T", 4),
+    ],
     # Was [..., (None, 18), ("O", 25)]: the T that was dealt, unread for
     # its whole tenure, which is what dated that deal's flip a deal late.
     "spawn_latency": [
@@ -108,13 +119,13 @@ def test_the_reading_of_every_window() -> None:
     assert {window: encode(read(window)) for window in READING} == READING
 
 
-def test_the_box_is_read_on_530_of_557_committed_crops() -> None:
+def test_the_box_is_read_on_620_of_649_committed_crops() -> None:
     # The headline number, and the one the entering-piece accelerator
     # depends on: it names a spawn from the piece that just LEFT the box,
     # which needs the box readable on the captures either side of a deal.
     named = sum(count for runs in READING.values() for piece, count in runs if piece is not None)
     total = sum(count for runs in READING.values() for _piece, count in runs)
-    assert (named, total) == (530, 557)  # was 452 of 557
+    assert (named, total) == (620, 649)  # was 530 of 557, before two windows
 
 
 def test_nothing_that_was_readable_reads_differently() -> None:
