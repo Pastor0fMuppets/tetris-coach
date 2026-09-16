@@ -42,6 +42,7 @@ from tetris_coach.overlay.renderer import (
     DEFAULT_HINT_COLOR,
     DEFAULT_NEXT_HINT_COLOR,
     HintStyle,
+    Rect,
     draw_hint,
     paint_hint,
 )
@@ -59,6 +60,16 @@ NEXT_STYLE = HintStyle(color=DEFAULT_NEXT_HINT_COLOR, dashed=True)
 GROUND = (17, 23, 29)
 
 ALL_ROTATIONS = [(piece, rot) for piece, rots in ROTATIONS.items() for rot in rots]
+
+#: A keep-out for the painters to subtract (``app.preview_keep_out``),
+#: in cells, scaled to whatever cell size the case under test uses.
+#:
+#: Placed where the schedule below actually draws rather than where a real
+#: NEXT box sits (the top-right corner, which this walk never reaches):
+#: what is under test is that both painters clip the same way, and a
+#: keep-out nothing overlaps would test that vacuously. 14 of the 38
+#: (placement, style) pairs lose paint to this one.
+KEEP_OUT_CELLS = (1.0, 1.0, 4.0, 4.0)
 
 
 @pytest.fixture(scope="module")
@@ -97,8 +108,21 @@ def _move(index: int) -> Move:
     )
 
 
+def _keep_out(cell_w: float, cell_h: float, on: bool) -> Rect | None:
+    """The keep-out rectangle for this cell size, or None."""
+    if not on:
+        return None
+    x, y, w, h = KEEP_OUT_CELLS
+    return (x * cell_w, y * cell_h, w * cell_w, h * cell_h)
+
+
 def _qt_painted(
-    gui: Any, move: Move, cell_w: float, cell_h: float, style: HintStyle
+    gui: Any,
+    move: Move,
+    cell_w: float,
+    cell_h: float,
+    style: HintStyle,
+    keep_out: Rect | None = None,
 ) -> NDArray[np.bool_]:
     """Pixels ``draw_hint`` touches, as a mask, over a transparent canvas."""
     width, height = round(cell_w * COLS), round(cell_h * ROWS)
@@ -106,7 +130,14 @@ def _qt_painted(
     image.fill(gui.QColor(0, 0, 0, 0))
     painter = gui.QPainter(image)
     try:
-        draw_hint(painter, move, cell_width=cell_w, cell_height=cell_h, style=style)
+        draw_hint(
+            painter,
+            move,
+            cell_width=cell_w,
+            cell_height=cell_h,
+            style=style,
+            keep_out=keep_out,
+        )
     finally:
         painter.end()
     buffer = np.frombuffer(image.constBits(), dtype=np.uint8)
@@ -114,14 +145,22 @@ def _qt_painted(
     return np.asarray(rows[:, :width, 3] > 0)  # any pixel the painter tinted at all
 
 
-def _numpy_painted(move: Move, cell_w: float, cell_h: float, style: HintStyle) -> NDArray[np.bool_]:
+def _numpy_painted(
+    move: Move,
+    cell_w: float,
+    cell_h: float,
+    style: HintStyle,
+    keep_out: Rect | None = None,
+) -> NDArray[np.bool_]:
     """Pixels ``paint_hint`` changes, as a mask, over a flat ground."""
     width, height = round(cell_w * COLS), round(cell_h * ROWS)
     frame = np.empty((height, width, 3), dtype=np.uint8)
     frame[:] = GROUND
-    return np.asarray(np.any(paint_hint(frame, move, cell_w, cell_h, style) != frame, axis=-1))
+    painted = paint_hint(frame, move, cell_w, cell_h, style, keep_out=keep_out)
+    return np.asarray(np.any(painted != frame, axis=-1))
 
 
+@pytest.mark.parametrize("keeps_out", [False, True], ids=["whole board", "keep-out"])
 @pytest.mark.parametrize("style", [CURRENT_STYLE, NEXT_STYLE], ids=["solid", "dashed"])
 @pytest.mark.parametrize(
     "cell",
@@ -133,7 +172,7 @@ def _numpy_painted(move: Move, cell_w: float, cell_h: float, style: HintStyle) -
     ],
 )
 def test_the_qt_painter_touches_no_pixel_the_measured_one_does_not(
-    qt: Any, style: HintStyle, cell: tuple[float, float]
+    qt: Any, style: HintStyle, cell: tuple[float, float], keeps_out: bool
 ) -> None:
     """Every rotation, both styles: ``draw_hint`` paints inside ``paint_hint``.
 
@@ -142,18 +181,53 @@ def test_the_qt_painter_touches_no_pixel_the_measured_one_does_not(
     is the reason ``draw_hint`` clips its text to the badge rectangle: a
     glyph that overflowed would be paint outside the band, which is the
     one thing the geometry may not produce.
+
+    With the keep-out on, the same subset claim carries the OTHER
+    invisibility property across to the shipping painter: what the numpy
+    painter measures as staying out of the next-piece capture is what Qt
+    stays out of too.
     """
     cell_w, cell_h = cell
+    keep_out = _keep_out(cell_w, cell_h, keeps_out)
     for index in range(len(ALL_ROTATIONS)):
         move = _move(index)
-        qt_mask = _qt_painted(qt, move, cell_w, cell_h, style)
-        measured = _numpy_painted(move, cell_w, cell_h, style)
+        qt_mask = _qt_painted(qt, move, cell_w, cell_h, style, keep_out)
+        measured = _numpy_painted(move, cell_w, cell_h, style, keep_out)
         stray = np.argwhere(qt_mask & ~measured)
         assert not len(stray), (
             f"{move.piece} r{move.rotation.index} at {cell}: Qt painted "
             f"{len(stray)} pixels the measurement does not, first at "
             f"{stray[0].tolist()}"
         )
+
+
+def test_the_qt_painter_honours_the_keep_out(qt: Any) -> None:
+    """The shipping painter puts NO pixel inside the keep-out.
+
+    The subset check above says Qt paints nothing the measured painter
+    does not, which carries the keep-out across by implication. This says
+    it directly, which is what the property actually is: the overlay must
+    not put one pixel inside the rectangle the next-piece capture grabs,
+    because that crop has no sampled patch for paint to miss and its
+    reader cannot recognize a full-opacity stroke as ours.
+    """
+    cell_w = cell_h = 48.0
+    keep_out = _keep_out(cell_w, cell_h, True)
+    assert keep_out is not None
+    x, y, w, h = (round(v) for v in keep_out)
+    reached = 0
+    for index in range(len(ALL_ROTATIONS)):
+        move = _move(index)
+        for style in (CURRENT_STYLE, NEXT_STYLE):
+            reached += bool(
+                _qt_painted(qt, move, cell_w, cell_h, style)[y : y + h, x : x + w].any()
+            )
+            clipped = _qt_painted(qt, move, cell_w, cell_h, style, keep_out)
+            inside = int(clipped[y : y + h, x : x + w].sum())
+            assert not inside, (
+                f"{move.piece} r{move.rotation.index}: Qt put {inside} pixels inside the keep-out"
+            )
+    assert reached >= 10, f"the keep-out was in the way of only {reached} hints"
 
 
 def test_the_comparison_can_fail(qt: Any) -> None:

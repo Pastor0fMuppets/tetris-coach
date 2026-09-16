@@ -319,6 +319,52 @@ def test_no_painted_pixel_can_reach_a_sampled_patch(
                     assert not overlaps, (move.piece, move.rotation.index, (x, y, w, h))
 
 
+@pytest.mark.parametrize("style", [CURRENT_STYLE, NEXT_STYLE])
+@pytest.mark.parametrize(
+    "cell",
+    [
+        (48.0, 48.08),  # spawn_latency, the committed geometry
+        (47.6, 47.83),  # ghost_session, the smallest committed cell
+        (30.0, 25.0),  # a small non-square cell
+        (20.0, 20.0),  # the synthetic frames in tests/colour_frames.py
+        (120.0, 120.0),  # a large cell on a high-DPI capture
+    ],
+)
+def test_no_painted_rectangle_reaches_into_the_keep_out(
+    style: HintStyle, cell: tuple[float, float]
+) -> None:
+    """The second property, as geometry: nothing is drawn in the next box.
+
+    The twin of the test above, for the twin reader. Every rectangle
+    either painter fills, for every rotation of every piece, must miss the
+    keep-out entirely -- not "mostly", and not within a tolerance, because
+    the next crop has no sampled patch for paint to fall outside of. One
+    pixel of ours in it is a pixel of the piece the coach is trying to
+    name.
+
+    No dilation here, unlike the patch test: this rectangle is already
+    grown by ``KEEP_OUT_SLACK`` on the way in, which is the same pixel of
+    slack taken at the other end.
+    """
+    cell_w, cell_h = cell
+    rows, cols = 12, 10
+    # The committed geometry: the NEXT box over the top-right corner.
+    keep_out = keep_out_rect((0.8, 0.0, 1.0, 2.0 / rows), cell_w * cols, cell_h * rows)
+    assert keep_out is not None
+    kx, ky, kw, kh = keep_out
+    reached = 0
+    for index in range(len(ALL_ROTATIONS)):
+        move = _move(index, rows, cols)
+        bare = hint_paint_rects(move, cell_w, cell_h, style)
+        reached += any(
+            x < kx + kw and x + w > kx and y < ky + kh and y + h > ky for x, y, w, h in bare
+        )
+        for x, y, w, h in hint_paint_rects(move, cell_w, cell_h, style, keep_out=keep_out):
+            overlaps = x < kx + kw and x + w > kx and y < ky + kh and y + h > ky
+            assert not overlaps, (move.piece, move.rotation.index, (x, y, w, h))
+    assert reached, "no placement in this schedule reaches the keep-out at all"
+
+
 def test_the_outline_uses_the_band_and_leaves_the_clearance() -> None:
     # The two constants are the design: paint the invisible band, keep a
     # slice of it back for rounding and antialiasing.
