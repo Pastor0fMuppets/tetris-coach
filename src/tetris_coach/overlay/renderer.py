@@ -91,12 +91,28 @@ def rotation_badge_rect(
     matters because hint-coloured pixels in an unpainted cell would be
     un-composited too and arrive as content the game never drew.
 
+    THE CELL HAS TO BE ONE THE HINT ACTUALLY PAINTS, and ``min(row)`` with
+    ``min(col)`` is the corner of the BOUNDING BOX, which for 6 of the 19
+    rotations is a cell the piece leaves empty: both T verticals, S and Z
+    in one orientation each, and one each of J and L. The badge landed on
+    bare board there -- the case the paragraph above says must not happen
+    -- and ``tests/fixtures/hint_stutter`` is 51 captured frames of what
+    it cost: a phantom one-cell piece alternating with the real J at the
+    top edge, and the hint blanking every other frame. The reader no
+    longer un-composites it
+    (:func:`~tetris_coach.vision.colour_palette.own_paint_states`), but
+    OURS still means the cell is unreadable, so putting the badge on a
+    cell the piece may fall through is still deleting a cell for nothing.
+
+    The top-left OCCUPIED cell is the leftmost cell of the top row, which
+    every rotation has by construction.
+
     The badge is smaller for it. That is the trade: a digit at a fifth of
     a cell high against a hint that flickers at 15 fps and a piece that
     cannot be named.
     """
     top_row = min(r for r, _ in move.cells)
-    left_col = min(c for _, c in move.cells)
+    left_col = min(c for r, c in move.cells if r == top_row)
     return (
         left_col * cell_width,
         top_row * cell_height,
