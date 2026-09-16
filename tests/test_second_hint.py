@@ -16,19 +16,25 @@ every test here is about one of them:
 The readings are scripted rather than rendered, so each case states the
 board, the piece and the preview it is about; the policy under test is the
 real one (``CoachEngine`` is driven exactly as ``app.run`` drives it, with
-a reader handing it readings instead of pixels).
+a reader handing it readings instead of pixels). The last test is the
+counterweight: the same rules over the committed captures, counting how
+often a second target is there and what withholds it, so that "conditional"
+stays a description of a feature that is usually on screen.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
 from tetris_coach.app import CoachConfig, CoachEngine, FrameWorker
 from tetris_coach.capture.screen import ArraySource, Rect
 from tetris_coach.core.board import Board
+from tetris_coach.race.runners import next_crops
 from tetris_coach.solver.search import best_move
+from tetris_coach.truth.windows import CAPTURED_FILL_OPACITY, WINDOWS, load_window
 from tetris_coach.vision.readers import FrameReading, VisionEvent
 
 ROWS = 12
@@ -229,3 +235,50 @@ def test_the_tick_carries_the_second_hint_to_the_overlay() -> None:
     assert result.hint is not None and result.hint.piece == "I"
     assert result.second is not None and result.second.piece == "O"
     assert (result.hint, result.second) == (engine.current_hint, engine.second_hint)
+
+
+# -- and the same rules over the real captures -------------------------
+
+
+def test_how_often_the_second_hint_is_there_over_the_committed_windows() -> None:
+    """The cost of the conditions above, counted rather than asserted to be small.
+
+    Every rule here withholds a target, and a rule that withheld it most
+    of the time would be a feature that is not there. So the nine
+    committed windows are replayed through the real engine (wired as
+    ``race/`` wires them: the reader is told about the fill these captures
+    were taken with) and the dispositions counted.
+
+    The numbers are pinned because an unpinned measurement in SPEC.md goes
+    stale silently -- this project has one that did. What they say is that
+    the second hint is on screen for 529 of the 627 frames that carry a
+    hint at all, and that EVERY one of the other 98 is a first placement
+    that clears a line, which is the one case with a coordinate problem
+    behind it. Not one frame withholds it because the prediction went
+    stale (every re-solve recomputes the pair together) and not one
+    because the two placements overlap (they cannot).
+    """
+    root = Path(__file__).parent / "fixtures"
+    frames = hinted = both = no_first = cleared = stale = overlapping = 0
+    for spec in WINDOWS:
+        config = CoachConfig(rows=spec.rows, hint_fill_opacity=CAPTURED_FILL_OPACITY)
+        engine = CoachEngine(config, unobservable_cells=spec.geometry().unobservable)
+        names, boards = load_window(root, spec)
+        for board, crop in zip(boards, next_crops(root, spec, names), strict=True):
+            hint = engine.process_frame(board, crop)
+            second = engine.second_hint
+            frames += 1
+            hinted += hint is not None
+            if second is not None:
+                both += 1
+            elif hint is None:
+                no_first += 1
+            elif hint.lines_cleared:
+                cleared += 1
+            elif engine._predicted_board != hint.board:
+                stale += 1
+            else:
+                overlapping += 1
+    assert (frames, hinted, both) == (649, 627, 529)
+    assert (no_first, cleared) == (22, 98)
+    assert (stale, overlapping) == (0, 0)

@@ -168,6 +168,16 @@ coordinates. And when the player puts the piece somewhere else, the next
 frame re-solves both and the second hint follows the first rather than
 pointing at a placement computed for a board that never happened.
 
+What those conditions cost is counted rather than assumed to be small
+(`tests/test_second_hint.py`, which pins it): over the nine committed
+windows replayed through the engine, 627 of 649 frames carry a hint and
+529 of those carry the second one as well. Every frame that carries a hint
+and withholds the second is a first placement that clears a line — the
+case above, the only one with a coordinate problem behind it (the other 22
+frames have no hint to be conditional on). None withholds it for a stale
+prediction (each re-solve recomputes the pair together) and none for an
+overlap.
+
 The two placements can never share a cell — the second is solved on a board
 where the first one's cells are already filled, and a drop never lands in a
 filled cell — which is what lets each hint's rotation badge sit in a cell
