@@ -126,3 +126,21 @@ Under construction. See [SPEC.md](SPEC.md) for the full architecture and build p
 
 - macOS (Screen Recording permission required for capture)
 - Python 3.11+
+
+## Setting it up on another Mac
+
+```bash
+git clone https://github.com/Pastor0fMuppets/tetris-coach.git
+cd tetris-coach && ./scripts/setup-mac.sh
+```
+
+The script installs `uv` if it is missing, builds the virtual environment on
+Python 3.12, installs the package, and checks it imports. It is idempotent.
+
+It cannot grant **Screen Recording**, and nothing works without it: macOS
+gives that permission to the *terminal app* you launch from, not to this
+project, and only applies it at launch. So allow it when prompted (or in
+System Settings > Privacy & Security > Screen & System Audio Recording),
+then quit Terminal completely with Cmd-Q and reopen it. Skipping the restart
+is the usual reason the coach sits silent — the capture is returning the
+desktop wallpaper rather than the game.
